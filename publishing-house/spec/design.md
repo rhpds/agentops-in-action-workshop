@@ -47,7 +47,7 @@ Lab (hands-on)
 - Red Hat build of Agent Sandbox — sandbox lifecycle: `Sandbox`, `SandboxTemplate`, `SandboxClaim`, warm pools
 - OpenShell (including the OpenShell Operator and Governed Execution Environment admin UI) — fine-grained agent execution policy covering filesystem, process, and per-binary network controls, plus credential governance and workload identity
 - Model Gateway (Red Hat OpenShift AI) — governed inference endpoint
-- vLLM (Red Hat OpenShift AI) — model serving with tool-calling support behind Model Gateway
+- vLLM (Red Hat OpenShift AI) — serves the tool-calling model, used indirectly: the model is hosted centrally in MaaS and reached through Model Gateway, not deployed in the lab environment
 - MCP Gateway (Red Hat OpenShift AI) — enterprise tool connectivity, tool filtering, and token exchange
 - MLflow Tracing (Red Hat OpenShift AI) — prompt, LLM call, and tool-execution traces
 - EvalHub (Red Hat OpenShift AI) — functional and security evaluation, before/after scorecards
@@ -117,16 +117,24 @@ Zero infrastructure installation by participants is a hard requirement.
 
 ## Infrastructure Requirements
 
-- **Cloud provider:** TBD — confirmed in infrastructure phase
-- **Cluster type:** TBD — confirmed in infrastructure phase
-- **OCP version:** TBD — confirmed in infrastructure phase
-- **Topology:** TBD — confirmed in infrastructure phase
-- **Sizing:** TBD — confirmed in infrastructure phase
-- **Automation approach:** TBD — confirmed in infrastructure phase
-- **AI/MaaS:** TBD — confirmed in infrastructure phase
-- **External services:** TBD — confirmed in infrastructure phase
-- **AAP version:** TBD — confirmed in infrastructure phase
-- **Non-GA products:** TBD — confirmed in infrastructure phase
+- **Cloud provider:** Troshka. Not the CNV default — Red Hat OpenShift Sandboxed Containers is the isolation boundary the entire lab rests on, and Kata requires bare metal or nested virtualization.
+- **Cluster type:** Multinode. Shared control-plane services plus per-participant namespaces and a Kata warm pool rule out SNO.
+- **OCP version:** 4.22. Red Hat build of Agent Sandbox Tech Preview is tied to OCP 4.22 and OpenShift Sandboxed Containers 1.12, so this is above the 4.20 platform minimum.
+- **Topology:** Shared cluster. One cluster with a namespace per participant or team. Max concurrent users: 30. MCP Gateway, SPIRE, the identity provider, Vault, MLflow, EvalHub, and the OpenShell and Agent Sandbox control planes are shared services outside the per-participant namespaces.
+- **Sizing:** 3 control plane (16 vCPU, 64 GB RAM); 8 workers (32 vCPU, 64 GB RAM, 200 GB disk). Estimated at 30 concurrent participants from roughly 5 vCPU and 10 GB per participant — agent and UI, Kata sandbox VM, and per-participant MCP servers — plus approximately 40 vCPU and 120 GB of shared services, plus warm-pool headroom. Refine once concurrency is fixed.
+- **Automation approach:** GitOps (Helm + ArgoCD).
+- **AI/MaaS:** MaaS, open-source model tier. No justification required and no GPU nodes in the lab cluster — the model is hosted centrally in Models as a Service, served there by vLLM and reached through Model Gateway. Specific model is TBD; it must be an instruction-following model supporting agentic tool use, exposed through an OpenAI-compatible endpoint. Participants neither deploy nor train a model.
+- **External services:** TBD — confirmed before submission.
+- **AAP version:** Not applicable. Ansible Automation Platform is not part of this lab.
+- **Non-GA products:** This design carries an unusually heavy non-GA dependency load, and every core capability of the lab depends on at least one of these:
+  - Red Hat OpenShift AI 3.6 — GA 19 November 2026, after content development begins
+  - OpenShell, including its Operator, Gateway, Supervisor, Sandbox, CLI, and Admin UI — Tech Preview, RHOAI 3.6 EA1/EA2, September–October 2026
+  - Red Hat build of Agent Sandbox — Tech Preview, with OCP 4.22 and OpenShift Sandboxed Containers 1.12
+  - MCP Gateway — Tech Preview at 3.5; status at 3.6 to be confirmed before content freeze
+  - Garak adversarial testing, via TrustyAI and EvalHub — Tech Preview 3.4
+  - EvalHub — GA targeted at 3.5; confirm GA status at 3.6
+
+  **Access plan:** TBD — confirmed before submission.
 
 ## Assessment Strategy
 
