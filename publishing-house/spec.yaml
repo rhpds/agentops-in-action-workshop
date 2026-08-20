@@ -21,8 +21,44 @@ project:
 
 spec:
   title: "AgentOps in Action: Evaluate, Secure, and Operate Enterprise AI Agents"
-  learning_objectives: []
-  modules: []              # [{id, title, duration_min}] — written by intake Phase 4; id is stable (e.g. module-01)
+  learning_objectives:
+  - "Identify and assess common security and operational risks in tool-enabled AI agents by reviewing their permissions, traces, tool calls, and evaluation results"
+  - "Apply runtime controls that restrict an agent's network, filesystem, process, and tool access without rebuilding or redeploying the agent application"
+  - "Configure identity-aware authorization so that agents can access only the enterprise resources and MCP tools permitted for the requesting user"
+  - "Use automated evaluations and red-team tests to detect unsafe behavior and verify that security controls are working as intended"
+  - "Tune agent policies to balance security, usability, and required business functionality in an enterprise deployment"
+  - "Interpret agent execution traces to distinguish model-level behavior from runtime and platform-level enforcement"
+  - "Differentiate the enforcement responsibilities of sandbox isolation, execution policy, tool authorization, and inference guardrails"
+  # [{id, title, duration_min, status}] — id is stable (e.g. module-01)
+  modules:
+  - id: module-01
+    title: "Introduction to AgentOps"
+    duration_min: 10
+    status: not_started
+  - id: module-02
+    title: "Explore the agent and establish a baseline"
+    duration_min: 15
+    status: not_started
+  - id: module-03
+    title: "Identify unsafe and unintended behavior"
+    duration_min: 20
+    status: not_started
+  - id: module-04
+    title: "Apply runtime isolation and policy controls"
+    duration_min: 30
+    status: not_started
+  - id: module-05
+    title: "Add identity-aware access controls"
+    duration_min: 20
+    status: not_started
+  - id: module-06
+    title: "Re-evaluate and tune the agent"
+    duration_min: 15
+    status: not_started
+  - id: module-07
+    title: "AgentOps lifecycle and wrap-up"
+    duration_min: 10
+    status: not_started
   environment:
     platform: ""               # ocp | rhel-vms — determines which sizing fields apply
     topology: ""               # shared-cluster | per-student | cnv-pool
@@ -79,7 +115,7 @@ tracking:
 approval_checklist:
 
   content:
-    prerequisites_verifiable: null
+    prerequisites_verifiable: false
     assessment_strategy: ""
     catalog_gap: ""
     design_overview: ""

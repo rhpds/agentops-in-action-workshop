@@ -1,89 +1,143 @@
-# [Project Title]
-
-<!-- This file is the design document for your lab or demo. -->
-<!-- Fill in each section below, or run /rhdp-publishing-house to have the intake skill help. -->
-<!-- Sections marked with [brackets] are placeholders — replace with real content. -->
-<!-- The validation gate checks for all required sections before submission. -->
+# AgentOps in Action: Evaluate, Secure, and Operate Enterprise AI Agents
 
 ## Overview
 
-[2-3 sentences on what this lab or demo is and why it exists. Then a direct description of what participants will do — specific enough that someone reading this section immediately understands the content without interpretation. No flowery language. Example: "Participants will deploy a 3-tier application on OpenShift, configure autoscaling, and troubleshoot a simulated pod failure."]
+AI agents interact with enterprise systems, invoke tools, execute generated code, and reach external services. Those capabilities are what make agents useful, and they are also what makes an agent deployed without controls a security, governance, and operational problem. This lab exists to show that the answer is not a different agent framework — it is the identity, isolation, policy, observability, and evaluation infrastructure placed around whichever agent a customer already has.
+
+Participants work with a single predeployed agent running on Red Hat OpenShift AI and never modify its code. They interact with it through a browser UI, inspect its tool calls and MLflow traces, and run a prebuilt EvalHub suite to capture a baseline scorecard. They then attack it — manual prompt injection to invoke a privileged ticket-update tool, generated code that reads a planted test credential, generated code that reaches an unauthorized network endpoint — plus an automated Garak adversarial profile, and confirm each failure in the traces. Next they apply controls without rebuilding the agent: inspect the Kata-backed Agent Sandbox boundary, then use OpenShell to restrict filesystem paths, deny specific process execution, apply per-binary outbound network rules, and move the exposed credential into governed storage. They add identity-aware authorization by running the same prompt as an Analyst persona and an Incident Manager persona and observing MCP Gateway allow one and reject the other. Finally they re-run the identical evaluation suite, compare baseline against hardened scorecards, diagnose one deliberately over-restrictive policy that breaks a legitimate evaluation, and tune it back.
 
 ## Target Audience
 
-- **Role:** [Data scientists, platform engineers, developers, etc.]
-- **Experience level:** [Beginner, intermediate, or advanced]
-- **What they already know:** [Existing skills and knowledge]
-- **What they don't know:** [Skills this lab teaches]
+- **Role:** Solution architects, AI platform architects, consultants and services professionals, technical sales specialists, application and platform architects, Red Hat OpenShift AI administrators supporting AI workloads, and technical leaders advising customers on enterprise AI adoption.
+- **Experience level:** Intermediate
+- **What they already know:** Containers and Kubernetes or Red Hat OpenShift fundamentals; generative AI, large language models, and the general concept of AI agents; basic command-line use; a conceptual understanding of APIs and application permissions.
+- **What they don't know:** Agent runtime sandboxing and execution policy; MCP tool governance; identity-aware agent authorization and token exchange; agent tracing and trace analysis; automated agent evaluation and adversarial red-team testing; how to tune policy to balance security against usability.
 
 ## Prerequisites
 
-- [What the learner must know or have completed before starting]
-- [Can the lab validate these automatically? Yes/No — brief explanation]
+- Basic understanding of containers and Kubernetes or Red Hat OpenShift
+- Familiarity with generative AI, large language models, and the general concept of AI agents
+- Basic command-line experience
+- Conceptual understanding of APIs and application permissions
+- Prior experience building agents, configuring MCP servers, using MLflow, or writing security policy is helpful but explicitly not required
 
-<!-- If no prerequisites, write "None" -->
+**Can the lab validate these automatically?** No. Prerequisites are knowledge-based and trust-based — there is no automated pre-check. All agent components, tools, identities, and services are predeployed, so a participant who is weaker in one area can still complete every exercise; the lab requires no installation, no agent development, and no extensive coding.
 
 ## Learning Objectives
 
-1. [Action verb] [specific, measurable outcome]
-2. [Action verb] [specific, measurable outcome]
-3. [Action verb] [specific, measurable outcome]
-
-<!-- Scale to duration: up to 3 objectives per 45 min of content. Start with action verbs: Configure, Deploy, Create, Implement, Troubleshoot, Monitor, Scale. Each should be testable. NOT: Understand, Learn, Know. -->
+1. Identify and assess common security and operational risks in tool-enabled AI agents by reviewing their permissions, traces, tool calls, and evaluation results
+2. Apply runtime controls that restrict an agent's network, filesystem, process, and tool access without rebuilding or redeploying the agent application
+3. Configure identity-aware authorization so that agents can access only the enterprise resources and MCP tools permitted for the requesting user
+4. Use automated evaluations and red-team tests to detect unsafe behavior and verify that security controls are working as intended
+5. Tune agent policies to balance security, usability, and required business functionality in an enterprise deployment
+6. Interpret agent execution traces to distinguish model-level behavior from runtime and platform-level enforcement
+7. Differentiate the enforcement responsibilities of sandbox isolation, execution policy, tool authorization, and inference guardrails
 
 ## Content Type
 
-[Lab (hands-on) or Demo (presenter-led)]
+Lab (hands-on)
 
 ## Products & Technologies
 
-- [Official Red Hat product name with version if relevant]
-- [Additional products/technologies]
+**Red Hat products**
 
-<!-- Use official names: "Red Hat OpenShift", not "OpenShift". List upstream projects separately. -->
+- Red Hat OpenShift AI 3.6 — platform baseline and participant-facing experience
+- Red Hat OpenShift 4.22 — Kubernetes foundation
+- Red Hat OpenShift Sandboxed Containers — VM/kernel isolation boundary for agent execution
+- Red Hat build of Agent Sandbox — sandbox lifecycle: `Sandbox`, `SandboxTemplate`, `SandboxClaim`, warm pools
+- OpenShell (including the OpenShell Operator and Governed Execution Environment admin UI) — fine-grained agent execution policy covering filesystem, process, and per-binary network controls, plus credential governance and workload identity
+- Model Gateway (Red Hat OpenShift AI) — governed inference endpoint
+- MCP Gateway (Red Hat OpenShift AI) — enterprise tool connectivity, tool filtering, and token exchange
+- EvalHub (Red Hat OpenShift AI) — functional and security evaluation, before/after scorecards
+- Guardrails Orchestrator (Red Hat OpenShift AI) — model input/output safety at the inference boundary
+- Red Hat Connectivity Link / Kuadrant AuthPolicy — authorization enforcement at the gateway boundary
+
+**Upstream projects and third-party components**
+
+- Kata Containers — kernel isolation underlying OpenShift Sandboxed Containers
+- vLLM — model serving with tool-calling support
+- MCP (Model Context Protocol) servers — the enterprise capabilities exposed to the agent
+- SPIFFE / SPIRE — cryptographic workload and agent identity
+- MLflow Tracing — prompt, LLM call, and tool-execution traces
+- OpenTelemetry — trace and telemetry interoperability
+- Garak — automated adversarial and jailbreak scanning
+- Authorino and Open Policy Agent (OPA) — authorization decision enforcement
+- NeMo Guardrails — model safety policy
+- HashiCorp Vault or Kubernetes Secrets — backing store for governed credentials
+- Kubernetes NetworkPolicy — coarse namespace-level egress control as defense in depth
+- Gatekeeper or Kyverno — cluster-level policy enforcement
+
+Final component selection may be adjusted based on supported product availability at the time of the event.
 
 ## Module Map
 
 | Module | Title | Duration |
 |--------|-------|----------|
-| 1 | [Module title] | [XX min] |
-| 2 | [Module title] | [XX min] |
-| — | **Total hands-on** | **[X hours]** |
-| — | Intro / presentation | [~XX min] |
-| — | **Total lab** | **[~X hours]** |
+| 1 | Introduction to AgentOps | 10 min |
+| 2 | Explore the agent and establish a baseline | 15 min |
+| 3 | Identify unsafe and unintended behavior | 20 min |
+| 4 | Apply runtime isolation and policy controls | 30 min |
+| 5 | Add identity-aware access controls | 20 min |
+| 6 | Re-evaluate and tune the agent | 15 min |
+| 7 | AgentOps lifecycle and wrap-up | 10 min |
+| — | **Total hands-on** (modules 2–6) | **1 hour 40 min** |
+| — | Intro and wrap-up (modules 1, 7) | ~20 min |
+| — | **Total lab** | **2 hours** |
 
-<!-- Each module 10-30 min. Total: lab 1-4 hours, demo 15-45 min. Modules should build on each other. -->
+The structure follows a single deliberate arc — observe, baseline, attack, contain, authorize, re-evaluate — applied to one unchanged agent, so that every control participants add is measured against the same starting scorecard. Modules 3 through 6 carry roughly 70 percent of hands-on time because that is where the lab differentiates itself: not building another agent, but moving an existing agent from "works" to observable, contained, identity-aware, and policy-governed. Module 4 is the longest because it contains five separate policy exercises (sandbox boundary, filesystem, process, network, credentials) that each re-run an attack from module 3. Modules 1 and 7 are framing rather than hands-on and are intentionally short. Optional advanced challenges — additional Garak profiles, more granular network and tool policy, policy troubleshooting, deeper trace analysis — are offered in module 7 for participants who finish the core path early.
 
 ## Difficulty Level
 
-[Beginner, Intermediate, or Advanced]
+Intermediate
 
 ## Environment
 
-**Learner view:** [What exists when the lab starts — pre-deployed resources, what participants see and interact with. Be specific about cluster details.]
+**Learner view:** Each participant or team starts with a fully preconfigured Red Hat OpenShift AI namespace and does no installation. On arrival they have: a predeployed AI agent and its browser UI, already running and answering questions; a `SandboxClaim` already allocated from a warm pool so the Kata-backed execution environment is immediately available; the intentionally permissive baseline OpenShell policy loaded (broad filesystem access inside the sandbox, Python/shell/common utilities permitted, general outbound HTTPS allowed, one deliberately over-broad synthetic credential, both read and privileged update MCP tools reachable, minimal user differentiation, basic content safety only); MCP tools connected through MCP Gateway; two preconfigured test identities (Analyst — search knowledge and read tickets; Incident Manager — search, read, and update tickets); synthetic enterprise incident data populated; a planted fake secret file used as the filesystem attack target; an MLflow experiment already created and collecting traces; an EvalHub project with the 8–10 test baseline suite ready to run; and a Garak profile ready to execute. Participants get a browser-based interface and a terminal environment.
 
-**Automation needed:** [Yes/No]
+Shared services sit outside the per-participant namespace: MCP Gateway, SPIRE, the identity provider, Vault (if used), MLflow and EvalHub, and the OpenShell and Agent Sandbox control planes. Model access is provided via MaaS through Model Gateway — participants do not deploy or train a model.
 
-[If yes, list what automation must provision — operators, per-user resources, sample apps, data sets.]
+**Automation needed:** Yes
+
+Automation must provision:
+
+- Per-participant namespace with the agent workload, its UI, and RBAC
+- `SandboxTemplate` and a warm pool sized to peak concurrency, with a `SandboxClaim` pre-allocated per participant so sandbox startup never consumes lab time
+- The baseline permissive OpenShell policy and Governed Execution Environment, loaded per participant
+- The planted synthetic credential and fake secret file inside the sandbox filesystem
+- MCP server registrations and MCP Gateway routing, token-exchange configuration, and per-persona authorization policy
+- Two test identities per participant in the identity provider, with SPIFFE/SPIRE workload identity for the agent
+- Synthetic incident and knowledge-base data seeded into the MCP-backed tools
+- MLflow experiment and OpenTelemetry wiring
+- EvalHub project with the prebuilt baseline test suite, and the Garak adversarial profile
+- Guardrails Orchestrator with a basic content-safety policy
+- Coarse NetworkPolicy egress rules, an approved internal test service, and an intentionally unauthorized test endpoint for the network exercise
+- A **reset action** that reclaims the current sandbox and restores the starting policy in under a minute. With several Tech Preview components in play, fast recovery of a broken participant environment matters more than making participants repair a bad configuration by hand.
+
+Zero infrastructure installation by participants is a hard requirement.
 
 ## Infrastructure Requirements
 
-- **Cloud provider:** [CNV (default), AWS, or Troshka (bare-metal/nested virt)]
-- **Cluster type:** [Multinode or SNO (Single Node OpenShift)]
-- **OCP version:** [e.g. 4.20 — minimum 4.20]
-- **Topology:** [Shared cluster, per-student, or CNV pool]
-- **Sizing:** [Node types and counts with resources — e.g., "3 control plane (16 CPU, 64GB RAM), 6 workers (8 CPU, 32GB RAM, 100GB disk)"]
-- **Automation approach:** [Ansible, GitOps (Helm + ArgoCD), or combo]
-- **AI/MaaS:** [None, MaaS (open-source model), MaaS (frontier model), or dedicated GPU — include justification if not "none"]
-- **External services:** [Named services — e.g., github.com, registry.access.redhat.com — or "None"]
-- **AAP version:** [e.g. 2.5 — only if AAP is in products; omit otherwise]
-- **Non-GA products:** [Product name + version, with access plan — or "None (all products are GA)"]
+- **Cloud provider:** TBD — confirmed in infrastructure phase
+- **Cluster type:** TBD — confirmed in infrastructure phase
+- **OCP version:** TBD — confirmed in infrastructure phase
+- **Topology:** TBD — confirmed in infrastructure phase
+- **Sizing:** TBD — confirmed in infrastructure phase
+- **Automation approach:** TBD — confirmed in infrastructure phase
+- **AI/MaaS:** TBD — confirmed in infrastructure phase
+- **External services:** TBD — confirmed in infrastructure phase
+- **AAP version:** TBD — confirmed in infrastructure phase
+- **Non-GA products:** TBD — confirmed in infrastructure phase
 
-<!-- Not all fields must be known at intake. "TBD, estimating ~X" is fine. -->
+## Assessment Strategy
 
-## Assessment Strategy (Optional)
+Verification is evidence-based rather than solve/validate-button-based: participants confirm each outcome in an MLflow trace or an EvalHub scorecard, which doubles as the lab's teaching mechanism.
 
-<!-- Optional — skip this section for demos or classic labs without verification. -->
-<!-- Relevant for Zero-Touch labs with solve/validate buttons or labs with automated checks. -->
-
-[If applicable: how will we know the learner successfully completed each module? Per module: verification script, solve/validate button, visible result in the UI, or automated check.]
+| Module | How success is verified |
+|--------|--------------------------|
+| 1 | Trust-based. Participants ask the agent one business question and locate the resulting MLflow trace; no automated check. |
+| 2 | EvalHub baseline scorecard is saved. The agent should score well functionally — the point is that it succeeds because it has too much authority. |
+| 3 | Each of the three manual attacks succeeds and the participant locates the corresponding tool invocation, file read, or outbound connection in the MLflow trace. The Garak profile produces findings. |
+| 4 | Each attack from module 3 is re-run and now receives an infrastructure-level denial, visible in the trace, while the legitimate workflow still completes. Credential exfiltration returns a reference rather than the real value. |
+| 5 | The same prompt, run as Analyst, is rejected by MCP Gateway; run as Incident Manager, it succeeds. A prompt-injection attempt as Analyst still fails, proving authorization is not derived from prompt content. |
+| 6 | EvalHub hardened scorecard is compared side by side against the module 2 baseline. Participants then diagnose one deliberately over-restrictive policy from a failing evaluation and its MLflow trace, correct it, and re-run to green. |
+| 7 | Trust-based recap; optional advanced challenges are self-directed. |
