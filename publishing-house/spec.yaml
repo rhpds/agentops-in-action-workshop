@@ -16,8 +16,8 @@ project:
   automation_type: "gitops"
   description: "A hands-on AgentOps lab that teaches participants how to evaluate, secure, observe, and operate enterprise AI agents on Red Hat OpenShift AI using runtime controls, identity-aware authorization, automated testing, and policy tuning"
   # content_reviewer_email and infra_reviewer_email are assigned by the RHDP team — not set by the author
-  jira_ticket: ""
-  workflow_id: ""
+  jira_ticket: "RHDPCD-1108"
+  workflow_id: "59356dc8-e3e9-412e-b183-e11d048ed21f"
 
 spec:
   title: "AgentOps in Action: Evaluate, Secure, and Operate Enterprise AI Agents"

@@ -4,9 +4,9 @@ metadata:
   name: agentops-in-action-workshop
   title: agentops-in-action-workshop
   description: A hands-on AgentOps lab that teaches participants how to evaluate,
-    secure, observe, and operate enterprise AI agents on Red Hat OpenShift AI
-    using runtime controls, identity-aware authorization, automated testing, and
-    policy tuning
+    secure, observe, and operate enterprise AI agents on Red Hat OpenShift AI using
+    runtime controls, identity-aware authorization, automated testing, and policy
+    tuning
   annotations:
     ph.rhdp.io/content-type: lab
     ph.rhdp.io/deployment-mode: rhdp_published
@@ -14,21 +14,24 @@ metadata:
     ph.rhdp.io/owner: phayes@redhat.com
     backstage.io/techdocs-ref: dir:.
     github.com/project-slug: rhpds/agentops-in-action-workshop
-    ph.rhdp.io/created-at: 2026-08-20T11:59:30.613Z
+    ph.rhdp.io/created-at: 2026-08-20 11:59:30.613000+00:00
   tags:
-    - publishing-house
-    - lab
-    - rhdp-published
+  - publishing-house
+  - lab
+  - rhdp-published
   links:
-    - url: https://github.com/rhpds/agentops-in-action-workshop
-      title: Repository
-      icon: github
-    - url: https://devspaces.apps.ocpv-infra02.wdc07.infra.demo.redhat.com#https://github.com/rhpds/agentops-in-action-workshop
-      title: Open in DevSpaces
-      icon: catalog
-    - url: https://central-api-publishing-house.apps.ocpv-infra02.wdc07.infra.demo.redhat.com
-      title: Central
-      icon: dashboard
+  - url: https://github.com/rhpds/agentops-in-action-workshop
+    title: Repository
+    icon: github
+  - url: https://devspaces.apps.ocpv-infra02.wdc07.infra.demo.redhat.com#https://github.com/rhpds/agentops-in-action-workshop
+    title: Open in DevSpaces
+    icon: catalog
+  - url: https://central-api-publishing-house.apps.ocpv-infra02.wdc07.infra.demo.redhat.com
+    title: Central
+    icon: dashboard
+  - url: https://redhat.atlassian.net/browse/RHDPCD-1108
+    title: Jira Epic
+    icon: dashboard
 spec:
   type: content
   lifecycle: experimental
