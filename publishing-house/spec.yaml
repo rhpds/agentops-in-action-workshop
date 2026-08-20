@@ -20,7 +20,7 @@ project:
   workflow_id: ""
 
 spec:
-  title: ""
+  title: "AgentOps in Action: Evaluate, Secure, and Operate Enterprise AI Agents"
   learning_objectives: []
   modules: []              # [{id, title, duration_min}] — written by intake Phase 4; id is stable (e.g. module-01)
   environment:
@@ -55,8 +55,8 @@ spec:
     external_services: []              # named external service dependencies e.g. [github.com]
     gpu_nodes: 0                       # number of GPU nodes (0 = none)
     gpu_type: ""                       # e.g. NVIDIA A100 40GB (required if gpu_nodes > 0)
-  duration_hours: null
-  audience: ""               # beginner | intermediate | advanced
+  duration_hours: 2
+  audience: "intermediate"   # beginner | intermediate | advanced
 
 development:
   automation:
