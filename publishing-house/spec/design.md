@@ -47,7 +47,9 @@ Lab (hands-on)
 - Red Hat build of Agent Sandbox — sandbox lifecycle: `Sandbox`, `SandboxTemplate`, `SandboxClaim`, warm pools
 - OpenShell (including the OpenShell Operator and Governed Execution Environment admin UI) — fine-grained agent execution policy covering filesystem, process, and per-binary network controls, plus credential governance and workload identity
 - Model Gateway (Red Hat OpenShift AI) — governed inference endpoint
+- vLLM (Red Hat OpenShift AI) — model serving with tool-calling support behind Model Gateway
 - MCP Gateway (Red Hat OpenShift AI) — enterprise tool connectivity, tool filtering, and token exchange
+- MLflow Tracing (Red Hat OpenShift AI) — prompt, LLM call, and tool-execution traces
 - EvalHub (Red Hat OpenShift AI) — functional and security evaluation, before/after scorecards
 - Guardrails Orchestrator (Red Hat OpenShift AI) — model input/output safety at the inference boundary
 - Red Hat Connectivity Link / Kuadrant AuthPolicy — authorization enforcement at the gateway boundary
@@ -55,10 +57,8 @@ Lab (hands-on)
 **Upstream projects and third-party components**
 
 - Kata Containers — kernel isolation underlying OpenShift Sandboxed Containers
-- vLLM — model serving with tool-calling support
 - MCP (Model Context Protocol) servers — the enterprise capabilities exposed to the agent
 - SPIFFE / SPIRE — cryptographic workload and agent identity
-- MLflow Tracing — prompt, LLM call, and tool-execution traces
 - OpenTelemetry — trace and telemetry interoperability
 - Garak — automated adversarial and jailbreak scanning
 - Authorino and Open Policy Agent (OPA) — authorization decision enforcement

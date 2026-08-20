@@ -118,8 +118,22 @@ approval_checklist:
     prerequisites_verifiable: false
     assessment_strategy: ""
     catalog_gap: ""
-    design_overview: ""
-    module_summaries: []
+    design_overview: "Enterprise AI agents invoke tools, execute generated code, and reach enterprise services, which makes an agent deployed without controls a security and governance problem that a different agent framework does not solve. This intermediate two-hour lab gives architects, consultants, and OpenShift AI administrators a single predeployed agent they never modify, and has them observe it in MLflow, baseline it in EvalHub, attack it manually and with Garak, then progressively contain it using Agent Sandbox and Kata isolation, OpenShell filesystem, process, network, and credential policy, and MCP Gateway identity-aware tool authorization. Participants finish by re-running the identical evaluation suite to compare hardened against baseline scorecards and tuning one deliberately over-restrictive policy, demonstrating the AgentOps loop of observe, evaluate, change policy, evaluate again."
+    module_summaries:
+    - title: "Introduction to AgentOps"
+      overview: "Establishes why operating a tool-enabled agent differs from operating a traditional application by having participants ask the already-running agent one business question and walk the request path from user through model, MCP tools, and enterprise services. Participants then locate that same interaction in MLflow, establishing traces as the evidence layer used throughout the lab."
+    - title: "Explore the agent and establish a baseline"
+      overview: "Participants inspect the tools and resources the agent can reach under an intentionally permissive OpenShell policy, run three normal tasks, and walk one complete execution trace span by span. They then run a prebuilt 8-10 test EvalHub suite and save the baseline scorecard, observing that the agent scores well precisely because it holds far more authority than its workflow requires."
+    - title: "Identify unsafe and unintended behavior"
+      overview: "Participants deliberately break the agent with three manual attacks - prompt injection to invoke a privileged ticket-update tool, generated code reading a planted test credential, and generated code reaching an unauthorized network endpoint - plus an automated Garak adversarial profile, confirming every failure in the MLflow trace. The module draws the distinction the rest of the lab depends on: inference guardrails are not an authorization mechanism."
+    - title: "Apply runtime isolation and policy controls"
+      overview: "The lab's central module, in which participants apply five layers of control without rebuilding, redeploying, or reprompting the agent: inspecting the Kata-backed Agent Sandbox boundary, then using OpenShell to restrict filesystem paths, deny an attack process, apply per-binary outbound network rules alongside coarse NetworkPolicy, and migrate an over-broad credential into governed storage. Each attack from module 3 is re-run and now receives an infrastructure-level denial while the legitimate workflow still completes."
+    - title: "Add identity-aware access controls"
+      overview: "Participants establish caller identity through OpenShell inbound authentication and inspect the agent's own SPIFFE/SPIRE workload identity, then run the identical prompt as a preconfigured Analyst and Incident Manager persona and watch MCP Gateway reject the privileged tool call for one and permit it for the other. Re-attempting prompt injection as the Analyst still fails, proving authorization derives from trusted token claims rather than model output."
+    - title: "Re-evaluate and tune the agent"
+      overview: "Participants re-run the identical evaluation suite and Garak profile from earlier modules and compare the hardened scorecard against the baseline, attributing each improved measure to a specific control. They then diagnose a deliberately over-restrictive network allowlist that is blocking the knowledge MCP server, correct the OpenShell policy from the trace evidence, and re-run to green - demonstrating that more restriction is not automatically better."
+    - title: "AgentOps lifecycle and wrap-up"
+      overview: "Recaps the ten-step journey from observing MLflow through containing execution, applying runtime policy, governing tools, establishing identity, authorizing, and re-evaluating, and states the distinct non-substitutable responsibility of each layer. Participants discuss how these controls integrate into real development and deployment processes, with optional advanced challenges for those who finish the core path early."
     rcars_overlap_pct: null
     rcars_top_matches: []
     rejections: []
