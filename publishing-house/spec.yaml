@@ -94,8 +94,14 @@ spec:
     - "MCP Gateway — Tech Preview 3.5; status at 3.6 to be confirmed before content freeze"
     - "Garak adversarial testing (via TrustyAI/EvalHub) — Tech Preview 3.4"
     - "EvalHub — GA targeted 3.5; confirm GA status at 3.6"
-    non_ga_access_plan: ""             # how access is provided for non-GA products
-    external_services: []              # named external service dependencies e.g. [github.com]
+    # how access is provided for non-GA products
+    non_ga_access_plan: "All non-GA components are pulled from quay.io. The lab is delivered on Red Hat OpenShift AI 3.6, at which point every non-GA dependency is at minimum Tech Preview, so the images ship as part of the RHOAI 3.6 deployment rather than requiring separate early-access entitlement or a side-channel build. Garak probe data and equivalent test assets are packaged into the GitOps build rather than pulled at runtime."
+    # named external service dependencies e.g. [github.com]
+    external_services:
+    - "registry.redhat.io — Red Hat product images"
+    - "quay.io — operator catalogs, Red Hat build images, and all non-GA/Tech Preview components"
+    - "github.com — GitOps chart and manifest sources for ArgoCD"
+    - "MaaS model endpoint — hosted tool-calling model reached through Model Gateway; hostname TBD"
     gpu_nodes: 0                       # number of GPU nodes (0 = none)
     gpu_type: ""                       # e.g. NVIDIA A100 40GB (required if gpu_nodes > 0)
   duration_hours: 2

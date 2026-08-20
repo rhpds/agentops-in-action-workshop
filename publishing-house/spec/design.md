@@ -124,7 +124,13 @@ Zero infrastructure installation by participants is a hard requirement.
 - **Sizing:** 3 control plane (16 vCPU, 64 GB RAM); 8 workers (32 vCPU, 64 GB RAM, 200 GB disk). Estimated at 30 concurrent participants from roughly 5 vCPU and 10 GB per participant — agent and UI, Kata sandbox VM, and per-participant MCP servers — plus approximately 40 vCPU and 120 GB of shared services, plus warm-pool headroom. Refine once concurrency is fixed.
 - **Automation approach:** GitOps (Helm + ArgoCD).
 - **AI/MaaS:** MaaS, open-source model tier. No justification required and no GPU nodes in the lab cluster — the model is hosted centrally in Models as a Service, served there by vLLM and reached through Model Gateway. Specific model is TBD; it must be an instruction-following model supporting agentic tool use, exposed through an OpenAI-compatible endpoint. Participants neither deploy nor train a model.
-- **External services:** TBD — confirmed before submission.
+- **External services:**
+  - `registry.redhat.io` — Red Hat product images
+  - `quay.io` — operator catalogs, Red Hat build images, and all non-GA and Tech Preview components
+  - `github.com` — GitOps chart and manifest sources for ArgoCD
+  - MaaS model endpoint — the hosted tool-calling model, reached through Model Gateway; hostname TBD
+
+  No runtime pull from Hugging Face: Garak probe data and equivalent test assets are packaged into the GitOps build. The deliberately unauthorized test endpoint used in modules 3 and 4 is a synthetic in-cluster service, not a real internet host, so it is not an external dependency.
 - **AAP version:** Not applicable. Ansible Automation Platform is not part of this lab.
 - **Non-GA products:** This design carries an unusually heavy non-GA dependency load, and every core capability of the lab depends on at least one of these:
   - Red Hat OpenShift AI 3.6 — GA 19 November 2026, after content development begins
@@ -134,7 +140,7 @@ Zero infrastructure installation by participants is a hard requirement.
   - Garak adversarial testing, via TrustyAI and EvalHub — Tech Preview 3.4
   - EvalHub — GA targeted at 3.5; confirm GA status at 3.6
 
-  **Access plan:** TBD — confirmed before submission.
+  **Access plan:** All non-GA components are pulled from quay.io. The lab is delivered on Red Hat OpenShift AI 3.6, at which point every non-GA dependency is at minimum Tech Preview, so the images ship as part of the RHOAI 3.6 deployment rather than requiring separate early-access entitlement or a side-channel build.
 
 ## Assessment Strategy
 
