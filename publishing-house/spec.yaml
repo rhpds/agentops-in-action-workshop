@@ -62,7 +62,7 @@ spec:
   environment:
     platform: "ocp"            # ocp | rhel-vms — determines which sizing fields apply
     topology: "shared-cluster" # shared-cluster | per-student | cnv-pool
-    cloud_provider: troshka    # cnv | aws | troshka — troshka: Kata/OSC needs bare metal or nested virt
+    cloud_provider: cnv    # cnv | aws | troshka — troshka: Kata/OSC needs bare metal or nested virt
     max_concurrent_users: 30   # required if topology = shared-cluster
 
     # --- OCP-specific fields (only when platform = ocp) ---
