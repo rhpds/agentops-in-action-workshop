@@ -1,0 +1,15 @@
+= Module 2: Explore the Agent and Establish a Baseline
+:page-duration: 15 minutes
+
+// Overview: Participants inspect tools and resources the agent can reach under a permissive OpenShell policy,
+// run three normal tasks, walk one complete execution trace, then run a prebuilt EvalHub suite and save the baseline scorecard.
+
+== Objectives
+
+* Enumerate the MCP tools and enterprise resources accessible to the agent under its current policy
+* Interpret a complete MLflow execution trace, identifying model, tool, and service spans
+* Run the EvalHub evaluation suite and save the baseline scorecard for later comparison
+
+== Content
+
+// TODO: Write module content here.

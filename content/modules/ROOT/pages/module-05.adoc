@@ -1,0 +1,17 @@
+= Module 5: Add Identity-Aware Access Controls
+:page-duration: 20 minutes
+
+// Overview: Participants establish caller identity through OpenShell inbound authentication, inspect the agent's
+// SPIFFE/SPIRE workload identity, then run the same prompt as Analyst and Incident Manager personas and watch
+// MCP Gateway enforce tool authorization based on trusted token claims.
+
+== Objectives
+
+* Establish caller identity through OpenShell inbound authentication
+* Inspect the agent's SPIFFE/SPIRE workload identity certificate
+* Observe MCP Gateway permit a privileged tool call for the Incident Manager persona and deny it for the Analyst
+* Confirm that prompt injection as the Analyst still fails, proving authorization derives from token claims not model output
+
+== Content
+
+// TODO: Write module content here.

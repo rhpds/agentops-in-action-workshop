@@ -1,0 +1,8 @@
+* xref:index.adoc[Lab Overview]
+* xref:module-01.adoc[Module 1: Introduction to AgentOps]
+* xref:module-02.adoc[Module 2: Explore the Agent and Establish a Baseline]
+* xref:module-03.adoc[Module 3: Identify Unsafe and Unintended Behavior]
+* xref:module-04.adoc[Module 4: Apply Runtime Isolation and Policy Controls]
+* xref:module-05.adoc[Module 5: Add Identity-Aware Access Controls]
+* xref:module-06.adoc[Module 6: Re-evaluate and Tune the Agent]
+* xref:module-07.adoc[Module 7: AgentOps Lifecycle and Wrap-up]

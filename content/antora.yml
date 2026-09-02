@@ -1,0 +1,11 @@
+name: modules
+title: "AgentOps in Action: Evaluate, Secure, and Operate Enterprise AI Agents"
+version: ~
+nav:
+  - modules/ROOT/nav.adoc
+
+asciidoc:
+  attributes:
+    experimental: true
+    page-pagination: true
+    guid: '%GUID%'

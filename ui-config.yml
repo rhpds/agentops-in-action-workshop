@@ -1,0 +1,23 @@
+---
+type: showroom
+
+default_width: 30
+persist_url_state: true
+
+view_switcher:
+  enabled: true
+  default_mode: split
+
+tabs:
+  - name: ">_ Terminal"
+    path: /wetty
+    port: 443
+  - name: OpenShift Console
+    path: /openshift
+    port: 443
+  - name: MLflow
+    path: /mlflow
+    port: 443
+  - name: EvalHub
+    path: /evalhub
+    port: 443

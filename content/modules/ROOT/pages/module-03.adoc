@@ -1,0 +1,16 @@
+= Module 3: Identify Unsafe and Unintended Behavior
+:page-duration: 20 minutes
+
+// Overview: Participants deliberately break the agent with three manual attacks (prompt injection, credential read,
+// unauthorized network call) plus an automated Garak adversarial profile, confirming each failure in the MLflow trace.
+
+== Objectives
+
+* Execute a prompt injection attack that causes the agent to invoke a privileged tool it should not call
+* Confirm that generated code can read a planted test credential and reach an unauthorized network endpoint
+* Run a Garak adversarial profile and locate failures in MLflow traces
+* Distinguish inference guardrail failures from authorization failures
+
+== Content
+
+// TODO: Write module content here.

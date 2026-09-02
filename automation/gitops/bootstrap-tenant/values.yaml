@@ -1,0 +1,16 @@
+deployer:
+  domain: apps.example.com
+
+# Participant username — overridden per-user by the ApplicationSet generator
+username: user1
+
+# Per-tenant resource limits
+# Lab workload: one agent pod + sidecar + generated-code sandbox; 30 concurrent users on 8×32vCPU workers
+quota:
+  requests:
+    cpu: "4"
+    memory: "8Gi"
+  limits:
+    cpu: "8"
+    memory: "16Gi"
+  maxPods: "20"

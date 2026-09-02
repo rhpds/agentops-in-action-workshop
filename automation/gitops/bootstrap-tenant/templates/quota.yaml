@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: agentops-participant-quota
+  namespace: {{ .Values.username }}-agentops
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  hard:
+    requests.cpu: {{ .Values.quota.requests.cpu | quote }}
+    requests.memory: {{ .Values.quota.requests.memory | quote }}
+    limits.cpu: {{ .Values.quota.limits.cpu | quote }}
+    limits.memory: {{ .Values.quota.limits.memory | quote }}
+    pods: {{ .Values.quota.maxPods | quote }}
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: agentops-participant-limits
+  namespace: {{ .Values.username }}-agentops
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  limits:
+    - type: Container
+      default:
+        cpu: "500m"
+        memory: "512Mi"
+      defaultRequest:
+        cpu: "100m"
+        memory: "256Mi"

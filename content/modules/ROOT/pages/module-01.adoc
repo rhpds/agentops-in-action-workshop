@@ -1,0 +1,16 @@
+= Module 1: Introduction to AgentOps
+:page-duration: 10 minutes
+
+// Overview: Establishes why operating a tool-enabled agent differs from operating a traditional application.
+// Participants ask the running agent one business question, walk the request path from user through model,
+// MCP tools, and enterprise services, then locate that interaction in MLflow.
+
+== Objectives
+
+* Explain why a tool-enabled AI agent requires operational controls beyond those applied to traditional applications
+* Trace a single agent request from user prompt through model inference, MCP tool invocation, and enterprise service call
+* Locate an agent interaction in MLflow and identify the key spans
+
+== Content
+
+// TODO: Write module content here.

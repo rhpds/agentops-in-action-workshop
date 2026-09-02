@@ -1,0 +1,31 @@
+= AgentOps in Action: Evaluate, Secure, and Operate Enterprise AI Agents
+
+Welcome to this hands-on AgentOps lab. Over approximately two hours you will take a single pre-deployed enterprise AI agent through the full observe–evaluate–contain–authorize–re-evaluate loop using Red Hat OpenShift AI.
+
+== What you will do
+
+* Observe an agent's real-time execution in MLflow traces
+* Baseline the agent's behavior with an EvalHub evaluation suite
+* Manually attack the agent and confirm failures in the trace
+* Apply runtime containment with Agent Sandbox, Kata isolation, and OpenShell policies
+* Add identity-aware MCP tool authorization via MCP Gateway
+* Re-run the evaluation suite and tune a deliberately over-restrictive policy
+
+== Environment
+
+Your environment is a shared Red Hat OpenShift 4.22 cluster running Red Hat OpenShift AI 3.6. Your dedicated lab namespace is `{guid}-agentops`. Use the tabs above to navigate between the terminal, the OpenShift console, MLflow, and EvalHub.
+
+== Modules
+
+[cols="1,3,1"]
+|===
+|Module |Title |Duration
+
+|1 |Introduction to AgentOps |10 min
+|2 |Explore the Agent and Establish a Baseline |15 min
+|3 |Identify Unsafe and Unintended Behavior |20 min
+|4 |Apply Runtime Isolation and Policy Controls |30 min
+|5 |Add Identity-Aware Access Controls |20 min
+|6 |Re-evaluate and Tune the Agent |15 min
+|7 |AgentOps Lifecycle and Wrap-up |10 min
+|===

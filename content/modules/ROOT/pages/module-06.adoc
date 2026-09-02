@@ -1,0 +1,17 @@
+= Module 6: Re-evaluate and Tune the Agent
+:page-duration: 15 minutes
+
+// Overview: Participants re-run the evaluation suite and Garak profile, compare the hardened scorecard against
+// the module-02 baseline, then diagnose a deliberately over-restrictive network allowlist, correct it from trace
+// evidence, and re-run to green.
+
+== Objectives
+
+* Re-run the EvalHub evaluation suite and Garak profile on the hardened agent
+* Compare the hardened scorecard against the module-02 baseline and attribute improvements to specific controls
+* Diagnose a deliberately over-restrictive OpenShell network policy that is blocking the knowledge MCP server
+* Correct the policy from trace evidence and re-run to a green scorecard
+
+== Content
+
+// TODO: Write module content here.

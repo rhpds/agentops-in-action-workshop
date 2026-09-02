@@ -1,0 +1,25 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: {{ .Values.lab.argocdProject }}
+  namespace: openshift-gitops
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  description: AgentOps in Action lab — manages shared infra and per-user tenant Applications
+  sourceRepos:
+    - '*'
+  destinations:
+    - namespace: {{ .Values.lab.sharedNamespace }}
+      server: https://kubernetes.default.svc
+    # Allow per-user namespaces matching the lab naming pattern
+    - namespace: '*-agentops'
+      server: https://kubernetes.default.svc
+  clusterResourceWhitelist:
+    - group: ''
+      kind: Namespace
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRoleBinding
+  namespaceResourceWhitelist:
+    - group: '*'
+      kind: '*'

@@ -1,0 +1,19 @@
+= Module 4: Apply Runtime Isolation and Policy Controls
+:page-duration: 30 minutes
+
+// Overview: The lab's central module. Participants apply five control layers without rebuilding or redeploying the agent:
+// Kata-backed Agent Sandbox, OpenShell filesystem, process, per-binary network, and credential policy.
+// Each module-03 attack is re-run and now receives an infrastructure-level denial.
+
+== Objectives
+
+* Inspect the Kata-backed Agent Sandbox boundary and confirm workload isolation
+* Apply OpenShell filesystem path restrictions to block credential reads
+* Deny the attack process with an OpenShell process execution policy
+* Apply per-binary outbound network rules alongside coarse NetworkPolicy
+* Migrate an over-broad credential into governed storage
+* Confirm each module-03 attack now receives an infrastructure-level denial
+
+== Content
+
+// TODO: Write module content here.

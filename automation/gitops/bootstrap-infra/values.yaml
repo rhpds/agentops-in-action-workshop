@@ -1,0 +1,11 @@
+deployer:
+  domain: apps.example.com
+
+lab:
+  # Shared namespace for cluster-wide lab infrastructure
+  sharedNamespace: agentops-shared
+  # ArgoCD project that owns all lab Applications
+  argocdProject: agentops-in-action
+
+# Maximum concurrent participants (from spec: max_concurrent_users: 30)
+maxUsers: 30

@@ -1,0 +1,23 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: agentops-participant
+  labels:
+    app.kubernetes.io/managed-by: argocd
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+rules:
+  # Read shared lab namespace (traces, EvalHub scorecards, MaaS endpoint metadata)
+  - apiGroups: ['']
+    resources: [pods, services, configmaps, endpoints]
+    verbs: [get, list, watch]
+    resourceNames: []
+  # View OpenShell / Agent Sandbox policies (read-only from the shared namespace)
+  - apiGroups: [openshift.io, sandbox.openshift.io]
+    resources: ['*']
+    verbs: [get, list, watch]
+  # View RHOAI data science project resources
+  - apiGroups: [datasciencecluster.opendatahub.io, serving.kserve.io]
+    resources: ['*']
+    verbs: [get, list, watch]

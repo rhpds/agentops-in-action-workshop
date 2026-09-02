@@ -1,0 +1,15 @@
+= Module 7: AgentOps Lifecycle and Wrap-up
+:page-duration: 10 minutes
+
+// Overview: Recaps the ten-step journey and states the distinct non-substitutable responsibility of each
+// control layer. Participants discuss integration into real development and deployment processes.
+
+== Objectives
+
+* Summarize the non-substitutable enforcement responsibility of each control layer applied in the lab
+* Describe how the AgentOps observe–evaluate–change–evaluate loop integrates into a development and deployment workflow
+* Identify next steps for applying these controls to your own agent workloads
+
+== Content
+
+// TODO: Write module content here.
