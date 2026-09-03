@@ -1,0 +1,68 @@
+{{/*
+Operator installation for the AgentOps in Action lab.
+
+Every Subscription pins an exact startingCSV and uses installPlanApproval:
+Manual. Nothing upgrades on its own.
+
+That is deliberate. This lab is built on Trial Preview components whose APIs
+change between builds — an unattended upgrade between a dry run and delivery
+day would silently re-base the policy CRs the whole lab depends on. Pinned
+versions are declared in values.yaml so they are visible and reviewable in git
+rather than buried in a template.
+
+Because approval is Manual, a human (or the bootstrap playbook) must approve the
+generated InstallPlan before each operator actually installs:
+
+    oc get installplan -A
+    oc patch installplan <name> -n <ns> --type merge -p '{"spec":{"approved":true}}'
+
+Sync waves: namespaces (-4) -> OperatorGroups (-3) -> Subscriptions (-2).
+The DataScienceCluster lands later, in datasciencecluster.yaml.
+*/}}
+
+{{- range $key, $op := .Values.operators }}
+{{- if $op.enabled }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $op.namespace }}
+  labels:
+    app.kubernetes.io/managed-by: argocd
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "-4"
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: {{ $op.namespace }}-og
+  namespace: {{ $op.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+spec:
+  # All four operators are AllNamespaces-mode only, so targetNamespaces is
+  # deliberately empty rather than scoped.
+  upgradeStrategy: Default
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  # Named after the package, not the values key: the key is camelCase for
+  # readability in values.yaml, which is not a valid RFC 1123 object name.
+  name: {{ $op.package }}
+  namespace: {{ $op.namespace }}
+  labels:
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  name: {{ $op.package }}
+  channel: {{ $op.channel }}
+  source: {{ $op.source | default "redhat-operators" }}
+  sourceNamespace: {{ $op.sourceNamespace | default "openshift-marketplace" }}
+  # Pinned. Do not replace with a floating channel default.
+  startingCSV: {{ $op.csv }}
+  installPlanApproval: Manual
+{{- end }}
+{{- end }}

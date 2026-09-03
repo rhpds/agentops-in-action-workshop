@@ -1,0 +1,68 @@
+{{/*
+Shared lab services — one instance for the whole event, in the shared namespace.
+
+These are the two services that must survive a pod restart. Everything else in
+the lab is per-attendee and disposable: plant state reverts to seed, work orders
+are re-created, seed content reloads from images. The baseline scorecard is the
+exception — it is captured in module 2 and compared against in module 6, ninety
+minutes later, and it cannot be recreated once an attendee has hardened their
+environment. So it lives here, in services with their own durable storage,
+rather than in an attendee pod.
+*/}}
+{{- if .Values.sharedServices.mlflow.enabled }}
+---
+apiVersion: mlflow.opendatahub.io/v1
+kind: MLflow
+metadata:
+  # MLflow is a CLUSTER-SCOPED singleton that must be named "mlflow" — both
+  # constraints are enforced by the operator's webhook. Do not add a namespace
+  # here: it would be silently accepted and ignored. The operator deploys the
+  # workload into the RHOAI applications namespace
+  # ({{ .Values.datascience.applicationsNamespace }}) regardless, and surfaces
+  # the UI at <RHOAI dashboard host>/mlflow.
+  name: mlflow
+  labels:
+    app.kubernetes.io/managed-by: argocd
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true,ServerSideApply=true
+spec:
+  replicas: {{ .Values.sharedServices.mlflow.replicas }}
+  # Backend store holds the run metadata — the trace and scorecard data the lab
+  # actually depends on. sqlite on the PVC is sufficient at 30 attendees writing
+  # a handful of eval runs each; switch to postgresql via backendStoreUriFrom if
+  # a dry run shows contention.
+  backendStoreUri: {{ .Values.sharedServices.mlflow.backendStoreUri | quote }}
+  serveArtifacts: true
+  artifactsDestination: {{ .Values.sharedServices.mlflow.artifactsDestination | quote }}
+  storage:
+    accessModes: [ReadWriteOnce]
+    resources:
+      requests:
+        storage: {{ .Values.sharedServices.mlflow.storageSize }}
+{{- with .Values.sharedServices.mlflow.storageClass }}
+    storageClassName: {{ . }}
+{{- end }}
+{{- end }}
+
+{{- if .Values.sharedServices.evalhub.enabled }}
+---
+apiVersion: trustyai.opendatahub.io/v1
+kind: EvalHub
+metadata:
+  name: {{ .Values.sharedServices.evalhub.name }}
+  namespace: {{ .Values.lab.sharedNamespace }}
+  labels:
+    app.kubernetes.io/managed-by: argocd
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true,ServerSideApply=true
+spec:
+  database:
+    # sqlite is sufficient at 30 attendees. Revisit only if the dry run shows
+    # contention — the write rate here is a handful of eval runs per attendee,
+    # not a workload.
+    type: {{ .Values.sharedServices.evalhub.databaseType }}
+{{- end }}
