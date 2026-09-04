@@ -1,0 +1,19 @@
+username: user1
+namespaceSuffix: agentops
+
+# Baseline network posture: deliberately wide open.
+#
+# This is the "before" state participants tighten in module 4. It is also the
+# coarse layer they compare OpenShell's per-binary policy against — NetworkPolicy
+# can say "this namespace may reach the internet", but only OpenShell can say
+# "python may reach the model gateway and nothing else".
+networkPolicy:
+  enabled: true
+  # true  -> unrestricted egress, the lab's starting condition
+  # false -> egress restricted to the allowlist below
+  permissiveEgress: true
+  allowedEgress:
+    - name: model gateway and MCP servers within the namespace
+      sameNamespace: true
+    - name: DNS
+      ports: [53]

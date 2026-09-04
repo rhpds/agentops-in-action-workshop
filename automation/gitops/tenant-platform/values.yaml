@@ -1,0 +1,103 @@
+# Participant username — overridden per-user by the ApplicationSet generator.
+username: user1
+
+# Namespace pattern must match bootstrap-tenant, which creates it.
+namespaceSuffix: agentops
+
+image:
+  # Built on-cluster by BuildConfig and referenced from the internal registry.
+  # No developer ever builds these locally (implementation-plan §2.6).
+  registry: image-registry.openshift-image-registry.svc:5000
+  namespace: wp-dev-phayes
+  plantApi:
+    repository: plant-api
+    tag: latest
+  mcp:
+    repository: waterplant-mcp
+    tag: latest
+  ui:
+    repository: waterplant-ui
+    tag: latest
+  agent:
+    repository: waterplant-agent
+    tag: latest
+  pullPolicy: Always
+
+# ---------------------------------------------------------------------------
+# plant-api — the ONLY stateful workload per participant.
+#
+# replicas is deliberately not configurable. State is an in-process object
+# behind an asyncio lock, so a second replica would give the participant two
+# divergent plants behind one Service, with answers changing depending on which
+# pod served the request. See implementation-plan §2.8.
+# ---------------------------------------------------------------------------
+plantApi:
+  tickSeconds: "1.0"
+  resources:
+    requests: { cpu: 100m, memory: 192Mi }
+    limits:   { cpu: 500m, memory: 384Mi }
+
+# ---------------------------------------------------------------------------
+# MCP servers — stateless proxies onto plant-api.
+#
+# One image, three entrypoints. Streamable HTTP on /mcp, never stdio: MCP
+# Gateway can only route, authorize and token-exchange over HTTP (§D3).
+# ---------------------------------------------------------------------------
+mcp:
+  servers:
+    - name: telemetry-mcp
+      server: telemetry
+    - name: maintenance-mcp
+      server: maintenance
+    - name: control-mcp
+      server: control
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits:   { cpu: 300m, memory: 256Mi }
+
+# Coarse egress restriction as defence in depth. Deliberately permissive at
+# baseline — the interesting per-binary policy is OpenShell's job in module 4,
+# and this is the layer participants compare it against.
+networkPolicy:
+  enabled: true
+  baselinePermissive: true
+
+# ---------------------------------------------------------------------------
+# Operator console
+#
+# The dashboard reads plant-api directly, so it stays useful when the agent is
+# denied, broken or absent — which is most of module 4.
+# ---------------------------------------------------------------------------
+ui:
+  replicas: 1
+  agentUrl: "http://waterplant-agent:8080"
+  mlflowUrl: ""
+  route:
+    enabled: true
+    timeout: 600s
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits:   { cpu: 300m, memory: 256Mi }
+
+# ---------------------------------------------------------------------------
+# Maintenance assistant
+#
+# Makes no authorization decisions: forwards the caller's token to the MCP
+# servers and reports what refused it. Built to drop into the OpenShell
+# governed execution environment in module 4 unmodified.
+# ---------------------------------------------------------------------------
+agent:
+  replicas: 1
+  # Holds LITELLM_VIRTUAL_KEY. Created out of band — never a chart value.
+  credentialsSecret: litellm-credentials
+  litellm:
+    baseUrl: "https://maas-rhdp.apps.maas.redhatworkshops.io/v1"
+    model: "qwen3-235b"
+  temperature: 0
+  maxSteps: 14
+  # The shared MaaS endpoint 429s under light load: one sequential client saw
+  # 52 across 15 golden-workflow runs. Backoff absorbs it, it does not fix it.
+  rateLimitRetries: 5
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits:   { cpu: 500m, memory: 512Mi }

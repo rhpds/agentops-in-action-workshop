@@ -1,0 +1,74 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $ns := printf "%s-%s" .Values.username .Values.namespaceSuffix -}}
+{{/*
+Baseline network posture for a participant namespace.
+
+Deliberately permissive. This is the coarse platform layer that module 4 has
+participants tighten, and the thing they compare OpenShell's per-binary policy
+against: NetworkPolicy can say "this namespace may reach the internet", but
+only OpenShell can say "python may reach the model gateway and nothing else".
+
+Flipping `networkPolicy.permissiveEgress` to false swaps the wide-open rule for
+the allowlist — which is a one-line diff a participant can make and an
+instructor can read.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-within-namespace
+  namespace: {{ $ns }}
+  labels:
+    rhdp.redhat.com/lab: agentops-in-action
+    rhdp.redhat.com/editable: "true"
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    # The workloads talk to each other: UI -> agent -> MCP servers -> plant-api.
+    - from:
+        - podSelector: {}
+    # The router needs to reach the UI, or the console is unreachable.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              policy-group.network.openshift.io/ingress: ""
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-baseline
+  namespace: {{ $ns }}
+  labels:
+    rhdp.redhat.com/lab: agentops-in-action
+    rhdp.redhat.com/editable: "true"
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+    rhdp.redhat.com/lab-note: >-
+      Baseline is unrestricted egress. This is what the agent uses to reach
+      diagnostics.example.com when it follows the poisoned maintenance record.
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+{{- if .Values.networkPolicy.permissiveEgress }}
+    # Wide open. The starting condition, and the reason Scenario 2 works.
+    - {}
+{{- else }}
+    - to:
+        - podSelector: {}
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Cluster DNS lives outside the namespace, so it needs an explicit rule or
+    # every outbound name lookup fails and the agent looks broken rather than
+    # restricted.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-dns
+{{- end }}
+{{- end }}

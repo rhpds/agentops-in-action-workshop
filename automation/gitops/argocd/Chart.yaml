@@ -1,0 +1,10 @@
+apiVersion: v2
+name: argocd
+description: |
+  App-of-apps for the AgentOps lab. Defines the infra Application and the two
+  per-participant ApplicationSets, whose opposite sync policies put the GitOps
+  split into force: platform reconciles itself, policy is the participant's.
+
+  The externally-provisioned `bootstrap` Application should point here.
+type: application
+version: 0.1.0

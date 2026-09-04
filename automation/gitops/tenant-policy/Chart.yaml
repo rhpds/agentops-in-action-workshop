@@ -1,0 +1,16 @@
+apiVersion: v2
+name: tenant-policy
+description: |
+  The participant-editable half of the lab. Everything the guide tells a
+  participant to change lives here: NetworkPolicy now, OpenShell execution
+  policy in module 4, MCP Gateway tool and parameter authorization in module 5.
+
+  Its ArgoCD Application syncs MANUALLY with selfHeal and prune OFF. That is
+  not an oversight — with self-heal on, a participant's policy edit is reverted
+  within seconds of them making it, silently and with variable timing, and it
+  reads as a broken product rather than a misconfigured lab.
+
+  The inverse is also true: `argocd app sync --prune` against this Application
+  is exactly how the lab reset restores the baseline.
+type: application
+version: 0.1.0

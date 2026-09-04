@@ -1,0 +1,27 @@
+repo:
+  url: https://github.com/rhpds/agentops-in-action-workshop.git
+  # Pin this to a per-event tag before a delivery. On a moving branch, a merge
+  # to main reaches a live lab mid-exercise.
+  targetRevision: main
+
+argocd:
+  namespace: openshift-gitops
+
+lab:
+  argocdProject: agentops-in-action
+  sharedNamespace: agentops-shared
+  usernamePrefix: user
+  # From spec.yaml max_concurrent_users
+  maxUsers: 30
+
+infra:
+  # Prune off on infra by default: it manages operators and a DataScienceCluster,
+  # where an accidental prune is expensive and slow to recover. Turn it on once
+  # the chart is known-good for an event build.
+  prune: false
+
+images:
+  # Namespace holding the ImageStreams the workloads pull from.
+  namespace: wp-dev-phayes
+
+mlflowUrl: ""
