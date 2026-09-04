@@ -92,6 +92,11 @@ metadata:
     app.kubernetes.io/part-of: water-plant
   annotations:
     argocd.argoproj.io/sync-wave: "2"
+    # The router defaults to a 30s server timeout. A full agent investigation is
+    # a seven-step tool chain plus backoff through the shared model endpoint's
+    # 429s, which routinely exceeds that — the request would 504 mid-thought and
+    # look like the agent had crashed.
+    haproxy.router.openshift.io/timeout: {{ .Values.ui.route.timeout | quote }}
 spec:
   to:
     kind: Service
