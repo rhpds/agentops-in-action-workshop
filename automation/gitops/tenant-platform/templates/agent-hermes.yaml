@@ -104,6 +104,55 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       initContainers:
+        {{/*
+        Hermes dials every MCP server once at start-up, retries three times over
+        about seven seconds, and then gives up for the life of the process. It
+        does not reconnect. Losing that race is not loud: the agent starts
+        healthy, serves requests, and answers plant questions out of its
+        *local shell* instead — "I don't see any files related to pumps in the
+        current directory" — because the terminal tool is still registered when
+        the MCP tools are not. Nothing in the console or the probes says why.
+
+        Observed after a cluster restart brought Hermes and the MCP servers up
+        together. With 30 participants and one restart, that is 30 agents that
+        look fine and cannot reach a tool.
+
+        So wait for the servers, and fail the pod rather than start without
+        them: a CrashLoopBackOff names the problem, a shell-only agent does not.
+        TCP is the same bar the MCP servers' own readinessProbe uses, and the
+        failure being fixed was a refused connection.
+        */}}
+        - name: wait-for-mcp
+          image: {{ printf "%s:%s" .Values.agent.hermes.image .Values.agent.hermes.tag }}
+          command:
+            - /opt/hermes/venv/bin/python
+            - -c
+            - |
+              import os, socket, sys, time
+              targets = [t for t in os.environ["MCP_TARGETS"].split(",") if t]
+              deadline = time.time() + float(os.environ["MCP_WAIT_SECONDS"])
+              pending = list(targets)
+              while pending and time.time() < deadline:
+                  host, port = pending[0].split(":")
+                  try:
+                      with socket.create_connection((host, int(port)), timeout=5):
+                          print(f"ready: {pending.pop(0)}", flush=True)
+                          continue
+                  except OSError as exc:
+                      print(f"waiting for {pending[0]}: {exc}", flush=True)
+                  time.sleep(3)
+              if pending:
+                  sys.exit(f"MCP servers unreachable after {os.environ['MCP_WAIT_SECONDS']}s: "
+                           + ", ".join(pending))
+              print("all MCP servers reachable", flush=True)
+          env:
+            - name: MCP_TARGETS
+              value: "{{ range $i, $s := .Values.mcp.servers }}{{ if $i }},{{ end }}{{ $s.name }}.{{ $ns }}.svc:8080{{ end }}"
+            - name: MCP_WAIT_SECONDS
+              value: {{ .Values.agent.hermes.mcpWaitSeconds | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
         # Assembles the two files Hermes reads. Necessary because the
         # published image ships no entrypoint.sh, so nothing else writes them.
         - name: seed-config

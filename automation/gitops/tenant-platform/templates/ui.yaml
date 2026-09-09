@@ -45,8 +45,36 @@ spec:
           env:
             - name: PLANT_API_URL
               value: http://plant-api.{{ $ns }}.svc:8080
+            {{- /*
+            The console follows the harness. agentUrl was once a flat value
+            pointing at waterplant-agent, which meant flipping agent.harness
+            deployed Hermes and left the chat pane talking to a Service that no
+            longer existed — the swap looked like a broken console. Derived
+            here so there is one switch, not two that must agree.
+            */}}
+            {{- if eq .Values.agent.harness "hermes" }}
             - name: AGENT_URL
-              value: {{ .Values.ui.agentUrl | quote }}
+              value: {{ .Values.ui.agentUrl | default (printf "http://hermes-agent.%s.svc:%v" $ns .Values.agent.hermes.port) | quote }}
+            - name: AGENT_PROTOCOL
+              value: openai
+            - name: AGENT_MODEL
+              value: hermes-agent
+            - name: AGENT_API_KEY
+              # Hermes authenticates with one static server key and rejects a
+              # participant token, so the BFF holds a service credential here
+              # and the caller's identity stops at the console. That is a real
+              # loss for the identity scenarios; /api/config reports it rather
+              # than letting an exercise fail silently.
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.agent.hermes.envSecret }}
+                  key: API_SERVER_KEY
+            {{- else }}
+            - name: AGENT_URL
+              value: {{ .Values.ui.agentUrl | default (printf "http://waterplant-agent.%s.svc:8080" $ns) | quote }}
+            - name: AGENT_PROTOCOL
+              value: waterplant
+            {{- end }}
             - name: MLFLOW_URL
               value: {{ .Values.ui.mlflowUrl | quote }}
             - name: NAMESPACE

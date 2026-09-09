@@ -70,7 +70,10 @@ networkPolicy:
 # ---------------------------------------------------------------------------
 ui:
   replicas: 1
-  agentUrl: "http://waterplant-agent:8080"
+  # Empty means "follow agent.harness" — the console points at whichever agent
+  # this chart actually deployed and speaks that harness's protocol. Set a
+  # value only to aim the console at an agent outside this chart.
+  agentUrl: ""
   mlflowUrl: ""
   route:
     enabled: true
@@ -128,16 +131,31 @@ agent:
   # Building it into our own registry from that Containerfile would be the next
   # step for supply-chain control; this pulls the published image for now.
   hermes:
-    image: quay.io/ckavili/hermes-mem0
-    tag: "0.0.3"
+    # Built from hermes/Containerfile in the agent repo: the cai-krew image
+    # plus hermes-agent's optional [mcp] extra, which it ships without. Without
+    # that, MCP servers list as enabled and fail only on connect.
+    image: image-registry.openshift-image-registry.svc:5000/wp-dev-phayes/hermes-mcp
+    tag: latest
     port: 8787
     home: /app/.hermes
     storageSize: 5Gi
     mcpTimeoutSeconds: 120
-    # Carries HERMES_ENV_MODEL_API_KEY — the same LiteLLM key our own agent
-    # uses, under the name this build expects. Created out of band:
+    # How long to wait for the MCP servers before failing the pod. Hermes only
+    # dials them at start-up and never reconnects, so starting without them
+    # yields an agent that silently falls back to its local shell.
+    mcpWaitSeconds: 180
+    # Two keys, both plain-named. The HERMES_ENV_* convention only works when
+    # the repo's entrypoint.sh is present to strip the prefix, and the
+    # published image ships without it — so prefixed names are simply inert.
+    # The init container reads these and writes config.yaml and .env instead.
+    #
+    #   MODEL_API_KEY   the same LiteLLM key our own agent uses
+    #   API_SERVER_KEY  Hermes' static bearer, also read by the console's BFF
+    #
+    # Created out of band so neither reaches git:
     #   oc create secret generic hermes-env \
-    #     --from-literal=HERMES_ENV_MODEL_API_KEY="$LITELLM_KEY"
+    #     --from-literal=MODEL_API_KEY="$LITELLM_KEY" \
+    #     --from-literal=API_SERVER_KEY="$(openssl rand -hex 24)"
     envSecret: hermes-env
     resources:
       requests: { cpu: 500m, memory: 1Gi }
