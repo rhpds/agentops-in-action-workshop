@@ -1,9 +1,13 @@
 {{- $ns := printf "%s-%s" .Values.username .Values.namespaceSuffix -}}
 {{- $root := . -}}
 {{/*
-One image, three entrypoints. These are stateless proxies onto plant-api
-(§2.8), which is why they can scale, restart or reschedule freely and why the
-gateway needs no session affinity to them.
+Three images, one per server, each with its entrypoint baked in. They remain
+stateless proxies onto plant-api (§2.8), which is why they can restart or
+reschedule freely and why the gateway needs no session affinity to them.
+
+Separate images mean a change to one server no longer rebuilds and redeploys
+the other two — which matters once participants are editing per-server policy
+and an unrelated redeploy would disturb an exercise in progress.
 */}}
 {{- range .Values.mcp.servers }}
 ---
@@ -37,9 +41,8 @@ spec:
           type: RuntimeDefault
       containers:
         - name: mcp
-          image: {{ printf "%s/%s/%s:%s" $root.Values.image.registry $root.Values.image.namespace $root.Values.image.mcp.repository $root.Values.image.mcp.tag }}
+          image: {{ printf "%s/%s/%s:%s" $root.Values.image.registry $root.Values.image.namespace .repository $root.Values.image.mcpTag }}
           imagePullPolicy: {{ $root.Values.image.pullPolicy }}
-          args: [{{ .server | quote }}]
           ports:
             - name: http
               containerPort: 8080

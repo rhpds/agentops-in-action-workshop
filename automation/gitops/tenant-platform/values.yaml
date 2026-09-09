@@ -12,9 +12,9 @@ image:
   plantApi:
     repository: plant-api
     tag: latest
-  mcp:
-    repository: waterplant-mcp
-    tag: latest
+  # Three images now, one per MCP server — each has its own package,
+  # Containerfile, tests and entrypoint upstream. They share a tag.
+  mcpTag: latest
   ui:
     repository: waterplant-ui
     tag: latest
@@ -46,11 +46,11 @@ plantApi:
 mcp:
   servers:
     - name: telemetry-mcp
-      server: telemetry
+      repository: mcp-telemetry
     - name: maintenance-mcp
-      server: maintenance
+      repository: mcp-maintenance
     - name: control-mcp
-      server: control
+      repository: mcp-control
   resources:
     requests: { cpu: 50m, memory: 128Mi }
     limits:   { cpu: 300m, memory: 256Mi }
