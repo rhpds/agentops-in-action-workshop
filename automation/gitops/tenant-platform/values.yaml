@@ -87,6 +87,20 @@ ui:
 # governed execution environment in module 4 unmodified.
 # ---------------------------------------------------------------------------
 agent:
+  # Which agent harness to deploy. BYOA is the lab's premise, so the harness is
+  # swappable and everything around it — plant, MCP servers, policy, console —
+  # stays identical.
+  #
+  #   waterplant  our own agent: a plain loop, measured at 100% on the golden
+  #               workflow, speaking our /chat and /chat/stream contract
+  #   hermes      nousresearch/hermes-agent, run as a plain container
+  #
+  # NOT YET INTERCHANGEABLE. Hermes serves an OpenAI-compatible API on 8642;
+  # the console's backend speaks our /chat contract and expects tool calls in
+  # our shape. Selecting hermes deploys and configures it, but the console
+  # cannot drive it until the backend grows an OpenAI-compatible branch.
+  harness: waterplant
+
   replicas: 1
   # Holds LITELLM_VIRTUAL_KEY. Created out of band — never a chart value.
   credentialsSecret: litellm-credentials
@@ -101,3 +115,30 @@ agent:
   resources:
     requests: { cpu: 100m, memory: 256Mi }
     limits:   { cpu: 500m, memory: 512Mi }
+
+  # --- Hermes harness -------------------------------------------------------
+  # Only used when agent.harness is "hermes".
+  #
+  # This is the rh-aiservices-bu/cai-krew build, not the upstream image. That
+  # one is built on s6-overlay, needs to start as root, and dies under
+  # restricted-v2 with "/run belongs to uid 0 ... lacking the privileges to fix
+  # it" — verified on the cluster. The cai-krew Containerfile uses UBI9 with
+  # tini and runs non-root, which is what OpenShift needs.
+  #
+  # Building it into our own registry from that Containerfile would be the next
+  # step for supply-chain control; this pulls the published image for now.
+  hermes:
+    image: quay.io/ckavili/hermes-mem0
+    tag: "0.0.3"
+    port: 8787
+    home: /app/.hermes
+    storageSize: 5Gi
+    mcpTimeoutSeconds: 120
+    # Carries HERMES_ENV_MODEL_API_KEY — the same LiteLLM key our own agent
+    # uses, under the name this build expects. Created out of band:
+    #   oc create secret generic hermes-env \
+    #     --from-literal=HERMES_ENV_MODEL_API_KEY="$LITELLM_KEY"
+    envSecret: hermes-env
+    resources:
+      requests: { cpu: 500m, memory: 1Gi }
+      limits:   { cpu: "2",  memory: 4Gi }

@@ -1,0 +1,224 @@
+{{- if eq .Values.agent.harness "hermes" }}
+{{- $ns := printf "%s-%s" .Values.username .Values.namespaceSuffix -}}
+{{/*
+Hermes as an alternative agent harness.
+
+BYOA is the lab's premise — Red Hat does not pick the agent framework — so
+swapping the harness while every surrounding control stays identical is worth
+demonstrating rather than asserting. Flip `agent.harness` to "hermes" and the
+plant, the MCP servers, the policy layer and the console are untouched.
+
+Two things this deliberately does NOT do.
+
+It does not use the community `hermes-operator`. That bundle is third-party
+(paperclipinc v0.2.0) and its CRDs offer `selfConfigure` and `autoUpdate` — an
+agent that rewrites its own configuration and pulls images on a channel. Both
+conflict with this lab: the thesis is that the agent is *unchanged* while the
+infrastructure around it changes, so an agent that mutates itself makes the
+before/after comparison unattributable. It also breaks the pin-everything rule.
+
+It does not use the upstream `nousresearch/hermes-agent` image, which is built
+on s6-overlay and must start as root before dropping to UID 10000. Under
+OpenShift's restricted-v2 SCC it gets an arbitrary UID and dies in preinit:
+"/run belongs to uid 0 ... lacking the privileges to fix it". Verified on the
+cluster. Granting anyuid would fix it and would be incoherent in a lab about
+runtime containment — and it would break the Phase 3 plan, where the agent must
+drop into the OpenShell governed environment unmodified.
+
+Instead this uses the rh-aiservices-bu/cai-krew build: UBI9, tini rather than
+s6, non-root, which is already running on OpenShift.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hermes-config
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: hermes-agent
+    app.kubernetes.io/part-of: water-plant
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+data:
+  config.yaml: |
+    # Staged here and copied into the data volume at start-up, because the
+    # container's entrypoint rewrites this file from HERMES_CONFIG_* variables
+    # and cannot write to a mounted ConfigMap.
+    #
+    # The MCP block is the load-bearing part: Hermes discovers the same three
+    # servers our own agent uses, over the same streamable HTTP transport, with
+    # the same tools and the same descriptions. That is what makes a comparison
+    # between harnesses mean anything.
+    mcp_servers:
+{{- range .Values.mcp.servers }}
+      {{ .name | replace "-" "_" }}:
+        url: "http://{{ .name }}.{{ $ns }}.svc:8080/mcp"
+        enabled: true
+        timeout: {{ $.Values.agent.hermes.mcpTimeoutSeconds }}
+        connect_timeout: 30
+{{- end }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hermes-data
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: hermes-agent
+    app.kubernetes.io/part-of: water-plant
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.agent.hermes.storageSize }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hermes-agent
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: hermes-agent
+    app.kubernetes.io/part-of: water-plant
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  replicas: 1
+  # Persistent memory on a ReadWriteOnce volume: a second pod cannot roll
+  # alongside the first.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: hermes-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: hermes-agent
+        app.kubernetes.io/part-of: water-plant
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # Assembles the two files Hermes reads. Necessary because the
+        # published image ships no entrypoint.sh, so nothing else writes them.
+        - name: seed-config
+          image: {{ printf "%s:%s" .Values.agent.hermes.image .Values.agent.hermes.tag }}
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              # Regenerated every start so the config always matches the chart.
+              # The model block is appended here rather than templated into the
+              # ConfigMap because it carries the LiteLLM key: this way the
+              # credential stays in the Secret and never reaches a manifest,
+              # Helm values, or git.
+              cp /config/config.yaml "$HERMES_HOME/config.yaml"
+              cat >> "$HERMES_HOME/config.yaml" <<EOF
+
+              model:
+                default: $MODEL_DEFAULT
+                provider: custom
+                base_url: $MODEL_BASE_URL
+                api_key: $MODEL_API_KEY
+
+              custom_providers:
+                - name: $MODEL_DEFAULT
+                  base_url: $MODEL_BASE_URL
+                  api_key: $MODEL_API_KEY
+                  model: $MODEL_DEFAULT
+              EOF
+              # API server settings live in .env; the published image has no
+              # entrypoint.sh, so nothing else writes this file.
+              {
+                echo "API_SERVER_ENABLED=true"
+                echo "API_SERVER_HOST=0.0.0.0"
+                echo "API_SERVER_PORT={{ .Values.agent.hermes.port }}"
+                echo "API_SERVER_KEY=$API_SERVER_KEY"
+              } > "$HERMES_HOME/.env"
+              chmod 600 "$HERMES_HOME/.env" "$HERMES_HOME/config.yaml"
+          envFrom:
+            - secretRef:
+                name: {{ .Values.agent.hermes.envSecret }}
+          env:
+            - { name: HERMES_HOME,      value: "{{ .Values.agent.hermes.home }}" }
+            - { name: MODEL_BASE_URL,   value: "{{ .Values.agent.litellm.baseUrl }}" }
+            - { name: MODEL_DEFAULT,    value: "{{ .Values.agent.litellm.model }}" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: data, mountPath: "{{ .Values.agent.hermes.home }}" }
+            - { name: config, mountPath: /config, readOnly: true }
+      containers:
+        - name: hermes
+          image: {{ printf "%s:%s" .Values.agent.hermes.image .Values.agent.hermes.tag }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.agent.hermes.port }}
+          envFrom:
+            # Carries MODEL_API_KEY and API_SERVER_KEY. Note the plain names:
+            # the HERMES_ENV_* convention only works when the repo's
+            # entrypoint.sh is present to strip the prefix, and it is not in
+            # the published image — the init container does that job instead.
+            - secretRef:
+                name: {{ .Values.agent.hermes.envSecret }}
+          env:
+            - name: HERMES_HOME
+              value: {{ .Values.agent.hermes.home | quote }}
+            - name: HERMES_PROFILE
+              value: default
+            - name: XDG_STATE_HOME
+              value: "{{ .Values.agent.hermes.home }}/state"
+            - name: MEM0_DB_PATH
+              value: "{{ .Values.agent.hermes.home }}/mem0"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            # Not read-only: Hermes writes memory, profiles and its own state
+            # under HERMES_HOME. The harness is less constrained than our own
+            # agent, which is worth showing rather than hiding — module 4 has to
+            # govern whatever runtime is actually present.
+            readOnlyRootFilesystem: false
+          volumeMounts:
+            - { name: data, mountPath: "{{ .Values.agent.hermes.home }}" }
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 12
+          resources:
+            {{- toYaml .Values.agent.hermes.resources | nindent 12 }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: hermes-data
+        - name: config
+          configMap:
+            name: hermes-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hermes-agent
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: hermes-agent
+    app.kubernetes.io/part-of: water-plant
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  selector:
+    app.kubernetes.io/name: hermes-agent
+  ports:
+    - name: http
+      port: {{ .Values.agent.hermes.port }}
+      targetPort: http
+{{- end }}
