@@ -2,4 +2,46 @@
 # Human context, decisions, and notes that bridge sessions and people.
 # Not a task tracker — the manifest tracks structured progress.
 
-entries: []
+entries:
+  - id: "2026-09-11-001"
+    timestamp: "2026-09-11T19:00:17Z"
+    author: "deewhyweb"
+    status: resolved
+    type: summary
+    content: >-
+      Diagnosed why the lab deploys nothing from a freshly provisioned cluster, and restructured the GitOps charts around the catalog item's fixed bootstrap paths. Root cause is not in this repo: the lb1285 cluster catalog item sets no ocp4_workload_gitops_bootstrap_helm_values, so the AgnosticD role takes its else-branch and renders the bootstrap Application with plugin: {name: kustomize-envvar} - a plugin nobody installs, because ocp4_workload_openshift_gitops_kustomize_plugin defaults to false and the item does not set it either. Confirmed live on dev cluster-2xbzc: ComparisonError "could not find cmp-server plugin with name kustomize-envvar", sync Unknown, health Healthy, zero resources, no plugin ConfigMap, no CMP sidecar on the repo-server. Along the way fixed three genuine repo-side bugs: an AppProject that could never be created, an AppProject too narrow to permit the operator namespaces and cluster-scoped resources the charts render, and a per-tenant username collision.
+  - id: "2026-09-11-002"
+    timestamp: "2026-09-11T19:00:17Z"
+    author: "deewhyweb"
+    status: open
+    type: action
+    content: >-
+      BLOCKER - ask the RHDP CI team to add ocp4_workload_gitops_bootstrap_helm_values to rh1-2027/lb1285-ai-agent-sec-cnv-cluster, in BOTH common.yaml and dev.yaml since dev re-declares the gitops_bootstrap block. Any non-empty value flips the role to native Helm and drops the plugin reference; the repo paths stay exactly as the CI team specified. Precedent is internal and strong: agd_v2/rhoai-migration drives the same role against an identically shaped bootstrap-infra Helm chart and works purely because it sets helm_values. summit-2026/lb2144-agentops-ocp-cnv (prod), summit-2026/lb1559 and our own lb1285 tenant item all set it too - the lb1285 cluster item is the only one of the four that sets neither helm_values nor the kustomize plugin. Nothing in this repository can work around it, because ArgoCD never fetches the repo at all.
+  - id: "2026-09-11-003"
+    timestamp: "2026-09-11T19:00:17Z"
+    author: "deewhyweb"
+    status: open
+    type: decision
+    content: >-
+      Need confirmation from the CI team that the tenant catalog item is the only thing that creates per-participant resources. The GitOps charts were restructured on that assumption: bootstrap-tenant now creates the namespace, quota, RBAC and the two per-user Applications, and the cluster-side ApplicationSet fan-out was deleted along with the app-of-apps layer. If the CI team instead expects the cluster side to fan out to N participants, bootstrap-tenant should not be creating those Applications and the change needs reworking. Worth settling before the align-ci-paths branch merges.
+  - id: "2026-09-11-004"
+    timestamp: "2026-09-11T19:00:17Z"
+    author: "deewhyweb"
+    status: open
+    type: action
+    content: >-
+      Add an ArgoCD CR patch raising the application-controller memory limit, copying the pattern from rh-aiservices-bu/rhoai-2.25-baseline bootstrap-infra/templates/argocd-config.yaml. That repo documents the 2Gi operator default OOMKilling the controller roughly every 20 seconds across about 20 Applications, leaving resources half-applied, and raises the limit to 6Gi. This lab creates two Applications per participant plus shared infra - over 60 at 30 users - so it will hit the same wall harder. Not yet observed here only because nothing has synced.
+  - id: "2026-09-11-005"
+    timestamp: "2026-09-11T19:00:17Z"
+    author: "deewhyweb"
+    status: open
+    type: note
+    content: >-
+      Spec drift to reconcile before infra review. spec.yaml non_ga_products is written around Red Hat OpenShift AI 3.6 (GA 2026-11-19) but bootstrap-infra/values.yaml pins channel stable-3.5 and csv rhods-operator.3.5.0, with DataScienceCluster comments describing v2 as the storage version in RHOAI 3.5. One of the two is wrong and it changes the non-GA access-plan story reviewers will read. Separately spec.environment.ai_model_name is still empty although the choice is settled in practice: the cluster catalog item provisions litellm virtual keys for qwen3-235b and tenant-platform/values.yaml hardcodes that model. spec.environment.cloud_provider was also changed from troshka to cnv by someone else, which is consistent with the deliberate decision not to install Kata/OpenShift Sandboxed Containers recorded in bootstrap-infra/values.yaml.
+  - id: "2026-09-11-006"
+    timestamp: "2026-09-11T19:00:17Z"
+    author: "deewhyweb"
+    status: open
+    type: handoff
+    content: >-
+      Two branches need attention. align-ci-paths holds the chart restructure aligning to the CI team's fixed paths and is committed but not pushed - it should not merge until the question in 2026-09-11-003 is answered. feat/hermes-harness exists only on this laptop with no remote and no backup: two commits from 9 September adding Hermes as an alternative agent harness, branched from 4ad1cac, so it predates every GitOps fix and will need a rebase.
