@@ -13,6 +13,17 @@ lab:
   usernamePrefix: user
   # From spec.yaml max_concurrent_users
   maxUsers: 30
+  # Extra destinations the AppProject must permit, beyond sharedNamespace and
+  # the per-participant `*-agentops` pattern. These are the operator namespaces
+  # that bootstrap-infra installs into — keep this in step with
+  # `operators.*.namespace` in bootstrap-infra/values.yaml, and add
+  # agentops-authorino / agentops-kuadrant here if those operators are enabled.
+  # redhat-ods-applications is included because the MLflow operator deploys its
+  # workload there rather than where the CR is applied.
+  operatorNamespaces:
+    - redhat-ods-operator
+    - redhat-ods-applications
+    - agent-sandbox-system
 
 infra:
   # Prune off on infra by default: it manages operators and a DataScienceCluster,
