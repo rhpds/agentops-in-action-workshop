@@ -4,8 +4,10 @@ deployer:
 lab:
   # Shared namespace for cluster-wide lab infrastructure
   sharedNamespace: agentops-shared
-  # ArgoCD project that owns all lab Applications
-  argocdProject: agentops-in-action
+  # NOTE: the AppProject that owns every lab Application is NOT defined here.
+  # It lives in the `argocd` chart, which runs under project `default` and so
+  # can create it before the Applications that reference it. Defining it here
+  # created a deadlock — see argocd/templates/argocd-project.yaml.
 
 # Maximum concurrent participants (from spec: max_concurrent_users: 30)
 maxUsers: 30
