@@ -4,10 +4,14 @@ deployer:
 lab:
   # Shared namespace for cluster-wide lab infrastructure
   sharedNamespace: agentops-shared
-  # NOTE: the AppProject that owns every lab Application is NOT defined here.
-  # It lives in the `argocd` chart, which runs under project `default` and so
-  # can create it before the Applications that reference it. Defining it here
-  # created a deadlock — see argocd/templates/argocd-project.yaml.
+  # ArgoCD project owning the per-participant Applications that bootstrap-tenant
+  # creates. Defined in templates/argocd-project.yaml — see the note there on
+  # why it is safe for this chart to own it.
+  argocdProject: agentops-in-action
+  argocdNamespace: openshift-gitops
+  # Per-participant namespace is <username>-<namespaceSuffix>. Must match
+  # namespaceSuffix in bootstrap-tenant, tenant-platform and tenant-policy.
+  namespaceSuffix: agentops
 
 # Maximum concurrent participants (from spec: max_concurrent_users: 30)
 maxUsers: 30

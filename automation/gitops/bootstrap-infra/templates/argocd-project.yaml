@@ -1,0 +1,48 @@
+{{/*
+The AppProject every per-participant Application belongs to.
+
+It belongs here, in the chart the CLUSTER catalog item bootstraps, and it is
+safe here for a reason worth stating: the Application that RHDP provisions for
+this chart runs under `project: default`, so it is not itself constrained by
+this project and there is no chicken-and-egg. An earlier revision moved this
+into a separate app-of-apps chart to escape exactly that cycle — the cycle only
+existed because that layer introduced an Application declaring
+`project: agentops-in-action` to deploy the chart that defined the project.
+With the layer gone, so is the problem.
+
+The per-participant Applications created by bootstrap-tenant DO run under this
+project, which is what makes its destinations and whitelists load-bearing.
+*/}}
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: {{ .Values.lab.argocdProject }}
+  namespace: {{ .Values.lab.argocdNamespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"
+spec:
+  description: AgentOps in Action lab — shared infra and per-participant Applications
+  sourceRepos:
+    - '*'
+  destinations:
+    - namespace: {{ .Values.lab.sharedNamespace }}
+      server: https://kubernetes.default.svc
+    # Per-participant namespaces, one per attendee.
+    - namespace: '*-{{ .Values.lab.namespaceSuffix }}'
+      server: https://kubernetes.default.svc
+    # bootstrap-tenant creates the two per-participant Applications here.
+    - namespace: {{ .Values.lab.argocdNamespace }}
+      server: https://kubernetes.default.svc
+  clusterResourceWhitelist:
+    - group: ''
+      kind: Namespace
+    # Bound per attendee by bootstrap-tenant. Without it every tenant
+    # ClusterRoleBinding points at a role that does not exist and attendees
+    # cannot read their own Sandbox — the first hands-on step of module 4.
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRole
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRoleBinding
+  namespaceResourceWhitelist:
+    - group: '*'
+      kind: '*'

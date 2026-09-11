@@ -1,0 +1,101 @@
+{{/*
+The two per-participant Applications.
+
+This chart is bootstrapped once per attendee by the TENANT catalog item, so
+there is no ApplicationSet and no fixed 30-user list anywhere — RHDP creates
+exactly as many tenants as it provisions. An earlier revision drove these from
+ApplicationSets in a separate app-of-apps chart, which both duplicated what the
+tenant catalog item already does and hard-coded maxUsers: 30.
+
+The two have deliberately opposite sync behaviour, and that is the single most
+consequential thing in this repository:
+
+  platform  auto-sync, selfHeal ON,  prune ON   — participants never edit it
+  policy    MANUAL,    selfHeal OFF, prune OFF  — participants edit only this
+
+Self-heal on the platform Application is a safety net: an attendee who deletes
+the agent Deployment gets it back. Self-heal on the policy Application would be
+a hazard — it would revert their OpenShell or gateway policy within seconds of
+them making it, silently and with variable timing, and read as a broken product
+rather than a misconfigured lab.
+*/}}
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{ include "tenant.username" . }}-platform
+  namespace: {{ .Values.gitops.argocdNamespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: {{ .Values.gitops.argocdProject }}
+  source:
+    repoURL: {{ .Values.gitops.repoURL }}
+    targetRevision: {{ .Values.gitops.targetRevision }}
+    path: automation/gitops/tenant-platform
+    helm:
+      releaseName: {{ include "tenant.username" . }}-platform
+      parameters:
+        - name: username
+          value: {{ include "tenant.username" . | quote }}
+        - name: namespaceSuffix
+          value: {{ .Values.namespaceSuffix | quote }}
+        - name: image.namespace
+          value: {{ .Values.platform.imageNamespace | quote }}
+        - name: ui.mlflowUrl
+          value: {{ .Values.platform.mlflowUrl | quote }}
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: {{ include "tenant.namespace" . }}
+  syncPolicy:
+    # Nothing here is something an attendee is told to touch, so restoring it
+    # can only help them.
+    automated:
+      selfHeal: true
+      prune: true
+    syncOptions:
+      # bootstrap-tenant creates the namespace, at an earlier sync wave.
+      - CreateNamespace=false
+    retry:
+      limit: 5
+      backoff: { duration: 15s, factor: 2, maxDuration: 3m }
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{ include "tenant.username" . }}-policy
+  namespace: {{ .Values.gitops.argocdNamespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "20"
+    rhdp.redhat.com/lab-note: >-
+      Participant-editable. Syncing this Application with --prune is how the
+      lab reset restores the baseline policy.
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: {{ .Values.gitops.argocdProject }}
+  source:
+    repoURL: {{ .Values.gitops.repoURL }}
+    targetRevision: {{ .Values.gitops.targetRevision }}
+    path: automation/gitops/tenant-policy
+    helm:
+      releaseName: {{ include "tenant.username" . }}-policy
+      parameters:
+        - name: username
+          value: {{ include "tenant.username" . | quote }}
+        - name: namespaceSuffix
+          value: {{ .Values.namespaceSuffix | quote }}
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: {{ include "tenant.namespace" . }}
+  syncPolicy:
+    # NO automated block. Manual sync only, no self-heal, no prune.
+    #
+    # Do not "fix" this by adding automation. It would revert participant work
+    # mid-exercise and delete the point of modules 4 and 5. An OutOfSync status
+    # here is the signal that a participant has started working, and
+    # `argocd app diff` on it at the end prints exactly the infrastructure
+    # changes that hardened their agent.
+    syncOptions:
+      - CreateNamespace=false

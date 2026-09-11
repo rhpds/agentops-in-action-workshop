@@ -1,11 +1,48 @@
+# ---------------------------------------------------------------------------
+# Participant identity
+#
+# The tenant catalog item supplies this as `tenant.username` via
+# ocp4_workload_gitops_bootstrap_helm_values. `username` is the legacy spelling
+# and is kept only as a fallback for manual `helm install` runs — see
+# templates/_helpers.tpl.
+# ---------------------------------------------------------------------------
+tenant:
+  username: ""
+username: ""
+
+# Per-participant namespace is <username>-<namespaceSuffix>. Must match
+# namespaceSuffix in bootstrap-infra, tenant-platform and tenant-policy.
+namespaceSuffix: agentops
+
 deployer:
   domain: apps.example.com
 
-# Participant username — overridden per-user by the ApplicationSet generator
-username: user1
+# ---------------------------------------------------------------------------
+# Where the two per-participant Applications point.
+#
+# repoURL and targetRevision are supplied by the catalog item under `gitops`,
+# which is why that key name is used verbatim. Pin targetRevision to a per-event
+# tag before a delivery: on a moving branch, a merge to main reaches a live lab
+# mid-exercise.
+# ---------------------------------------------------------------------------
+gitops:
+  repoURL: https://github.com/rhpds/agentops-in-action-workshop.git
+  targetRevision: main
+  argocdNamespace: openshift-gitops
+  # Created by bootstrap-infra, which the cluster catalog item bootstraps.
+  argocdProject: agentops-in-action
 
+# Values forwarded to tenant-platform.
+platform:
+  # Namespace holding the ImageStreams the workloads pull from.
+  imageNamespace: wp-dev-phayes
+  # Shared MLflow URL surfaced in the operator console. Empty renders no link.
+  mlflowUrl: ""
+
+# ---------------------------------------------------------------------------
 # Per-tenant resource limits
-# Lab workload: one agent pod + sidecar + generated-code sandbox; 30 concurrent users on 8×32vCPU workers
+# Lab workload: one agent pod + sidecar + generated-code sandbox
+# ---------------------------------------------------------------------------
 quota:
   requests:
     cpu: "4"
