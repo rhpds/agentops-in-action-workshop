@@ -45,3 +45,31 @@ entries:
     type: handoff
     content: >-
       Two branches need attention. align-ci-paths holds the chart restructure aligning to the CI team's fixed paths and is committed but not pushed - it should not merge until the question in 2026-09-11-003 is answered. feat/hermes-harness exists only on this laptop with no remote and no backup: two commits from 9 September adding Hermes as an alternative agent harness, branched from 4ad1cac, so it predates every GitOps fix and will need a rebase.
+  - id: "2026-09-11-007"
+    timestamp: "2026-09-11T19:20:00Z"
+    author: "deewhyweb"
+    status: open
+    type: decision
+    content: >-
+      ArgoCD sync policy is a deliberate contract, not boilerplate - do not 'tidy' it. The per-participant platform Application runs auto-sync with selfHeal and prune ON, because nothing in it is something an attendee is told to touch, so restoring a deleted agent Deployment can only help them. The policy Application is MANUAL with selfHeal and prune OFF, because self-heal there would revert an attendee's OpenShell or MCP Gateway policy within seconds of them making it, silently and with variable timing, and would read as a broken product rather than a misconfigured lab. That single setting is what makes modules 4 and 5 possible: an OutOfSync status on the policy Application is the signal a participant has started working, and argocd app diff on it prints exactly the infrastructure changes that hardened their agent. Prune stays OFF on infra and namespace Applications too - pruning a namespace takes every workload in it, and pruning infra means an operator or a DataScienceCluster. Originally established in f6ccbf5; the Applications moved from cluster-side ApplicationSets into bootstrap-tenant during the align-ci-paths restructure, and the policies were carried across unchanged and re-verified by render.
+  - id: "2026-09-11-008"
+    timestamp: "2026-09-11T19:20:00Z"
+    author: "deewhyweb"
+    status: open
+    type: note
+    content: >-
+      The app-of-apps chart at automation/gitops/argocd was added in f6ccbf5 to escape the kustomize-envvar plugin, then deleted again in the align-ci-paths restructure - so nobody should re-add it without reading this first. It was the right diagnosis and the wrong remedy: the plugin problem is real but lives in AgnosticV (see 2026-09-11-002), and routing around it in the repo meant a second bootstrap path the catalog item never uses. It also introduced an Application declaring project agentops-in-action in order to deploy the chart that DEFINED that project, which deadlocked ArgoCD with 'Application referencing project agentops-in-action which does not exist'. With the layer gone the cycle is gone too, because both provisioned Applications run under project default and bootstrap-infra can simply own the AppProject.
+  - id: "2026-09-11-009"
+    timestamp: "2026-09-11T19:20:00Z"
+    author: "deewhyweb"
+    status: open
+    type: action
+    content: >-
+      Pin targetRevision to a per-event tag before any delivery. It currently reads main in bootstrap-tenant/values.yaml under gitops.targetRevision, and the catalog item passes ocp4_workload_gitops_bootstrap_repo_revision: main for both cluster and tenant items - so a merge to main reaches a live lab mid-exercise. Both the chart value and the AgnosticV value need changing together, in common.yaml and dev.yaml.
+  - id: "2026-09-11-010"
+    timestamp: "2026-09-11T19:20:00Z"
+    author: "deewhyweb"
+    status: open
+    type: action
+    content: >-
+      Operator InstallPlan approval is manual and nothing automates it. Every Subscription in bootstrap-infra pins an exact startingCSV with installPlanApproval Manual, which is the right call for a lab built on Tech Preview components whose APIs shift between builds - an unattended upgrade between a dry run and delivery day would silently re-base the policy CRs the whole exercise rests on. But it means a human must run oc get installplan -A and patch each one approved before RHOAI or Agent Sandbox install at all, and until then the DataScienceCluster sits Progressing by design rather than by fault. qa-automation holds only e2e.yml and healthcheck.yml, so this belongs in a short bootstrap playbook before an event.
