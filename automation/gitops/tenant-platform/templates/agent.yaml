@@ -1,0 +1,97 @@
+{{- $ns := printf "%s-%s" .Values.username .Values.namespaceSuffix -}}
+{{/*
+The maintenance assistant.
+
+Two things about this workload are the whole point of the lab:
+
+  * It makes no authorization decisions. It forwards the caller's token to the
+    MCP servers untouched and reports what it was refused. Enforcement belongs
+    to MCP Gateway.
+  * It is designed to be dropped into the OpenShell governed execution
+    environment in module 4 without modification — plain, unprivileged, config
+    via environment, small process tree, no sidecars needing host access.
+
+The LiteLLM key arrives from a Secret via envFrom and is never a chart value.
+Base URL and model are plain env, because they are configuration rather than
+credentials and you want to see them in a diff.
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: waterplant-agent
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: waterplant-agent
+    app.kubernetes.io/part-of: water-plant
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  replicas: {{ .Values.agent.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: waterplant-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: waterplant-agent
+        app.kubernetes.io/part-of: water-plant
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: agent
+          image: {{ printf "%s/%s/%s:%s" .Values.image.registry .Values.image.namespace .Values.image.agent.repository .Values.image.agent.tag }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            # Supplies LITELLM_VIRTUAL_KEY. Created out of band so the key never
+            # passes through git, a chart value, or a shell history.
+            - secretRef:
+                name: {{ .Values.agent.credentialsSecret }}
+          env:
+            - name: NAMESPACE
+              value: {{ $ns }}
+            - name: LITELLM_API_BASE_URL
+              value: {{ .Values.agent.litellm.baseUrl | quote }}
+            - name: LITELLM_MODEL
+              value: {{ .Values.agent.litellm.model | quote }}
+            - name: AGENT_TEMPERATURE
+              value: {{ .Values.agent.temperature | quote }}
+            - name: AGENT_MAX_STEPS
+              value: {{ .Values.agent.maxSteps | quote }}
+            - name: AGENT_RATE_LIMIT_RETRIES
+              value: {{ .Values.agent.rateLimitRetries | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.agent.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: waterplant-agent
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: waterplant-agent
+    app.kubernetes.io/part-of: water-plant
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  selector:
+    app.kubernetes.io/name: waterplant-agent
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

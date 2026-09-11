@@ -9,3 +9,119 @@ lab:
 
 # Maximum concurrent participants (from spec: max_concurrent_users: 30)
 maxUsers: 30
+
+# ---------------------------------------------------------------------------
+# Operators
+#
+# Every version below is PINNED and installPlanApproval is Manual — nothing
+# upgrades on its own. See templates/operators.yaml for why, and for how to
+# approve the generated InstallPlans.
+#
+# Versions verified against the cluster's catalog on OCP 4.22.11. Re-verify
+# before each event build: a catalog refresh can retire a CSV, and a pinned
+# startingCSV that no longer exists leaves the Subscription stuck.
+# ---------------------------------------------------------------------------
+operators:
+  rhoai:
+    enabled: true
+    package: rhods-operator
+    namespace: redhat-ods-operator
+    channel: stable-3.5
+    csv: rhods-operator.3.5.0
+    source: redhat-operators
+
+  agentSandbox:
+    enabled: true
+    package: agent-sandbox-operator
+    namespace: agent-sandbox-system
+    channel: preview-0.9
+    csv: agent-sandbox-operator.v0.9.0
+    source: redhat-operators
+
+  # Authorization enforcement at the tool boundary. Carried as the fallback for
+  # MCP Gateway, whose maturity in the event build is still unconfirmed: if the
+  # gateway cannot enforce per-tool and per-parameter policy, these enforce it
+  # directly in front of the MCP servers instead — same lesson, less product
+  # narrative. Enable if and when that call is made.
+  authorino:
+    enabled: false
+    package: authorino-operator
+    namespace: agentops-authorino
+    channel: stable
+    csv: authorino-operator.v0.16.0
+    source: community-operators
+
+  kuadrant:
+    enabled: false
+    package: kuadrant-operator
+    namespace: agentops-kuadrant
+    channel: stable
+    csv: kuadrant-operator.v0.11.1
+    source: community-operators
+
+# NOTE: sandboxed-containers-operator (Kata) is deliberately NOT installed.
+# The Agent Sandbox deployment is not on bare metal and this cluster runs on
+# CNV, so Kata is off the critical path. Agent Sandbox still provides the
+# lifecycle we need — SandboxTemplate, SandboxClaim, warm pools — on the
+# standard runtime, hardened with restricted-v2, seccomp RuntimeDefault and
+# SELinux. The OSC pairing exists to supply the Kata runtime we are not using,
+# so leaving it out removes an operator rather than a capability.
+
+# ---------------------------------------------------------------------------
+# RHOAI DataScienceCluster
+# ---------------------------------------------------------------------------
+datascience:
+  enabled: true
+  applicationsNamespace: redhat-ods-applications
+  # Component names are the DataScienceCluster **v2** set, read from the CRD
+  # schema on this cluster. v2 is the storage version in RHOAI 3.5 and its
+  # component list differs from v1 — `datasciencepipelines` and `codeflare` no
+  # longer exist, and several capabilities this lab needs appear as first-class
+  # components for the first time.
+  components:
+    # --- The lab's core dependencies ---
+    aigateway: Managed             # Model Gateway — the governed inference endpoint (D2)
+    mcplifecycleoperator: Managed  # MCP Gateway / MCP server lifecycle (D3, D4, Phase 4)
+    mlflowoperator: Managed        # MLflow tracing — the observability spine of the lab
+    trustyai: Managed              # Guardrails Orchestrator and Garak integration
+    kserve: Managed                # model serving, underpins aigateway
+    dashboard: Managed             # RHOAI console
+
+    # --- Deliberately off ---
+    # Each of these costs footprint on a shared 30-tenant cluster and none is on
+    # the lab's critical path.
+    llamastackoperator: Removed    # D1 selected LangGraph as the agent framework
+    ogx: Removed                   # Open Responses — revisit only if OGX earns a place
+    workbenches: Removed           # attendees get a browser and a toolbox pod, not notebooks
+    modelregistry: Removed
+    aipipelines: Removed
+    kueue: Removed
+    ray: Removed
+    trainer: Removed
+    trainingoperator: Removed
+    sparkoperator: Removed
+    feastoperator: Removed
+
+# ---------------------------------------------------------------------------
+# Shared lab services — one instance for the whole event
+#
+# These carry the only data in the lab that must survive a pod restart: the
+# baseline scorecard, captured in module 2 and compared against in module 6.
+# See templates/shared-services.yaml.
+# ---------------------------------------------------------------------------
+sharedServices:
+  mlflow:
+    enabled: true
+    # NOTE: the resource name is fixed at "mlflow" by the operator's webhook —
+    # it is a per-namespace singleton, so there is no name to configure here.
+    replicas: 1
+    backendStoreUri: "sqlite:////mlflow/mlflow.db"
+    artifactsDestination: "file:///mlflow/artifacts"
+    storageSize: 20Gi
+    # Empty means the cluster default (ODF Ceph RBD here).
+    storageClass: ""
+
+  evalhub:
+    enabled: true
+    name: agentops-evalhub
+    databaseType: sqlite

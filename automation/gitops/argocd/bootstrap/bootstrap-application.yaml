@@ -1,0 +1,36 @@
+# App-of-apps entry point.
+#
+# RHDP provisions an Application named `bootstrap` pointing at this repository.
+# As provisioned it targeted automation/gitops/bootstrap-infra through a config
+# management plugin named "kustomize-envvar", which is not installed on the
+# cluster — so it could not render manifests at all and sat in SYNC STATUS
+# Unknown while reporting Healthy, because it was healthy over zero resources.
+#
+# This replaces it with plain Helm pointed at automation/gitops/argocd, which
+# defines the infra Application and the two per-participant ApplicationSets.
+# No plugin dependency.
+#
+# Apply with:
+#   oc apply -f automation/gitops/argocd/bootstrap/bootstrap-application.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: bootstrap
+  namespace: openshift-gitops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/rhpds/agentops-in-action-workshop.git
+    targetRevision: main
+    path: automation/gitops/argocd
+    helm:
+      releaseName: agentops-bootstrap
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: openshift-gitops
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: true
+    syncOptions:
+      - RespectIgnoreDifferences=true

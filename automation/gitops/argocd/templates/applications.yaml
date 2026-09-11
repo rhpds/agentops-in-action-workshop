@@ -1,0 +1,195 @@
+{{/*
+The Applications that make the lab reconciled rather than merely deployed.
+
+The split is the whole point, and the two ApplicationSets below have
+deliberately opposite sync behaviour:
+
+  tenant-platform  auto-sync, selfHeal ON,  prune ON   — participants never edit it
+  tenant-policy    MANUAL,    selfHeal OFF, prune OFF  — participants edit only this
+
+Self-heal on the platform Application is a safety net: a participant who
+deletes the agent Deployment gets it back. Self-heal on the policy Application
+would be a hazard: it would revert their OpenShell or gateway policy within
+seconds of them making it, silently and with variable timing, and read as a
+broken product rather than a misconfigured lab. That single setting is the most
+consequential line in this repository.
+
+targetRevision is pinned to a value, not left on a moving branch. During an
+event it should point at a tag, so a merge to main cannot reach a live lab.
+*/}}
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: agentops-infra
+  namespace: {{ .Values.argocd.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: {{ .Values.lab.argocdProject }}
+  source:
+    repoURL: {{ .Values.repo.url }}
+    targetRevision: {{ .Values.repo.targetRevision }}
+    path: automation/gitops/bootstrap-infra
+    helm:
+      releaseName: agentops-infra
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: {{ .Values.lab.sharedNamespace }}
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: {{ .Values.infra.prune }}
+    syncOptions:
+      # The DataScienceCluster CRD does not exist until the RHOAI operator's
+      # InstallPlan is approved, which is a manual step by design. Without this
+      # the very first sync fails outright on a dry run against a missing CRD.
+      - SkipDryRunOnMissingResource=true
+      - CreateNamespace=false
+      - RespectIgnoreDifferences=true
+    retry:
+      limit: 5
+      backoff: { duration: 20s, factor: 2, maxDuration: 5m }
+---
+{{/*
+Namespaces, quotas and RBAC, one per participant.
+
+Separate from tenant-platform and in an earlier sync wave because the platform
+Application deploys *into* these namespaces with CreateNamespace=false. Without
+this, every tenant Application fails on a missing namespace — which is exactly
+what a dry run caught.
+*/}}
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: agentops-tenant-namespace
+  namespace: {{ .Values.argocd.namespace }}
+spec:
+  generators:
+    - list:
+        elements:
+{{- range $i := until (int .Values.lab.maxUsers) }}
+          - username: {{ printf "%s%d" $.Values.lab.usernamePrefix (add1 $i) }}
+{{- end }}
+  template:
+    metadata:
+      name: '{{ `{{username}}` }}-namespace'
+      annotations:
+        argocd.argoproj.io/sync-wave: "-1"
+    spec:
+      project: {{ .Values.lab.argocdProject }}
+      source:
+        repoURL: {{ .Values.repo.url }}
+        targetRevision: {{ .Values.repo.targetRevision }}
+        path: automation/gitops/bootstrap-tenant
+        helm:
+          releaseName: '{{ `{{username}}` }}-namespace'
+          parameters:
+            - name: username
+              value: '{{ `{{username}}` }}'
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: '{{ `{{username}}` }}-agentops'
+      syncPolicy:
+        automated:
+          selfHeal: true
+          # Prune off: pruning a namespace takes every workload in it with the
+          # namespace, which is a bad way to find out a generator was misedited.
+          prune: false
+        syncOptions:
+          - CreateNamespace=true
+        retry:
+          limit: 5
+          backoff: { duration: 15s, factor: 2, maxDuration: 3m }
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: agentops-tenant-platform
+  namespace: {{ .Values.argocd.namespace }}
+spec:
+  generators:
+    - list:
+        elements:
+{{- range $i := until (int .Values.lab.maxUsers) }}
+          - username: {{ printf "%s%d" $.Values.lab.usernamePrefix (add1 $i) }}
+{{- end }}
+  template:
+    metadata:
+      name: '{{ `{{username}}` }}-platform'
+      annotations:
+        argocd.argoproj.io/sync-wave: "0"
+    spec:
+      project: {{ .Values.lab.argocdProject }}
+      source:
+        repoURL: {{ .Values.repo.url }}
+        targetRevision: {{ .Values.repo.targetRevision }}
+        path: automation/gitops/tenant-platform
+        helm:
+          releaseName: '{{ `{{username}}` }}-platform'
+          parameters:
+            - name: username
+              value: '{{ `{{username}}` }}'
+            - name: image.namespace
+              value: {{ .Values.images.namespace }}
+            - name: ui.mlflowUrl
+              value: {{ .Values.mlflowUrl | quote }}
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: '{{ `{{username}}` }}-agentops'
+      syncPolicy:
+        # Self-heal is desirable here: nothing in this Application is something
+        # a participant is told to touch, so restoring it can only help them.
+        automated:
+          selfHeal: true
+          prune: true
+        syncOptions:
+          - CreateNamespace=false
+        retry:
+          limit: 5
+          backoff: { duration: 15s, factor: 2, maxDuration: 3m }
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: agentops-tenant-policy
+  namespace: {{ .Values.argocd.namespace }}
+spec:
+  generators:
+    - list:
+        elements:
+{{- range $i := until (int .Values.lab.maxUsers) }}
+          - username: {{ printf "%s%d" $.Values.lab.usernamePrefix (add1 $i) }}
+{{- end }}
+  template:
+    metadata:
+      name: '{{ `{{username}}` }}-policy'
+      annotations:
+        rhdp.redhat.com/lab-note: >-
+          Participant-editable. Syncing this Application with --prune is how the
+          lab reset restores the baseline policy.
+    spec:
+      project: {{ .Values.lab.argocdProject }}
+      source:
+        repoURL: {{ .Values.repo.url }}
+        targetRevision: {{ .Values.repo.targetRevision }}
+        path: automation/gitops/tenant-policy
+        helm:
+          releaseName: '{{ `{{username}}` }}-policy'
+          parameters:
+            - name: username
+              value: '{{ `{{username}}` }}'
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: '{{ `{{username}}` }}-agentops'
+      syncPolicy:
+        # NO automated block. Manual sync only, no self-heal, no prune.
+        #
+        # Do not "fix" this by adding automation. It would revert participant
+        # work mid-exercise and delete the point of modules 4 and 5. An
+        # OutOfSync status on this Application is the signal that a participant
+        # has started working, and `argocd app diff` on it at the end prints
+        # exactly the infrastructure changes that hardened their agent.
+        syncOptions:
+          - CreateNamespace=false
