@@ -1,14 +1,21 @@
-# App-of-apps entry point.
+# Manual bootstrap — a fallback for clusters provisioned before the kustomize
+# entry point existed, and for testing outside RHDP.
 #
-# RHDP provisions an Application named `bootstrap` pointing at this repository.
-# As provisioned it targeted automation/gitops/bootstrap-infra through a config
-# management plugin named "kustomize-envvar", which is not installed on the
-# cluster — so it could not render manifests at all and sat in SYNC STATUS
-# Unknown while reporting Healthy, because it was healthy over zero resources.
+# You normally do NOT need this. The RHDP catalog item provisions an Application
+# named `bootstrap` pointing at automation/gitops/bootstrap-infra through the
+# `kustomize-envvar` plugin, and that path now carries a kustomization.yaml, so
+# provisioning works on its own.
 #
-# This replaces it with plain Helm pointed at automation/gitops/argocd, which
-# defines the infra Application and the two per-participant ApplicationSets.
-# No plugin dependency.
+# What went wrong before: the plugin runs `kustomize build --enable-helm .`, the
+# path held a Helm chart and no kustomization.yaml, so the build produced
+# nothing. The Application sat in SYNC STATUS Unknown while reporting Healthy —
+# healthy over zero resources.
+#
+# This file targets the same path and deliberately specifies no `helm:` and no
+# `plugin:` block, so ArgoCD auto-detects kustomization.yaml and renders it the
+# same way the provisioned Application does. Keep it that way: adding a `helm:`
+# block here would render the infra chart directly and skip the app-of-apps,
+# which is the failure this whole chain exists to avoid.
 #
 # Apply with:
 #   oc apply -f automation/gitops/argocd/bootstrap/bootstrap-application.yaml
@@ -22,9 +29,7 @@ spec:
   source:
     repoURL: https://github.com/rhpds/agentops-in-action-workshop.git
     targetRevision: main
-    path: automation/gitops/argocd
-    helm:
-      releaseName: agentops-bootstrap
+    path: automation/gitops/bootstrap-infra
   destination:
     server: https://kubernetes.default.svc
     namespace: openshift-gitops

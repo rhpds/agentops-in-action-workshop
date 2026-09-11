@@ -1,0 +1,30 @@
+# Kustomize entry point — NOT part of the Helm chart in this directory.
+#
+# This directory is deliberately read by two different tools, each ignoring the
+# other's files:
+#
+#   kustomize  reads kustomization.yaml + app-of-apps.yaml   (this entry point)
+#   helm       reads Chart.yaml + values.yaml + templates/   (the infra chart)
+#
+# That is not an accident. The RHDP catalog item pins
+# `ocp4_workload_gitops_bootstrap_repo_path: automation/gitops/bootstrap-infra`
+# and does NOT set `ocp4_workload_gitops_bootstrap_helm_values`, so the
+# ocp4_workload_gitops_bootstrap role falls through to its default and renders
+# the provisioned `bootstrap` Application with:
+#
+#     plugin:
+#       name: kustomize-envvar
+#
+# That plugin runs `kustomize build --enable-helm .` in this path. With no
+# kustomization.yaml here it rendered nothing at all — which is why the lab
+# sat in SYNC STATUS Unknown while reporting Healthy, healthy over zero
+# resources. Adding this file is what makes the catalog item work without
+# changing anything in AgnosticV.
+#
+# Keep this list free of `helmCharts`: an inflation here would make the plugin
+# require Helm v3 inside the repo-server, and the chart in this directory is
+# rendered by ArgoCD natively instead (see app-of-apps.yaml).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - app-of-apps.yaml
