@@ -12,12 +12,35 @@ rules:
   - apiGroups: ['']
     resources: [pods, services, configmaps, endpoints]
     verbs: [get, list, watch]
-    resourceNames: []
-  # View OpenShell / Agent Sandbox policies (read-only from the shared namespace)
-  - apiGroups: [openshift.io, sandbox.openshift.io]
+
+  # Agent Sandbox lifecycle. Verified against the CRDs that
+  # agent-sandbox-operator.v0.9.0 actually installs — note these sit on TWO
+  # API groups, which is easy to get wrong:
+  #
+  #   agents.x-k8s.io             -> Sandbox
+  #   extensions.agents.x-k8s.io  -> SandboxClaim, SandboxTemplate, SandboxWarmPool
+  #
+  # An earlier revision guessed at sandbox.openshift.io, which matches no CRD
+  # on this cluster and so granted participants nothing — they could not have
+  # read their own sandbox, which is the first hands-on step of module 4.
+  - apiGroups: [agents.x-k8s.io]
+    resources: [sandboxes]
+    verbs: [get, list, watch]
+  - apiGroups: [extensions.agents.x-k8s.io]
+    resources: [sandboxclaims, sandboxtemplates, sandboxwarmpools]
+    verbs: [get, list, watch]
+
+  # RHOAI: model serving and the data science project view
+  - apiGroups:
+      - datasciencecluster.opendatahub.io
+      - dscinitialization.opendatahub.io
+      - serving.kserve.io
     resources: ['*']
     verbs: [get, list, watch]
-  # View RHOAI data science project resources
-  - apiGroups: [datasciencecluster.opendatahub.io, serving.kserve.io]
+
+  # Read-only view of the cluster-scoped authorization surfaces, so a
+  # participant can see what enforcement exists. Editing policy in their own
+  # namespace is granted by the tenant chart, not here.
+  - apiGroups: [kuadrant.io, authorino.kuadrant.io]
     resources: ['*']
     verbs: [get, list, watch]

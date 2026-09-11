@@ -1,0 +1,11 @@
+apiVersion: v2
+name: tenant-platform
+description: |
+  Per-participant Water Plant workloads: the simulated plant, the MCP servers,
+  the agent and the UI. ArgoCD manages this Application with auto-sync and
+  self-heal ON — nothing in here is something a participant is told to edit.
+  Everything a participant DOES edit lives in the tenant-policy chart, which
+  syncs manually with self-heal off.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
