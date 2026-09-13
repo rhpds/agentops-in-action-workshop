@@ -13,7 +13,7 @@ entries:
   - id: "2026-09-11-002"
     timestamp: "2026-09-11T19:00:17Z"
     author: "deewhyweb"
-    status: open
+    status: resolved
     type: action
     content: >-
       BLOCKER - ask the RHDP CI team to add ocp4_workload_gitops_bootstrap_helm_values to rh1-2027/lb1285-ai-agent-sec-cnv-cluster, in BOTH common.yaml and dev.yaml since dev re-declares the gitops_bootstrap block. Any non-empty value flips the role to native Helm and drops the plugin reference; the repo paths stay exactly as the CI team specified. Precedent is internal and strong: agd_v2/rhoai-migration drives the same role against an identically shaped bootstrap-infra Helm chart and works purely because it sets helm_values. summit-2026/lb2144-agentops-ocp-cnv (prod), summit-2026/lb1559 and our own lb1285 tenant item all set it too - the lb1285 cluster item is the only one of the four that sets neither helm_values nor the kustomize plugin. Nothing in this repository can work around it, because ArgoCD never fetches the repo at all.
@@ -69,7 +69,28 @@ entries:
   - id: "2026-09-11-010"
     timestamp: "2026-09-11T19:20:00Z"
     author: "deewhyweb"
-    status: open
+    status: resolved
     type: action
     content: >-
       Operator InstallPlan approval is manual and nothing automates it. Every Subscription in bootstrap-infra pins an exact startingCSV with installPlanApproval Manual, which is the right call for a lab built on Tech Preview components whose APIs shift between builds - an unattended upgrade between a dry run and delivery day would silently re-base the policy CRs the whole exercise rests on. But it means a human must run oc get installplan -A and patch each one approved before RHOAI or Agent Sandbox install at all, and until then the DataScienceCluster sits Progressing by design rather than by fault. qa-automation holds only e2e.yml and healthcheck.yml, so this belongs in a short bootstrap playbook before an event.
+  - id: "2026-09-13-001"
+    timestamp: "2026-09-13T15:45:00Z"
+    author: "deewhyweb"
+    status: resolved
+    type: note
+    content: >-
+      The AgnosticV helm_values fix landed and is confirmed working end to end. A cluster provisioned from the catalog item (cluster-mc86p) came up with the bootstrap Application rendering via native Helm instead of the missing kustomize-envvar plugin, and reached Synced/Healthy across all 12 resources with no repo change and no manual patching beyond the InstallPlan approvals below. Resolves the blocker recorded in 2026-09-11-002. One cosmetic leftover: the helm_values block carries overlay.all, overlay.minimal and repoRevision, which are keys from the rhoai-migration chart that was used as the precedent - bootstrap-infra does not read them, so they are inert, but worth removing so nobody assumes they do something.
+  - id: "2026-09-13-002"
+    timestamp: "2026-09-13T15:45:00Z"
+    author: "deewhyweb"
+    status: open
+    type: action
+    content: >-
+      BLOCKER for a working lab - nothing builds the six workload container images. tenant-platform expects plant-api, waterplant-ui, waterplant-agent, mcp-telemetry, mcp-maintenance and mcp-control from ImageStreams in the wp-dev-phayes namespace, and values.yaml claims they are 'Built on-cluster by BuildConfig', but there is no BuildConfig or ImageStream anywhere in the repository - the only matches are those two comments. Confirmed on cluster-2xbzc by applying bootstrap-tenant by hand: plant-api went to ImagePullBackOff and oc get is -n wp-dev-phayes returned nothing. wp-dev-phayes is also a personal dev namespace that will not survive an event. Recommendation is to build and push to quay.io and reference by tag or digest, which removes the on-cluster build entirely, keeps provisioning deterministic at 30x concurrency, and matches what non_ga_access_plan already tells reviewers. Needs a GitHub Actions workflow in this repo plus an image values change. This is now the last thing standing between a provisioned cluster and a lab that actually runs.
+  - id: "2026-09-13-003"
+    timestamp: "2026-09-13T15:45:00Z"
+    author: "deewhyweb"
+    status: resolved
+    type: decision
+    content: >-
+      Operator InstallPlan approval is now automated inside bootstrap-infra rather than by flipping installPlanApproval to Automatic. A Sync-hook Job approves only InstallPlans whose clusterServiceVersionNames matches the exact pinned startingCSV, so the first install is unattended while a later catalog-refresh InstallPlan carries a different CSV, does not match, and is left alone - the pin keeps its meaning. The Job shares sync wave -2 with the Subscriptions and that is load-bearing: ArgoCD waits for every resource in a wave to be healthy before advancing, a Subscription is not healthy until its InstallPlan is approved, so an approver in any later wave can never run, and one in an earlier wave would wait for InstallPlans that do not exist yet. Verified live on cluster-mc86p: the Job matched both pinned CSVs and exited 0 as an idempotent no-op against already-approved plans. Resolves 2026-09-11-010.

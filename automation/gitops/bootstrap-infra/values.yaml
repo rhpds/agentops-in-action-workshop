@@ -74,6 +74,26 @@ operators:
 # so leaving it out removes an operator rather than a capability.
 
 # ---------------------------------------------------------------------------
+# InstallPlan approver
+#
+# Approves ONLY the InstallPlans matching the pinned startingCSVs above, so the
+# initial install is unattended while upgrades remain manual. See
+# templates/installplan-approver.yaml for why this is not just
+# installPlanApproval: Automatic, and why it shares sync wave -2.
+# ---------------------------------------------------------------------------
+installPlanApprover:
+  enabled: true
+  # Needs `oc` only. ose-cli is already pullable on any RHDP cluster.
+  image: registry.redhat.io/openshift4/ose-cli:latest
+  # Runs in an operator namespace (created at wave -4) rather than the shared
+  # namespace, which is itself only created at wave -2 and would race the Job.
+  namespace: redhat-ods-operator
+  # Bounds the wait for an InstallPlan to appear. Also the Job's
+  # activeDeadlineSeconds; the script stops 30s earlier so it fails with a
+  # useful message rather than being killed mid-poll.
+  timeoutSeconds: 600
+
+# ---------------------------------------------------------------------------
 # RHOAI DataScienceCluster
 # ---------------------------------------------------------------------------
 datascience:
