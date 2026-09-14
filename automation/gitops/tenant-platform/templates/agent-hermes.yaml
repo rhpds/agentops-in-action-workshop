@@ -1,5 +1,8 @@
 {{- if eq .Values.agent.harness "hermes" }}
 {{- $ns := printf "%s-%s" .Values.username .Values.namespaceSuffix -}}
+{{- $viaGateway := .Values.mcpGateway.enabled -}}
+{{- $gwSvc := printf "%s-%s.%s.svc.cluster.local" .Values.mcpGateway.gatewayName .Values.mcpGateway.gatewayClassName $ns -}}
+{{- $gwUrl := printf "http://%s:8080/mcp" $gwSvc -}}
 {{/*
 Hermes as an alternative agent harness.
 
@@ -25,8 +28,14 @@ cluster. Granting anyuid would fix it and would be incoherent in a lab about
 runtime containment — and it would break the Phase 3 plan, where the agent must
 drop into the OpenShell governed environment unmodified.
 
-Instead this uses the rh-aiservices-bu/cai-krew build: UBI9, tini rather than
-s6, non-root, which is already running on OpenShift.
+Two MCP modes, chosen by mcpGateway.enabled:
+
+  direct   one mcp_servers entry per MCP server, no auth. The original shape.
+  gateway  a single `gateway` entry pointing at this participant's MCP Gateway,
+           with auth: oauth. A token for the realm's operator user is seeded
+           before Hermes starts and refreshed by a sidecar; Hermes re-reads it
+           from disk on change, so no restart is needed. The tool names Hermes
+           sees gain the gateway's prefixes (telemetry_get_pump_status).
 */}}
 apiVersion: v1
 kind: ConfigMap
@@ -43,18 +52,85 @@ data:
     # Staged here and copied into the data volume at start-up, because the
     # container's entrypoint rewrites this file from HERMES_CONFIG_* variables
     # and cannot write to a mounted ConfigMap.
-    #
-    # The MCP block is the load-bearing part: Hermes discovers the same three
-    # servers our own agent uses, over the same streamable HTTP transport, with
-    # the same tools and the same descriptions. That is what makes a comparison
-    # between harnesses mean anything.
     mcp_servers:
+{{- if $viaGateway }}
+      # One endpoint: this participant's MCP Gateway. `auth: oauth` makes Hermes
+      # send the token at $HERMES_HOME/mcp-tokens/gateway.json.
+      gateway:
+        url: {{ $gwUrl | quote }}
+        transport: streamable-http
+        auth: oauth
+        ssl_verify: false
+        enabled: true
+        timeout: {{ .Values.agent.hermes.mcpTimeoutSeconds }}
+        connect_timeout: 30
+{{- else }}
+      # The MCP block is the load-bearing part: Hermes discovers the same three
+      # servers our own agent uses, over the same streamable HTTP transport,
+      # with the same tools and descriptions. That is what makes a comparison
+      # between harnesses mean anything.
 {{- range .Values.mcp.servers }}
       {{ .name | replace "-" "_" }}:
         url: "http://{{ .name }}.{{ $ns }}.svc:8080/mcp"
         enabled: true
         timeout: {{ $.Values.agent.hermes.mcpTimeoutSeconds }}
         connect_timeout: 30
+{{- end }}
+{{- end }}
+{{- if $viaGateway }}
+  mcp-token-refresh.py: |
+{{ .Files.Get "files/mcp-token-refresh.py" | indent 4 }}
+  wait-for-gateway.py: |
+    # Waits until the gateway lists tools from every expected server.
+    #
+    # A TCP check is not enough here. Hermes lists tools once at start-up and
+    # never refreshes, and on a fresh tenant the broker accepts connections
+    # before it has discovered any upstream server — so Hermes could start
+    # against an empty tool list and fall back to its local shell. Waiting for
+    # each server's prefix to appear closes that window.
+    import json, os, sys, time
+    import urllib.request as u
+
+    GW = os.environ["MCP_GATEWAY_URL"]
+    PREFIXES = [p for p in os.environ["MCP_PREFIXES"].split(",") if p]
+    TOKEN_FILE = os.path.join(os.environ["HERMES_HOME"], "mcp-tokens", "gateway.json")
+    DEADLINE = time.time() + float(os.environ["MCP_WAIT_SECONDS"])
+
+    def post(body, sid, token):
+        headers = {"content-type": "application/json",
+                   "accept": "application/json, text/event-stream",
+                   "authorization": "Bearer " + token}
+        if sid:
+            headers["mcp-session-id"] = sid
+        r = u.urlopen(u.Request(GW, data=json.dumps(body).encode(), headers=headers), timeout=15)
+        raw = r.read().decode()
+        sid = r.headers.get("mcp-session-id") or sid
+        msgs = [json.loads(line[5:]) for line in raw.splitlines() if line.startswith("data:")]
+        if not msgs and raw.strip().startswith("{"):
+            msgs = [json.loads(raw)]
+        return sid, msgs
+
+    last = "not attempted"
+    while time.time() < DEADLINE:
+        try:
+            token = json.load(open(TOKEN_FILE))["access_token"]
+            init = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                    "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                               "clientInfo": {"name": "wait-for-gateway", "version": "1"}}}
+            sid, _ = post(init, None, token)
+            post({"jsonrpc": "2.0", "method": "notifications/initialized"}, sid, token)
+            _, msgs = post({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, sid, token)
+            names = [t["name"] for t in (msgs[0].get("result", {}).get("tools", []) if msgs else [])]
+            missing = [p for p in PREFIXES if not any(n.startswith(p) for n in names)]
+            if not missing:
+                print("gateway ready: %d tools" % len(names), flush=True)
+                sys.exit(0)
+            last = "%d tools listed, still waiting for %s" % (len(names), missing)
+        except Exception as exc:
+            last = "%s: %s" % (type(exc).__name__, exc)
+        print(last, flush=True)
+        time.sleep(5)
+    sys.exit("MCP gateway not ready after %ss: %s" % (os.environ["MCP_WAIT_SECONDS"], last))
 {{- end }}
 ---
 apiVersion: v1
@@ -78,7 +154,7 @@ metadata:
     # Applying both in one wave lets the pod bind the volume and the two go
     # healthy together. Invisible to `oc apply`, which has no waves at all,
     # which is exactly why this survived earlier testing.
-    argocd.argoproj.io/sync-wave: "2"
+    argocd.argoproj.io/sync-wave: "4"
 spec:
   accessModes: [ReadWriteOnce]
   resources:
@@ -95,7 +171,9 @@ metadata:
     app.kubernetes.io/part-of: water-plant
     rhdp.redhat.com/lab: agentops-in-action
   annotations:
-    argocd.argoproj.io/sync-wave: "2"
+    # After the gateway resources (1-3), so the MCPServerRegistrations exist by
+    # the time the wait-for-gateway init container starts polling.
+    argocd.argoproj.io/sync-wave: "4"
 spec:
   replicas: 1
   # Persistent memory on a ReadWriteOnce volume: a second pod cannot roll
@@ -116,61 +194,6 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       initContainers:
-        {{/*
-        Hermes dials every MCP server once at start-up, retries three times over
-        about seven seconds, and then gives up for the life of the process. It
-        does not reconnect. Losing that race is not loud: the agent starts
-        healthy, serves requests, and answers plant questions out of its
-        *local shell* instead — "I don't see any files related to pumps in the
-        current directory" — because the terminal tool is still registered when
-        the MCP tools are not. Nothing in the console or the probes says why.
-
-        Observed after a cluster restart brought Hermes and the MCP servers up
-        together. With 30 participants and one restart, that is 30 agents that
-        look fine and cannot reach a tool.
-
-        So wait for the servers, and fail the pod rather than start without
-        them: a CrashLoopBackOff names the problem, a shell-only agent does not.
-        TCP is the same bar the MCP servers' own readinessProbe uses, and the
-        failure being fixed was a refused connection.
-        */}}
-        - name: wait-for-mcp
-          image: {{ printf "%s:%s" .Values.agent.hermes.image .Values.agent.hermes.tag }}
-          # `python3` on PATH, not an absolute interpreter path. This was
-          # /opt/hermes/venv/bin/python, which was right for the cai-krew image
-          # and does not exist in the OpenShell-based one that replaced it —
-          # the init container failed with CreateContainerError before running
-          # a line, which reads as a broken chart rather than a moved binary.
-          # Only stdlib is used below, so any python3 will do.
-          command:
-            - python3
-            - -c
-            - |
-              import os, socket, sys, time
-              targets = [t for t in os.environ["MCP_TARGETS"].split(",") if t]
-              deadline = time.time() + float(os.environ["MCP_WAIT_SECONDS"])
-              pending = list(targets)
-              while pending and time.time() < deadline:
-                  host, port = pending[0].split(":")
-                  try:
-                      with socket.create_connection((host, int(port)), timeout=5):
-                          print(f"ready: {pending.pop(0)}", flush=True)
-                          continue
-                  except OSError as exc:
-                      print(f"waiting for {pending[0]}: {exc}", flush=True)
-                  time.sleep(3)
-              if pending:
-                  sys.exit(f"MCP servers unreachable after {os.environ['MCP_WAIT_SECONDS']}s: "
-                           + ", ".join(pending))
-              print("all MCP servers reachable", flush=True)
-          env:
-            - name: MCP_TARGETS
-              value: "{{ range $i, $s := .Values.mcp.servers }}{{ if $i }},{{ end }}{{ $s.name }}.{{ $ns }}.svc:8080{{ end }}"
-            - name: MCP_WAIT_SECONDS
-              value: {{ .Values.agent.hermes.mcpWaitSeconds | quote }}
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities: { drop: [ALL] }
         # Assembles the two files Hermes reads. Necessary because the
         # published image ships no entrypoint.sh, so nothing else writes them.
         - name: seed-config
@@ -222,6 +245,88 @@ spec:
           volumeMounts:
             - { name: data, mountPath: "{{ .Values.agent.hermes.home }}" }
             - { name: config, mountPath: /config, readOnly: true }
+{{- if $viaGateway }}
+        # Fetch the first token before Hermes' first MCP handshake. Fails the pod
+        # if Keycloak or the realm is unavailable — better than an agent that is
+        # refused on every tool call with no visible cause.
+        - name: seed-token
+          image: {{ printf "%s:%s" .Values.agent.hermes.image .Values.agent.hermes.tag }}
+          command: ["python3", "/config/mcp-token-refresh.py"]
+          env: &tokenEnv
+            - { name: HERMES_HOME,     value: "{{ .Values.agent.hermes.home }}" }
+            - { name: MCP_SERVER_NAME, value: gateway }
+            - { name: MCP_CLIENT_ID,   value: {{ .Values.keycloak.agentClientId | quote }} }
+            - { name: MCP_USERNAME,    value: {{ .Values.keycloak.agentUser | quote }} }
+            - { name: MCP_PASSWORD,    value: {{ .Values.keycloak.agentPassword | quote }} }
+            - name: MCP_TOKEN_URL
+              value: {{ printf "https://%s/realms/waterplant-%s/protocol/openid-connect/token" .Values.keycloak.host .Values.username | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: data, mountPath: "{{ .Values.agent.hermes.home }}" }
+            - { name: config, mountPath: /config, readOnly: true }
+        - name: wait-for-gateway
+          image: {{ printf "%s:%s" .Values.agent.hermes.image .Values.agent.hermes.tag }}
+          command: ["python3", "/config/wait-for-gateway.py"]
+          env:
+            - { name: HERMES_HOME,      value: "{{ .Values.agent.hermes.home }}" }
+            - { name: MCP_GATEWAY_URL,  value: {{ $gwUrl | quote }} }
+            - { name: MCP_WAIT_SECONDS, value: {{ .Values.agent.hermes.mcpWaitSeconds | quote }} }
+            - name: MCP_PREFIXES
+              value: "{{ range $i, $s := .Values.mcp.servers }}{{ if $i }},{{ end }}{{ trimSuffix "-mcp" $s.name }}_{{ end }}"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: data, mountPath: "{{ .Values.agent.hermes.home }}" }
+            - { name: config, mountPath: /config, readOnly: true }
+{{- else }}
+        {{/*
+        Hermes dials every MCP server once at start-up, retries three times over
+        about seven seconds, and then gives up for the life of the process. It
+        does not reconnect. Losing that race is not loud: the agent starts
+        healthy, serves requests, and answers plant questions out of its
+        *local shell* instead — "I don't see any files related to pumps in the
+        current directory" — because the terminal tool is still registered when
+        the MCP tools are not. Nothing in the console or the probes says why.
+
+        So wait for the servers, and fail the pod rather than start without
+        them: a CrashLoopBackOff names the problem, a shell-only agent does not.
+        */}}
+        - name: wait-for-mcp
+          image: {{ printf "%s:%s" .Values.agent.hermes.image .Values.agent.hermes.tag }}
+          # `python3` on PATH: the OpenShell-based image has no /opt/hermes/venv.
+          command:
+            - python3
+            - -c
+            - |
+              import os, socket, sys, time
+              targets = [t for t in os.environ["MCP_TARGETS"].split(",") if t]
+              deadline = time.time() + float(os.environ["MCP_WAIT_SECONDS"])
+              pending = list(targets)
+              while pending and time.time() < deadline:
+                  host, port = pending[0].split(":")
+                  try:
+                      with socket.create_connection((host, int(port)), timeout=5):
+                          print(f"ready: {pending.pop(0)}", flush=True)
+                          continue
+                  except OSError as exc:
+                      print(f"waiting for {pending[0]}: {exc}", flush=True)
+                  time.sleep(3)
+              if pending:
+                  sys.exit(f"MCP servers unreachable after {os.environ['MCP_WAIT_SECONDS']}s: "
+                           + ", ".join(pending))
+              print("all MCP servers reachable", flush=True)
+          env:
+            - name: MCP_TARGETS
+              value: "{{ range $i, $s := .Values.mcp.servers }}{{ if $i }},{{ end }}{{ $s.name }}.{{ $ns }}.svc:8080{{ end }}"
+            - name: MCP_WAIT_SECONDS
+              value: {{ .Values.agent.hermes.mcpWaitSeconds | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+{{- end }}
       containers:
         - name: hermes
           image: {{ printf "%s:%s" .Values.agent.hermes.image .Values.agent.hermes.tag }}
@@ -229,24 +334,19 @@ spec:
           # Start the API server explicitly rather than trusting the image's
           # entrypoint.
           #
-          # The old cai-krew image started the gateway itself. This image's
-          # entrypoint is `entrypoint.sh` with CMD ["bash"], so the container ran
-          # a non-interactive bash that exited 0 immediately: CrashLoopBackOff
-          # with no logs at all, nothing to diagnose from.
-          #
-          # Bare `hermes` is not it either — that launches the interactive TUI,
-          # which finds stdin is not a terminal and exits ("Warning: Input is not
-          # a terminal" → "Goodbye!"). `gateway run` is the subcommand that runs
-          # Hermes's own OpenAI-compatible api_server platform in the foreground.
+          # This image's entrypoint is `entrypoint.sh` with CMD ["bash"], so the
+          # container ran a non-interactive bash that exited 0 immediately:
+          # CrashLoopBackOff with no logs at all. Bare `hermes` launches the
+          # interactive TUI, which exits when stdin is not a terminal.
+          # `gateway run` runs Hermes's OpenAI-compatible api_server platform.
           command: ["hermes", "gateway", "run"]
           ports:
             - name: http
               containerPort: {{ .Values.agent.hermes.port }}
           envFrom:
-            # Carries MODEL_API_KEY and API_SERVER_KEY. Note the plain names:
-            # the HERMES_ENV_* convention only works when the repo's
-            # entrypoint.sh is present to strip the prefix, and it is not in
-            # the published image — the init container does that job instead.
+            # Carries MODEL_API_KEY and API_SERVER_KEY. Plain names: the
+            # HERMES_ENV_* convention needs the repo's entrypoint.sh, which the
+            # published image does not have.
             - secretRef:
                 name: {{ .Values.agent.hermes.envSecret }}
           env:
@@ -276,6 +376,23 @@ spec:
             failureThreshold: 12
           resources:
             {{- toYaml .Values.agent.hermes.resources | nindent 12 }}
+{{- if $viaGateway }}
+        # Keeps the token fresh. Its interval is also how long a role granted in
+        # Keycloak takes to reach the agent.
+        - name: mcp-token-refresh
+          image: {{ printf "%s:%s" .Values.agent.hermes.image .Values.agent.hermes.tag }}
+          command: ["python3", "/config/mcp-token-refresh.py", "--loop", {{ .Values.mcpGateway.tokenRefreshSeconds | quote }}]
+          env: *tokenEnv
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - { name: data, mountPath: "{{ .Values.agent.hermes.home }}" }
+            - { name: config, mountPath: /config, readOnly: true }
+          resources:
+            {{- toYaml .Values.agent.hermes.tokenRefreshResources | nindent 12 }}
+{{- end }}
       volumes:
         - name: data
           persistentVolumeClaim:
@@ -293,7 +410,7 @@ metadata:
     app.kubernetes.io/name: hermes-agent
     app.kubernetes.io/part-of: water-plant
   annotations:
-    argocd.argoproj.io/sync-wave: "2"
+    argocd.argoproj.io/sync-wave: "4"
 spec:
   selector:
     app.kubernetes.io/name: hermes-agent

@@ -14,8 +14,17 @@ username: ""
 # namespaceSuffix in bootstrap-infra, tenant-platform and tenant-policy.
 namespaceSuffix: agentops
 
+# The cluster's apps domain. Used to derive the Keycloak host below when the
+# catalog item does not pass one explicitly.
 deployer:
   domain: apps.example.com
+
+# RHDP's Keycloak. Empty means sso.<deployer.domain>, which is where RHDP
+# publishes it (verified on cluster-tpss7). Forwarded to both tenant
+# Applications: the platform one creates the participant's realm and points the
+# gateway's OAuth metadata at it; the policy one validates tokens against it.
+keycloak:
+  host: ""
 
 # ---------------------------------------------------------------------------
 # Where the two per-participant Applications point.
@@ -50,6 +59,20 @@ platform:
   # chart creates it, so tenant provisioning must supply it alongside
   # litellm-credentials or the agent pod cannot start.
   agentHarness: hermes
+  # Give this participant their own MCP Gateway, and route the agent's tool
+  # calls through it instead of straight to the MCP servers.
+  #
+  # Needs bootstrap-infra's mcpGateway.enabled on the cluster: its
+  # AdminNetworkPolicy is what makes the gateway the only way to reach a tool.
+  # The corollary is that with that policy in place a tenant with this set to
+  # false has an agent that cannot reach its MCP servers at all.
+  mcpGateway: true
+
+# Values forwarded to tenant-policy.
+policy:
+  # Tool authorization at baseline. false is deliberate — see
+  # tenant-policy/templates/mcp-gateway-policy.yaml.
+  mcpGatewayEnforced: false
 
 # ---------------------------------------------------------------------------
 # Per-tenant resource limits

@@ -1,3 +1,4 @@
+{{- $keycloakHost := .Values.keycloak.host | default (printf "sso.%s" .Values.deployer.domain) -}}
 {{/*
 The two per-participant Applications.
 
@@ -18,6 +19,10 @@ the agent Deployment gets it back. Self-heal on the policy Application would be
 a hazard — it would revert their OpenShell or gateway policy within seconds of
 them making it, silently and with variable timing, and read as a broken product
 rather than a misconfigured lab.
+
+That split is also where the MCP Gateway divides: the gateway, its routes and
+registrations and the participant's Keycloak realm are platform; the
+AuthPolicies that decide which tool calls succeed are policy.
 */}}
 apiVersion: argoproj.io/v1alpha1
 kind: Application
@@ -51,6 +56,11 @@ spec:
         # at once, and is the opposite of what BYOA is meant to show.
         - name: agent.harness
           value: {{ .Values.platform.agentHarness | quote }}
+        # This participant's own MCP Gateway, and the Keycloak it trusts.
+        - name: mcpGateway.enabled
+          value: {{ .Values.platform.mcpGateway | quote }}
+        - name: keycloak.host
+          value: {{ $keycloakHost | quote }}
   destination:
     server: https://kubernetes.default.svc
     namespace: {{ include "tenant.namespace" . }}
@@ -92,6 +102,12 @@ spec:
           value: {{ include "tenant.username" . | quote }}
         - name: namespaceSuffix
           value: {{ .Values.namespaceSuffix | quote }}
+        - name: keycloak.host
+          value: {{ $keycloakHost | quote }}
+        # Baseline tool authorization. false is the lab's "works, but
+        # dangerously" starting point; module 5 turns it on.
+        - name: mcpGateway.enforced
+          value: {{ .Values.policy.mcpGatewayEnforced | quote }}
   destination:
     server: https://kubernetes.default.svc
     namespace: {{ include "tenant.namespace" . }}

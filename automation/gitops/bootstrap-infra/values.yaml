@@ -12,6 +12,10 @@ lab:
   # Per-participant namespace is <username>-<namespaceSuffix>. Must match
   # namespaceSuffix in bootstrap-tenant, tenant-platform and tenant-policy.
   namespaceSuffix: agentops
+  # Where the RHDP-provisioned Keycloak runs. Each participant's realm is a
+  # KeycloakRealmImport, which must live beside the Keycloak CR, so tenant
+  # Applications need this as an allowed destination.
+  keycloakNamespace: keycloak
 
 # Maximum concurrent participants (from spec: max_concurrent_users: 30)
 maxUsers: 30
@@ -26,6 +30,11 @@ maxUsers: 30
 # Versions verified against the cluster's catalog on OCP 4.22.11. Re-verify
 # before each event build: a catalog refresh can retire a CSV, and a pinned
 # startingCSV that no longer exists leaves the Subscription stuck.
+#
+# `dependencies` lists CSVs OLM resolves into the same InstallPlan. The
+# approver refuses any plan containing a CSV that is neither pinned nor listed,
+# so a catalog change cannot slip an unreviewed operator in alongside a pinned
+# one.
 # ---------------------------------------------------------------------------
 operators:
   rhoai:
@@ -44,26 +53,36 @@ operators:
     csv: agent-sandbox-operator.v0.9.0
     source: redhat-operators
 
-  # Authorization enforcement at the tool boundary. Carried as the fallback for
-  # MCP Gateway, whose maturity in the event build is still unconfirmed: if the
-  # gateway cannot enforce per-tool and per-parameter policy, these enforce it
-  # directly in front of the MCP servers instead — same lesson, less product
-  # narrative. Enable if and when that call is made.
-  authorino:
-    enabled: false
-    package: authorino-operator
-    namespace: agentops-authorino
+  # Red Hat Connectivity Link (GA): AuthPolicy, RateLimitPolicy and the rest of
+  # the Kuadrant policy API, plus the Authorino and Limitador that enforce them.
+  #
+  # This replaces the community authorino-operator v0.16.0 and kuadrant-operator
+  # v0.11.1 that used to sit here disabled "as the fallback for MCP Gateway".
+  # That fallback is no longer needed — MCP Gateway enforces per-tool policy —
+  # and both of them ship supported from redhat-operators under RHCL anyway.
+  rhcl:
+    enabled: true
+    package: rhcl-operator
+    namespace: kuadrant-system
     channel: stable
-    csv: authorino-operator.v0.16.0
-    source: community-operators
+    csv: rhcl-operator.v1.4.3
+    source: redhat-operators
+    dependencies:
+      - authorino-operator.v1.4.3
+      - limitador-operator.v1.4.2
+      - dns-operator.v1.4.2
 
-  kuadrant:
-    enabled: false
-    package: kuadrant-operator
-    namespace: agentops-kuadrant
-    channel: stable
-    csv: kuadrant-operator.v0.11.1
-    source: community-operators
+  # MCP Gateway (Tech Preview, RHCL subscription): an Envoy-based broker that
+  # federates MCP servers and routes each tool call through AuthPolicy.
+  # Operator only — each participant's gateway instance is created by the
+  # tenant chart.
+  mcpGatewayOperator:
+    enabled: true
+    package: mcp-gateway
+    namespace: mcp-gateway-system
+    channel: preview
+    csv: mcp-gateway.v0.7.1
+    source: redhat-operators
 
 # NOTE: sandboxed-containers-operator (Kata) is deliberately NOT installed.
 # The Agent Sandbox deployment is not on bare metal and this cluster runs on
@@ -94,6 +113,23 @@ installPlanApprover:
   timeoutSeconds: 600
 
 # ---------------------------------------------------------------------------
+# MCP Gateway — cluster-level pieces (templates/mcp-gateway-platform.yaml)
+#
+# One Gateway per participant, created by tenant-platform. What lives here is
+# only what must be singular: the Kuadrant instance, and the network rule that
+# stops anything but a gateway reaching an MCP server.
+# ---------------------------------------------------------------------------
+mcpGateway:
+  enabled: true
+  # The AdminNetworkPolicy selects Envoy pods by this Gateway name, so it must
+  # match tenant-platform's mcpGateway.gatewayName.
+  gatewayName: mcp-gateway
+  serverPort: 8080
+  # ANP priorities must be unique cluster-wide (two at one priority is
+  # undefined). Leaves 0-49 for platform policies above this one.
+  networkPolicyPriority: 50
+
+# ---------------------------------------------------------------------------
 # RHOAI DataScienceCluster
 # ---------------------------------------------------------------------------
 datascience:
@@ -107,7 +143,10 @@ datascience:
   components:
     # --- The lab's core dependencies ---
     aigateway: Managed             # Model Gateway — the governed inference endpoint (D2)
-    mcplifecycleoperator: Managed  # MCP Gateway / MCP server lifecycle (D3, D4, Phase 4)
+    # MCP server lifecycle: runs the MCPServer resources in tenant-platform. It
+    # is NOT the MCP Gateway — its CRD has no routing or authorization surface.
+    # The gateway comes from the mcpGatewayOperator above.
+    mcplifecycleoperator: Managed
     mlflowoperator: Managed        # MLflow tracing — the observability spine of the lab
     trustyai: Managed              # Guardrails Orchestrator and Garak integration
     kserve: Managed                # model serving, underpins aigateway

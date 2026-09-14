@@ -17,3 +17,18 @@ networkPolicy:
       sameNamespace: true
     - name: DNS
       ports: [53]
+
+# Tool-level authorization on this participant's own MCP Gateway.
+# See templates/mcp-gateway-policy.yaml.
+mcpGateway:
+  # false -> the gateway federates tools and enforces nothing: the lab's
+  #          starting condition, where the agent can call emergency_shutdown
+  # true  -> every tool call needs tool:<name> in the caller's Keycloak token
+  enforced: false
+  # Must match tenant-platform's mcpGateway.gatewayName.
+  gatewayName: mcp-gateway
+
+# The realm issuer is https://<host>/realms/waterplant-<username>. Forwarded by
+# bootstrap-tenant; required only when mcpGateway.enforced is true.
+keycloak:
+  host: ""

@@ -1,0 +1,107 @@
+{{- if .Values.mcpGateway.enforced }}
+{{- $ns := printf "%s-%s" .Values.username .Values.namespaceSuffix -}}
+{{- if not .Values.keycloak.host }}
+{{- fail "mcpGateway.enforced needs keycloak.host (forwarded by bootstrap-tenant)" }}
+{{- end }}
+{{- $issuer := printf "https://%s/realms/waterplant-%s" .Values.keycloak.host .Values.username -}}
+{{/*
+Tool-level authorization on this participant's own MCP Gateway.
+
+Off at baseline, deliberately — the same shape as networkPolicy.permissiveEgress.
+The lab starts "works, but dangerously": the gateway federates the tools and
+enforces nothing, so the agent can call emergency_shutdown. Setting
+mcpGateway.enforced to true is the one-line change module 5 asks for, and
+`argocd app diff` on this Application shows it.
+
+Two policies, one per Gateway listener, because the gateway handles a tool call
+in two hops:
+
+  mcp   the public listener the agent connects to. Authentication only: the
+        caller must present a valid JWT from their realm.
+  mcps  the internal listener the broker routes each tools/call through, with
+        x-mcp-servername and x-mcp-toolname set. Authorization: the token must
+        carry tool:<toolname> under the client whose ID matches the server
+        name, which the broker sets to <namespace>/<registration>.
+
+Both target this participant's Gateway, so editing them changes nothing for
+anyone else — which a shared gateway could not offer.
+
+Roles are granted and revoked in the participant's Keycloak realm, not here:
+this policy says "a tool call needs the matching role", the realm says who has
+it. Verified on cluster-tpss7: withheld role -> 403, grant -> 200, revoke -> 403.
+
+One known limitation to teach around: Hermes' MCP client surfaces the 403 as a
+dropped connection and a 5 s timeout, and reports "a network issue or service
+outage". The denial is real; the agent's explanation of it is wrong. Authorino's
+log is where the truth is.
+*/}}
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: mcp-auth-policy
+  namespace: {{ $ns }}
+  labels:
+    rhdp.redhat.com/lab: agentops-in-action
+    rhdp.redhat.com/editable: "true"
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: {{ .Values.mcpGateway.gatewayName }}
+    sectionName: mcp
+  defaults:
+    when:
+      - predicate: "!request.path.contains('/.well-known')"
+    rules:
+      authentication:
+        waterplant-{{ .Values.username }}:
+          jwt:
+            issuerUrl: {{ $issuer }}
+      response:
+        unauthenticated:
+          code: 401
+          body:
+            value: '{"error":"Unauthorized","message":"Authentication required."}'
+---
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: mcp-authz-policy
+  namespace: {{ $ns }}
+  labels:
+    rhdp.redhat.com/lab: agentops-in-action
+    rhdp.redhat.com/editable: "true"
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: {{ .Values.mcpGateway.gatewayName }}
+    sectionName: mcps
+  rules:
+    authentication:
+      # Protocol traffic (initialize, tools/list, pings) carries no tool name
+      # and needs no identity on the internal hop; the public listener already
+      # authenticated the caller.
+      anonymous:
+        anonymous: {}
+        when:
+          - predicate: '!request.headers.exists(h, h == "x-mcp-toolname")'
+      waterplant-{{ .Values.username }}:
+        jwt:
+          issuerUrl: {{ $issuer }}
+        when:
+          - predicate: 'request.headers.exists(h, h == "x-mcp-toolname")'
+    authorization:
+      tool-access-check:
+        when:
+          - predicate: "request.headers.exists(h, h == 'x-mcp-toolname')"
+          - predicate: "request.headers['x-mcp-method'] == 'tools/call'"
+        patternMatching:
+          patterns:
+            - predicate: |
+                ('tool:' + request.headers['x-mcp-toolname']) in (has(auth.identity.resource_access) && auth.identity.resource_access.exists(p, p == request.headers['x-mcp-servername']) ? auth.identity.resource_access[request.headers['x-mcp-servername']].roles : [])
+    response:
+      unauthorized:
+        body:
+          value: '{"jsonrpc":"2.0","error":{"code":-32600,"message":"Forbidden: Insufficient permissions for this tool."}}'
+{{- end }}

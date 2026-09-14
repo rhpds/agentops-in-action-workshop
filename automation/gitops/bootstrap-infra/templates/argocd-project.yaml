@@ -33,6 +33,11 @@ spec:
     # bootstrap-tenant creates the two per-participant Applications here.
     - namespace: {{ .Values.lab.argocdNamespace }}
       server: https://kubernetes.default.svc
+    # Each participant's Keycloak realm. A KeycloakRealmImport must sit beside
+    # the Keycloak CR, so tenant-platform writes one resource here. Nothing else
+    # in a tenant chart targets this namespace.
+    - namespace: {{ .Values.lab.keycloakNamespace }}
+      server: https://kubernetes.default.svc
   clusterResourceWhitelist:
     - group: ''
       kind: Namespace
