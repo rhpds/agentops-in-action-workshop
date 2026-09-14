@@ -115,6 +115,13 @@ spec:
     group: gateway.networking.k8s.io
     kind: Gateway
     name: {{ $gw }}
+    # Explicit, although the CRD documents it as optional and defaulting to the
+    # extension's own namespace. The 0.7.1 controller does not apply that
+    # default: without this it looks the Gateway up in namespace "" and rejects
+    # the extension with "invalid: gateway target /mcp-gateway not found" —
+    # observed on cluster-tpss7. Every registration then reports "no valid
+    # mcpgatewayextensions configured", so the whole gateway is dead.
+    namespace: {{ $ns }}
     sectionName: mcp
   httpRouteManagement: Enabled
   publicHost: {{ $svc | quote }}
