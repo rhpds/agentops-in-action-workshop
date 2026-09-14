@@ -136,8 +136,14 @@ spec:
         */}}
         - name: wait-for-mcp
           image: {{ printf "%s:%s" .Values.agent.hermes.image .Values.agent.hermes.tag }}
+          # `python3` on PATH, not an absolute interpreter path. This was
+          # /opt/hermes/venv/bin/python, which was right for the cai-krew image
+          # and does not exist in the OpenShell-based one that replaced it —
+          # the init container failed with CreateContainerError before running
+          # a line, which reads as a broken chart rather than a moved binary.
+          # Only stdlib is used below, so any python3 will do.
           command:
-            - /opt/hermes/venv/bin/python
+            - python3
             - -c
             - |
               import os, socket, sys, time
