@@ -40,11 +40,16 @@ platform:
   imageNamespace: rh-aiservices-bu
   # Shared MLflow URL surfaced in the operator console. Empty renders no link.
   mlflowUrl: ""
-  # "waterplant" (our own agent) or "hermes". Per participant, so one attendee
-  # can be given the other harness without touching anyone else. Selecting
-  # hermes also needs a hermes-env Secret in that namespace — see
-  # tenant-platform values, agent.hermes.envSecret.
-  agentHarness: waterplant
+  # "hermes" (the harness the lab ships) or "waterplant" (our own agent, kept
+  # as a fallback and as the control case for BYOA comparisons). Per
+  # participant, so one attendee can be given the other harness without
+  # touching anyone else.
+  #
+  # hermes needs a hermes-env Secret in that namespace holding MODEL_API_KEY and
+  # API_SERVER_KEY — see tenant-platform values, agent.hermes.envSecret. No
+  # chart creates it, so tenant provisioning must supply it alongside
+  # litellm-credentials or the agent pod cannot start.
+  agentHarness: hermes
 
 # ---------------------------------------------------------------------------
 # Per-tenant resource limits
