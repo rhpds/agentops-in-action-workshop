@@ -226,6 +226,19 @@ spec:
         - name: hermes
           image: {{ printf "%s:%s" .Values.agent.hermes.image .Values.agent.hermes.tag }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # Start the API server explicitly rather than trusting the image's
+          # entrypoint.
+          #
+          # The old cai-krew image started the gateway itself. This image's
+          # entrypoint is `entrypoint.sh` with CMD ["bash"], so the container ran
+          # a non-interactive bash that exited 0 immediately: CrashLoopBackOff
+          # with no logs at all, nothing to diagnose from.
+          #
+          # Bare `hermes` is not it either — that launches the interactive TUI,
+          # which finds stdin is not a terminal and exits ("Warning: Input is not
+          # a terminal" → "Goodbye!"). `gateway run` is the subcommand that runs
+          # Hermes's own OpenAI-compatible api_server platform in the foreground.
+          command: ["hermes", "gateway", "run"]
           ports:
             - name: http
               containerPort: {{ .Values.agent.hermes.port }}
