@@ -103,12 +103,29 @@ agent:
   #
   #   waterplant  our own agent: a plain loop, measured at 100% on the golden
   #               workflow, speaking our /chat and /chat/stream contract
-  #   hermes      nousresearch/hermes-agent, run as a plain container
+  #   hermes      hermes-agent, run as a plain container
   #
-  # NOT YET INTERCHANGEABLE. Hermes serves an OpenAI-compatible API on 8642;
-  # the console's backend speaks our /chat contract and expects tool calls in
-  # our shape. Selecting hermes deploys and configures it, but the console
-  # cannot drive it until the backend grows an OpenAI-compatible branch.
+  # Both are driveable from the console. Its backend carries an adapter that
+  # translates an OpenAI-compatible server into the console's own event shape,
+  # selected by AGENT_PROTOCOL, so the front end never learns there is a second
+  # harness. ui.yaml derives the URL, protocol and credential from this value —
+  # one switch, not several that have to agree.
+  #
+  # Two things the hermes path cannot do, both reported through /api/config so
+  # an exercise fails loudly rather than silently:
+  #
+  #   * Identity stops at the console. Hermes authenticates with one static
+  #     server key and rejects a participant token, so the console holds a
+  #     service credential. That is Scenarios 1, 4 and 6.
+  #   * There is no tool trace. Hermes runs its loop server-side and returns
+  #     only the finished answer, and module 6 has participants debug an
+  #     over-restrictive policy *from* the trace.
+  #
+  # Both argue for putting tracing and identity at MCP Gateway, where they
+  # survive a harness swap.
+  #
+  # Selecting hermes also requires a `hermes-env` Secret in the namespace; see
+  # agent.hermes.envSecret below. Without it the pod cannot start.
   harness: waterplant
 
   replicas: 1

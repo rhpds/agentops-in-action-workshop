@@ -66,7 +66,19 @@ metadata:
     app.kubernetes.io/name: hermes-agent
     app.kubernetes.io/part-of: water-plant
   annotations:
-    argocd.argoproj.io/sync-wave: "1"
+    # Same wave as the Deployment, deliberately.
+    #
+    # This was wave 1 and deadlocked ArgoCD on a cluster whose default
+    # StorageClass binds WaitForFirstConsumer: the PVC stays Pending until a
+    # pod consumes it, ArgoCD will not begin the next wave until this one is
+    # Healthy, and the only consumer is in that next wave. The sync sat at
+    # "waiting for healthy state of PersistentVolumeClaim/hermes-data"
+    # indefinitely — no error, no event, just a tenant that never finishes.
+    #
+    # Applying both in one wave lets the pod bind the volume and the two go
+    # healthy together. Invisible to `oc apply`, which has no waves at all,
+    # which is exactly why this survived earlier testing.
+    argocd.argoproj.io/sync-wave: "2"
 spec:
   accessModes: [ReadWriteOnce]
   resources:
@@ -124,8 +136,14 @@ spec:
         */}}
         - name: wait-for-mcp
           image: {{ printf "%s:%s" .Values.agent.hermes.image .Values.agent.hermes.tag }}
+          # `python3` on PATH, not an absolute interpreter path. This was
+          # /opt/hermes/venv/bin/python, which was right for the cai-krew image
+          # and does not exist in the OpenShell-based one that replaced it —
+          # the init container failed with CreateContainerError before running
+          # a line, which reads as a broken chart rather than a moved binary.
+          # Only stdlib is used below, so any python3 will do.
           command:
-            - /opt/hermes/venv/bin/python
+            - python3
             - -c
             - |
               import os, socket, sys, time
@@ -208,6 +226,19 @@ spec:
         - name: hermes
           image: {{ printf "%s:%s" .Values.agent.hermes.image .Values.agent.hermes.tag }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # Start the API server explicitly rather than trusting the image's
+          # entrypoint.
+          #
+          # The old cai-krew image started the gateway itself. This image's
+          # entrypoint is `entrypoint.sh` with CMD ["bash"], so the container ran
+          # a non-interactive bash that exited 0 immediately: CrashLoopBackOff
+          # with no logs at all, nothing to diagnose from.
+          #
+          # Bare `hermes` is not it either — that launches the interactive TUI,
+          # which finds stdin is not a terminal and exits ("Warning: Input is not
+          # a terminal" → "Goodbye!"). `gateway run` is the subcommand that runs
+          # Hermes's own OpenAI-compatible api_server platform in the foreground.
+          command: ["hermes", "gateway", "run"]
           ports:
             - name: http
               containerPort: {{ .Values.agent.hermes.port }}
