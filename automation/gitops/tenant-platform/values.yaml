@@ -70,7 +70,10 @@ networkPolicy:
 # ---------------------------------------------------------------------------
 ui:
   replicas: 1
-  agentUrl: "http://waterplant-agent:8080"
+  # Empty means "follow agent.harness" — the console points at whichever agent
+  # this chart actually deployed and speaks that harness's protocol. Set a
+  # value only to aim the console at an agent outside this chart.
+  agentUrl: ""
   mlflowUrl: ""
   route:
     enabled: true
@@ -87,6 +90,20 @@ ui:
 # governed execution environment in module 4 unmodified.
 # ---------------------------------------------------------------------------
 agent:
+  # Which agent harness to deploy. BYOA is the lab's premise, so the harness is
+  # swappable and everything around it — plant, MCP servers, policy, console —
+  # stays identical.
+  #
+  #   waterplant  our own agent: a plain loop, measured at 100% on the golden
+  #               workflow, speaking our /chat and /chat/stream contract
+  #   hermes      nousresearch/hermes-agent, run as a plain container
+  #
+  # NOT YET INTERCHANGEABLE. Hermes serves an OpenAI-compatible API on 8642;
+  # the console's backend speaks our /chat contract and expects tool calls in
+  # our shape. Selecting hermes deploys and configures it, but the console
+  # cannot drive it until the backend grows an OpenAI-compatible branch.
+  harness: waterplant
+
   replicas: 1
   # Holds LITELLM_VIRTUAL_KEY. Created out of band — never a chart value.
   credentialsSecret: litellm-credentials
@@ -101,3 +118,45 @@ agent:
   resources:
     requests: { cpu: 100m, memory: 256Mi }
     limits:   { cpu: 500m, memory: 512Mi }
+
+  # --- Hermes harness -------------------------------------------------------
+  # Only used when agent.harness is "hermes".
+  #
+  # This is the rh-aiservices-bu/cai-krew build, not the upstream image. That
+  # one is built on s6-overlay, needs to start as root, and dies under
+  # restricted-v2 with "/run belongs to uid 0 ... lacking the privileges to fix
+  # it" — verified on the cluster. The cai-krew Containerfile uses UBI9 with
+  # tini and runs non-root, which is what OpenShift needs.
+  #
+  # Building it into our own registry from that Containerfile would be the next
+  # step for supply-chain control; this pulls the published image for now.
+  hermes:
+    # Built from hermes/Containerfile in the agent repo: the cai-krew image
+    # plus hermes-agent's optional [mcp] extra, which it ships without. Without
+    # that, MCP servers list as enabled and fail only on connect.
+    image: image-registry.openshift-image-registry.svc:5000/wp-dev-phayes/hermes-mcp
+    tag: latest
+    port: 8787
+    home: /app/.hermes
+    storageSize: 5Gi
+    mcpTimeoutSeconds: 120
+    # How long to wait for the MCP servers before failing the pod. Hermes only
+    # dials them at start-up and never reconnects, so starting without them
+    # yields an agent that silently falls back to its local shell.
+    mcpWaitSeconds: 180
+    # Two keys, both plain-named. The HERMES_ENV_* convention only works when
+    # the repo's entrypoint.sh is present to strip the prefix, and the
+    # published image ships without it — so prefixed names are simply inert.
+    # The init container reads these and writes config.yaml and .env instead.
+    #
+    #   MODEL_API_KEY   the same LiteLLM key our own agent uses
+    #   API_SERVER_KEY  Hermes' static bearer, also read by the console's BFF
+    #
+    # Created out of band so neither reaches git:
+    #   oc create secret generic hermes-env \
+    #     --from-literal=MODEL_API_KEY="$LITELLM_KEY" \
+    #     --from-literal=API_SERVER_KEY="$(openssl rand -hex 24)"
+    envSecret: hermes-env
+    resources:
+      requests: { cpu: 500m, memory: 1Gi }
+      limits:   { cpu: "2",  memory: 4Gi }
