@@ -5,10 +5,17 @@ username: user1
 namespaceSuffix: agentops
 
 image:
-  # Built on-cluster by BuildConfig and referenced from the internal registry.
-  # No developer ever builds these locally (implementation-plan §2.6).
-  registry: image-registry.openshift-image-registry.svc:5000
-  namespace: wp-dev-phayes
+  # Public images in the rh-aiservices-bu Quay org, built on-cluster from the
+  # agent repo and pushed there. No developer builds these locally
+  # (implementation-plan §2.6).
+  #
+  # These pointed at an ImageStream in a personal dev namespace until now, which
+  # meant the lab only ran on the one cluster that namespace happened to exist
+  # on — everywhere else every workload sat in ImagePullBackOff with nothing
+  # naming the cause. A public registry makes provisioning deterministic at 30x
+  # concurrency and removes the on-cluster build from the attendee path.
+  registry: quay.io
+  namespace: rh-aiservices-bu
   plantApi:
     repository: plant-api
     tag: latest
@@ -128,13 +135,17 @@ agent:
   # it" — verified on the cluster. The cai-krew Containerfile uses UBI9 with
   # tini and runs non-root, which is what OpenShift needs.
   #
-  # Building it into our own registry from that Containerfile would be the next
-  # step for supply-chain control; this pulls the published image for now.
   hermes:
-    # Built from hermes/Containerfile in the agent repo: the cai-krew image
-    # plus hermes-agent's optional [mcp] extra, which it ships without. Without
-    # that, MCP servers list as enabled and fail only on connect.
-    image: image-registry.openshift-image-registry.svc:5000/wp-dev-phayes/hermes-mcp
+    # Built from hermes/Containerfile in the agent repo and pushed to the same
+    # Quay org as everything else. It layers hermes-agent's optional [mcp]
+    # extra on, which the base image ships without — and without it the MCP
+    # servers list as enabled and fail only on connect, so `hermes mcp list`
+    # shows three ticks and only `hermes mcp test` tells the truth.
+    #
+    # Note this image is not reproducible the way the other six are: its
+    # Containerfile pulls an unpinned base and shallow-clones a fork with no
+    # ref, so the pushed digest is fixed but a rebuild will not recreate it.
+    image: quay.io/rh-aiservices-bu/waterplant-hermes
     tag: latest
     port: 8787
     home: /app/.hermes
