@@ -122,11 +122,14 @@ agent:
   #     over-restrictive policy *from* the trace.
   #
   # Both argue for putting tracing and identity at MCP Gateway, where they
-  # survive a harness swap.
+  # survive a harness swap. On the hermes default that is no longer a
+  # "nice to have later": it is the only way modules 4 and 6 get a trace and an
+  # identity at all, because the harness supplies neither.
   #
-  # Selecting hermes also requires a `hermes-env` Secret in the namespace; see
-  # agent.hermes.envSecret below. Without it the pod cannot start.
-  harness: waterplant
+  # hermes requires a `hermes-env` Secret in the namespace — see
+  # agent.hermes.envSecret below. Without it the pod cannot start, so tenant
+  # provisioning has to create it alongside litellm-credentials.
+  harness: hermes
 
   replicas: 1
   # Holds LITELLM_VIRTUAL_KEY. Created out of band — never a chart value.
