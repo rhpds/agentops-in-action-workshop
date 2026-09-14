@@ -34,8 +34,10 @@ gitops:
 
 # Values forwarded to tenant-platform.
 platform:
-  # Namespace holding the ImageStreams the workloads pull from.
-  imageNamespace: wp-dev-phayes
+  # Quay org holding the workload images. Forwarded as a Helm *parameter*, so
+  # it overrides image.namespace in tenant-platform rather than merging with
+  # it — the two have to agree, and this one wins.
+  imageNamespace: rh-aiservices-bu
   # Shared MLflow URL surfaced in the operator console. Empty renders no link.
   mlflowUrl: ""
 
