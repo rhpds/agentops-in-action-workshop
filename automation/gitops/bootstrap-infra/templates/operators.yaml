@@ -18,10 +18,17 @@ generated InstallPlan before each operator actually installs:
 
 Sync waves: namespaces (-4) -> OperatorGroups (-3) -> Subscriptions (-2).
 The DataScienceCluster lands later, in datasciencecluster.yaml.
+
+One Namespace and OperatorGroup per NAMESPACE, not per operator. Operators that
+depend on each other must share a namespace — see the mcpGatewayOperator note in
+values.yaml — and rendering these per operator would then emit duplicates that
+ArgoCD refuses to apply.
 */}}
 
+{{- $namespaces := dict }}
 {{- range $key, $op := .Values.operators }}
-{{- if $op.enabled }}
+{{- if and $op.enabled (not (hasKey $namespaces $op.namespace)) }}
+{{- $_ := set $namespaces $op.namespace true }}
 ---
 apiVersion: v1
 kind: Namespace
@@ -41,9 +48,14 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "-3"
 spec:
-  # All four operators are AllNamespaces-mode only, so targetNamespaces is
+  # Every operator here is AllNamespaces-mode, so targetNamespaces is
   # deliberately empty rather than scoped.
   upgradeStrategy: Default
+{{- end }}
+{{- end }}
+
+{{- range $key, $op := .Values.operators }}
+{{- if $op.enabled }}
 ---
 apiVersion: operators.coreos.com/v1alpha1
 kind: Subscription
