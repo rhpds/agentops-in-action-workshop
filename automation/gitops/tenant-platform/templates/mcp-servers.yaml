@@ -1,19 +1,44 @@
 {{- $ns := printf "%s-%s" .Values.username .Values.namespaceSuffix -}}
 {{- $root := . -}}
 {{/*
-Three images, one per server, each with its entrypoint baked in. They remain
-stateless proxies onto plant-api (§2.8), which is why they can restart or
-reschedule freely and why the gateway needs no session affinity to them.
+The three MCP servers, run by RHOAI's MCP lifecycle operator rather than by
+Deployments we wrote ourselves.
 
-Separate images mean a change to one server no longer rebuilds and redeploys
-the other two — which matters once participants are editing per-server policy
-and an unrelated redeploy would disturb an exercise in progress.
+These were a hand-written Deployment and Service per server. An MCPServer is the
+same thing declared to the platform instead: the operator reconciles a
+Deployment, a Service and a NetworkPolicy from it, and publishes the endpoint on
+`status.address`. That is worth more than the YAML it saves — the lab's thesis
+is that the interesting work is infrastructure configuration, and running the
+tool servers on a Red Hat operator rather than on manifests we maintain is that
+thesis applied to ourselves.
+
+`source.type` accepts only `ContainerImage`, so this is only possible because
+the images are public in Quay. It cannot register an existing HTTP endpoint.
+
+`mcp.stateless: true` is a statement of fact, not a tuning knob. These are
+stateless proxies onto plant-api (§2.8), so the generated Service can use
+SessionAffinity None and load-balance freely; a stateful server would need
+ClientIP affinity, which is what the operator defaults to.
+
+What the operator does NOT provide is authorization — the CRD has no auth,
+policy, JWT or OIDC surface anywhere. Enforcement at the tool boundary remains a
+separate layer, and on RHOAI 3.5 there is no product CRD for it.
+
+One interaction to know about before module 4. The NetworkPolicy the operator
+generates allows ingress on the server port with no `from` selector. Kubernetes
+NetworkPolicies are additive, so it UNIONS with whatever baseline tenant-policy
+sets: a participant who tightens ingress there will find traffic still allowed,
+with nothing on screen explaining why, and the operator will recreate its policy
+if they delete it. That needs handling in the exercise, not in this file.
 */}}
 {{- range .Values.mcp.servers }}
 ---
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: mcp.x-k8s.io/v1alpha1
+kind: MCPServer
 metadata:
+  # The name becomes the Service name, and every consumer addresses these by
+  # Service name — the agent's tool URLs, the Hermes config, the golden
+  # workflow. It is not free to change.
   name: {{ .name }}
   namespace: {{ $ns }}
   labels:
@@ -24,68 +49,50 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "1"
 spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: {{ .name }}
-  template:
-    metadata:
-      labels:
-        app.kubernetes.io/name: {{ .name }}
-        app.kubernetes.io/component: mcp-server
-        app.kubernetes.io/part-of: water-plant
-    spec:
-      securityContext:
+  source:
+    type: ContainerImage
+    containerImage:
+      ref: {{ printf "%s/%s/%s:%s" $root.Values.image.registry $root.Values.image.namespace .repository $root.Values.image.mcpTag }}
+  mcp:
+    stateless: true
+  config:
+    # Required by the CRD — it rejects the resource without it rather than
+    # defaulting, and the error names the field.
+    port: 8080
+    path: /mcp
+    env:
+      - name: PLANT_API_URL
+        value: http://plant-api.{{ $ns }}.svc:8080
+      - name: MCP_PORT
+        value: "8080"
+      # The SDK enables DNS-rebinding protection by default and rejects any Host
+      # header not on its allow list. In-cluster the Host is a Service name or
+      # whatever a gateway forwards, so a restrictive value fails every call
+      # with an opaque 400. The real boundary here is policy plus NetworkPolicy,
+      # not a Host header check.
+      - name: MCP_ALLOWED_HOSTS
+        value: "*"
+  runtime:
+    replicas: 1
+    health:
+      readinessProbe:
+        tcpSocket:
+          port: 8080
+        initialDelaySeconds: 3
+        periodSeconds: 5
+    # Carried over unchanged from the Deployments these replace. The operator
+    # passes both through to the pod spec, so adopting it costs nothing in
+    # posture — worth checking on an operator upgrade rather than assuming.
+    security:
+      podSecurityContext:
         runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
-      containers:
-        - name: mcp
-          image: {{ printf "%s/%s/%s:%s" $root.Values.image.registry $root.Values.image.namespace .repository $root.Values.image.mcpTag }}
-          imagePullPolicy: {{ $root.Values.image.pullPolicy }}
-          ports:
-            - name: http
-              containerPort: 8080
-          env:
-            - name: PLANT_API_URL
-              value: http://plant-api.{{ $ns }}.svc:8080
-            - name: MCP_PORT
-              value: "8080"
-            # The SDK enables DNS-rebinding protection by default and rejects
-            # any Host header not on its allow list. In-cluster the Host is a
-            # Service name or whatever MCP Gateway forwards, so a restrictive
-            # value fails every call with an opaque 400. The real boundary here
-            # is the gateway plus NetworkPolicy, not a Host header check.
-            - name: MCP_ALLOWED_HOSTS
-              value: "*"
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: [ALL]
-          readinessProbe:
-            tcpSocket: { port: http }
-            initialDelaySeconds: 3
-            periodSeconds: 5
-          resources:
-            {{- toYaml $root.Values.mcp.resources | nindent 12 }}
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ .name }}
-  namespace: {{ $ns }}
-  labels:
-    app.kubernetes.io/name: {{ .name }}
-    app.kubernetes.io/component: mcp-server
-    app.kubernetes.io/part-of: water-plant
-  annotations:
-    argocd.argoproj.io/sync-wave: "1"
-spec:
-  selector:
-    app.kubernetes.io/name: {{ .name }}
-  ports:
-    - name: http
-      port: 8080
-      targetPort: http
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+    resources:
+      {{- toYaml $root.Values.mcp.resources | nindent 6 }}
 {{- end }}
