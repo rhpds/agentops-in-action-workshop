@@ -40,6 +40,11 @@ platform:
   imageNamespace: rh-aiservices-bu
   # Shared MLflow URL surfaced in the operator console. Empty renders no link.
   mlflowUrl: ""
+  # "waterplant" (our own agent) or "hermes". Per participant, so one attendee
+  # can be given the other harness without touching anyone else. Selecting
+  # hermes also needs a hermes-env Secret in that namespace — see
+  # tenant-platform values, agent.hermes.envSecret.
+  agentHarness: waterplant
 
 # ---------------------------------------------------------------------------
 # Per-tenant resource limits

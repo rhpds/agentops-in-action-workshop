@@ -45,6 +45,12 @@ spec:
           value: {{ .Values.platform.imageNamespace | quote }}
         - name: ui.mlflowUrl
           value: {{ .Values.platform.mlflowUrl | quote }}
+        # Which agent harness this participant gets. Forwarded so the choice
+        # belongs to the catalog item, rather than needing a commit to
+        # tenant-platform's values — which would also switch every participant
+        # at once, and is the opposite of what BYOA is meant to show.
+        - name: agent.harness
+          value: {{ .Values.platform.agentHarness | quote }}
   destination:
     server: https://kubernetes.default.svc
     namespace: {{ include "tenant.namespace" . }}
