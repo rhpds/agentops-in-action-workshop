@@ -1,0 +1,12 @@
+apiVersion: v2
+name: tenant-openshell
+description: >-
+  One participant's OpenShell gateway, the sandbox Hermes runs in, and the
+  bridge that supervises Hermes and relays the console to it.
+type: application
+version: 0.1.0
+# The OpenShell gateway chart is vendored, not declared as a dependency:
+# charts/helm-chart-0.0.92.tgz is `helm pull oci://ghcr.io/nvidia/openshell/helm-chart
+# --version 0.0.92`, digest sha256:39b994e91183af199a1d574da805a556287c052e562092308002e5893b8539ad.
+# Helm loads it from charts/ as-is, so ArgoCD renders without reaching ghcr.io
+# or needing an OCI repository registered, and the version cannot move.

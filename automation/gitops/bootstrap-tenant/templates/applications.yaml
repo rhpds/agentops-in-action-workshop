@@ -61,6 +61,12 @@ spec:
           value: {{ .Values.platform.mcpGateway | quote }}
         - name: keycloak.host
           value: {{ $keycloakHost | quote }}
+        # Where Hermes runs. With openshell, templates/openshell.yaml deploys the
+        # sandbox and its bridge, and the console is pointed at the bridge.
+        - name: agent.hermes.runtime
+          value: {{ .Values.platform.hermesRuntime | quote }}
+        - name: agent.hermes.openshellNamespaceSuffix
+          value: {{ .Values.openshellNamespaceSuffix | quote }}
   destination:
     server: https://kubernetes.default.svc
     namespace: {{ include "tenant.namespace" . }}
@@ -108,6 +114,12 @@ spec:
         # dangerously" starting point; module 5 turns it on.
         - name: mcpGateway.enforced
           value: {{ .Values.policy.mcpGatewayEnforced | quote }}
+        # Hermes in an OpenShell sandbox: this Application also holds the
+        # sandbox policy participants edit.
+        - name: openshell.enabled
+          value: {{ and (eq .Values.platform.agentHarness "hermes") (eq .Values.platform.hermesRuntime "openshell") | quote }}
+        - name: openshell.namespaceSuffix
+          value: {{ .Values.openshellNamespaceSuffix | quote }}
         # Whether this participant has a gateway at all. Without one, the
         # PostSync Job that restarts the gateway and agent has nothing to do.
         - name: mcpGateway.enabled

@@ -1,0 +1,51 @@
+{{- if .Values.openshell.enabled }}
+{{- if not .Values.keycloak.host }}
+{{- fail "openshell.enabled needs keycloak.host (forwarded by bootstrap-tenant): the sandbox must be allowed to fetch Hermes' MCP token" }}
+{{- end }}
+{{- $ns := printf "%s-%s" .Values.username .Values.openshell.namespaceSuffix -}}
+{{/*
+The OpenShell policy around Hermes' sandbox: which hosts which binaries may
+reach, and which paths Hermes can read and write.
+
+Permissive at baseline, deliberately: the same starting condition as
+networkPolicy.permissiveEgress and mcpGateway.enforced. Module 4 has
+participants tighten it until the poisoned maintenance record (MR-2291) can no
+longer send anything to diagnostics.example.com, while the golden workflow
+still passes.
+
+It lives in the participant's OpenShell namespace, beside the bridge that
+applies it, but belongs to this Application: participants edit it here, like
+every other policy. Participants can read ConfigMaps cluster-wide, so they can
+see what is loaded.
+
+What happens on sync:
+
+  * network rules  load into the running sandbox
+  * filesystem     a live sandbox accepts new paths but refuses to drop any, so
+                   a policy that removes one makes the bridge recreate the
+                   sandbox, and Hermes restarts in it
+  * either way     the bridge applies it within a minute or so, when the
+                   kubelet refreshes its mount. This Application's rollout Job
+                   also restarts the bridge, which applies it immediately.
+
+OpenShell refuses some policies outright: host `*`, `**`, TLD wildcards like
+`**.com`, a read-write `/`. The bridge logs the reason and keeps retrying; its
+supervisor log is where to look.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openshell-sandbox-policy
+  namespace: {{ $ns }}
+  labels:
+    rhdp.redhat.com/lab: agentops-in-action
+    rhdp.redhat.com/editable: "true"
+  annotations:
+    rhdp.redhat.com/lab-note: >-
+      Baseline sandbox policy is permissive: curl, wget, python and hermes may
+      reach *.example.com, where the poisoned maintenance record sends
+      diagnostics.
+data:
+  policy.yaml: |
+{{ include "tp.openshellPolicy" . | indent 4 }}
+{{- end }}

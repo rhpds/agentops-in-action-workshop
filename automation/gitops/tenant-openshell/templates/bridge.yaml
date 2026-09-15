@@ -1,0 +1,333 @@
+{{- include "to.checks" . -}}
+{{- $ns := include "to.namespace" . -}}
+{{- $agentops := include "to.agentopsNamespace" . -}}
+{{- $gwHost := include "to.gatewayHost" . -}}
+{{- $mcpHost := include "to.mcpGatewayHost" . -}}
+{{- $mcpUrl := printf "http://%s:8080/mcp" $mcpHost -}}
+{{/*
+The bridge between the console and Hermes in the sandbox.
+
+Two containers:
+
+  supervisor  Uses the openshell CLI to create the sandbox with its policy,
+              write Hermes' files, start Hermes and its token refresher inside
+              it, and expose Hermes through the gateway's relay. Then watches
+              Hermes through the relay, and the sandbox policy for changes, and
+              does it all again when either needs it.
+  relay-proxy nginx on :8787, forwarding to the relay with the gateway's client
+              certificate and the relay's Host header, unbuffered so streamed
+              replies stream.
+
+The sandbox policy participants edit is tenant-policy's openshell-sandbox-policy
+ConfigMap in this namespace, mounted at /policy. Until that Application has been
+synced it does not exist, and the supervisor uses the baseline shipped here
+(templates/_sandbox-policy.tpl), which is the same permissive starting point.
+
+Why a supervisor rather than something declarative. A sandbox pod always runs
+`sleep infinity`; the command given to `openshell sandbox create` is a one-off
+exec, not the pod's command (verified on cluster-tpss7). Processes started with
+`openshell sandbox exec` run inside the policy-enforced network namespace, which
+is the only place the relay can reach, but nothing restarts them if the sandbox
+pod restarts. The supervisor is that something.
+
+Why a proxy rather than pointing the console at the relay. The relay needs the
+gateway's client certificate, and the console runs where participants can read
+Secrets. With that certificate a participant could create sandboxes of any image
+as the privileged sandbox ServiceAccount. Here it stays in a namespace they
+cannot read. The console keeps speaking plain HTTP to a Service named
+hermes-agent on 8787, exactly as it does to the plain Hermes Deployment.
+
+Why the relay's Host header. The relay routes on Host, not on SNI or address
+(verified: gateway Service DNS name plus Host: <relay host> -> 200, without it
+-> 404). The gateway certificate already covers the Service name, so no
+hostAliases or pinned ClusterIP is needed.
+
+Restarting this Deployment restarts Hermes: the supervisor stops any running
+Hermes before starting its own. tenant-policy's rollout Job relies on that.
+*/}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: hermes-openshell-bridge
+  namespace: {{ $ns }}
+  labels:
+    {{- include "to.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+---
+# The model key and Hermes' server key live in the lab namespace, where tenant
+# provisioning creates them for the plain Hermes Deployment too. Read access to
+# that one Secret, nothing else there.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: hermes-openshell-bridge-env
+  namespace: {{ $agentops }}
+  labels:
+    {{- include "to.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: [{{ .Values.hermes.envSecret | quote }}]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: hermes-openshell-bridge-env
+  namespace: {{ $agentops }}
+  labels:
+    {{- include "to.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: hermes-openshell-bridge-env
+subjects:
+  - kind: ServiceAccount
+    name: hermes-openshell-bridge
+    namespace: {{ $ns }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hermes-openshell-bridge
+  namespace: {{ $ns }}
+  labels:
+    {{- include "to.labels" . | nindent 4 }}
+data:
+  supervisor.sh: |
+{{ .Files.Get "files/bridge-supervisor.sh" | indent 4 }}
+  mcp-token-refresh.py: |
+{{ .Files.Get "files/mcp-token-refresh.py" | indent 4 }}
+  wait-for-gateway.py: |
+{{ .Files.Get "files/wait-for-gateway.py" | indent 4 }}
+  # Hermes' config. The supervisor appends the model block, which carries the
+  # key, so the key never reaches a manifest.
+  hermes-config.yaml: |
+    mcp_servers:
+      # One endpoint: this participant's MCP Gateway. `auth: oauth` makes Hermes
+      # send the token mcp-token-refresh.py keeps at
+      # $HERMES_HOME/mcp-tokens/gateway.json.
+      gateway:
+        url: {{ $mcpUrl | quote }}
+        transport: streamable-http
+        auth: oauth
+        ssl_verify: false
+        enabled: true
+        timeout: {{ .Values.hermes.mcpTimeoutSeconds }}
+        connect_timeout: 30
+
+    # The relay strips Authorization before a request reaches Hermes; the
+    # gateway's mTLS has already authenticated the caller. skip_auth, a patch in
+    # this image, accepts loopback callers without a bearer, and only when set
+    # under `extra`. See hermes/README.md in the agent repo.
+    platforms:
+      api_server:
+        enabled: true
+        extra:
+          skip_auth: true
+  # The sandbox policy used until tenant-policy's openshell-sandbox-policy
+  # exists. See templates/_sandbox-policy.tpl.
+  baseline-policy.yaml: |
+{{ include "to.baselinePolicy" . | indent 4 }}
+  # __GATEWAY_HOST__ and __RELAY_HOST__ are filled in by the supervisor once the
+  # relay exists; nginx waits for the rendered file.
+  nginx.conf.template: |
+    daemon off;
+    worker_processes 1;
+    pid /tmp/nginx.pid;
+    error_log /dev/stderr warn;
+    events { worker_connections 256; }
+    http {
+      access_log /dev/stdout;
+      client_body_temp_path /tmp/nginx-client-body;
+      proxy_temp_path /tmp/nginx-proxy;
+      fastcgi_temp_path /tmp/nginx-fastcgi;
+      uwsgi_temp_path /tmp/nginx-uwsgi;
+      scgi_temp_path /tmp/nginx-scgi;
+      server {
+        listen {{ .Values.bridge.port }};
+        location / {
+          proxy_pass https://__GATEWAY_HOST__:8080;
+          proxy_http_version 1.1;
+          proxy_set_header Host __RELAY_HOST__;
+          proxy_set_header Connection "";
+          proxy_ssl_certificate /mtls/tls.crt;
+          proxy_ssl_certificate_key /mtls/tls.key;
+          proxy_ssl_trusted_certificate /mtls/ca.crt;
+          proxy_ssl_verify on;
+          proxy_ssl_verify_depth 2;
+          proxy_ssl_name __GATEWAY_HOST__;
+          proxy_ssl_server_name on;
+          # Streamed replies: no buffering either way, and room for a long turn.
+          proxy_buffering off;
+          proxy_request_buffering off;
+          proxy_read_timeout 600s;
+          proxy_send_timeout 600s;
+          client_max_body_size 10m;
+        }
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hermes-openshell-bridge
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: hermes-openshell-bridge
+    {{- include "to.labels" . | nindent 4 }}
+  annotations:
+    # After the gateway (wave 0), whose client certificate this mounts.
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  replicas: 1
+  # Two supervisors would fight over one sandbox.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: hermes-openshell-bridge
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: hermes-openshell-bridge
+        {{- include "to.labels" . | nindent 8 }}
+      annotations:
+        # Roll the bridge, and so Hermes, when its script or any value changes.
+        checksum/bridge: {{ printf "%s%s%s" (.Files.Get "files/bridge-supervisor.sh") (.Files.Get "files/wait-for-gateway.py") (toJson .Values) | sha256sum }}
+    spec:
+      serviceAccountName: hermes-openshell-bridge
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: get-openshell-cli
+          image: {{ .Values.bridge.cliImage }}
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+              curl -fsSL "https://github.com/NVIDIA/OpenShell/releases/download/{{ .Values.bridge.cliVersion }}/openshell-x86_64-unknown-linux-musl.tar.gz" \
+                | tar -xz -C /tools openshell
+              chmod +x /tools/openshell
+              /tools/openshell --version
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+          resources:
+            {{- toYaml .Values.bridge.resources | nindent 12 }}
+          volumeMounts:
+            - { name: tools, mountPath: /tools }
+      containers:
+        - name: supervisor
+          image: {{ .Values.bridge.cliImage }}
+          command: ["bash", "/config/supervisor.sh"]
+          env:
+            - { name: HOME, value: /tmp }
+            - { name: SANDBOX_NAME, value: {{ .Values.sandbox.name | quote }} }
+            - { name: IMAGE_REF, value: {{ .Values.sandbox.image | quote }} }
+            - { name: SANDBOX_CPU, value: {{ .Values.sandbox.cpu | quote }} }
+            - { name: SANDBOX_MEMORY, value: {{ .Values.sandbox.memory | quote }} }
+            - { name: API_PORT, value: {{ .Values.sandbox.apiPort | quote }} }
+            - { name: GATEWAY_HOST, value: {{ $gwHost | quote }} }
+            - { name: AGENTOPS_NS, value: {{ $agentops | quote }} }
+            - { name: HERMES_ENV_SECRET, value: {{ .Values.hermes.envSecret | quote }} }
+            - { name: HEALTH_CHECK_SECONDS, value: {{ .Values.bridge.healthCheckSeconds | quote }} }
+            - { name: TOKEN_REFRESH_SECONDS, value: {{ .Values.hermes.tokenRefreshSeconds | quote }} }
+            - { name: MODEL_BASE_URL, value: {{ .Values.model.baseUrl | quote }} }
+            - { name: MODEL_DEFAULT, value: {{ .Values.model.model | quote }} }
+            - { name: MCP_GATEWAY_URL, value: {{ $mcpUrl | quote }} }
+            - { name: MCP_WAIT_SECONDS, value: {{ .Values.hermes.mcpWaitSeconds | quote }} }
+            - name: MCP_PREFIXES
+              value: "{{ range $i, $s := .Values.mcpGateway.servers }}{{ if $i }},{{ end }}{{ trimSuffix "-mcp" $s }}_{{ end }}"
+            - { name: MCP_SERVER_NAME, value: gateway }
+            - { name: MCP_CLIENT_ID, value: {{ .Values.keycloak.agentClientId | quote }} }
+            - { name: MCP_USERNAME, value: {{ .Values.keycloak.agentUser | quote }} }
+            - { name: MCP_PASSWORD, value: {{ .Values.keycloak.agentPassword | quote }} }
+            - name: MCP_TOKEN_URL
+              value: {{ printf "https://%s/realms/waterplant-%s/protocol/openid-connect/token" .Values.keycloak.host .Values.username | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+          resources:
+            {{- toYaml .Values.bridge.resources | nindent 12 }}
+          volumeMounts:
+            - { name: tools, mountPath: /tools }
+            - { name: config, mountPath: /config, readOnly: true }
+            - { name: policy, mountPath: /policy, readOnly: true }
+            - { name: mtls, mountPath: /mtls, readOnly: true }
+            - { name: shared, mountPath: /shared }
+        - name: relay-proxy
+          image: {{ .Values.bridge.proxyImage }}
+          command:
+            - sh
+            - -c
+            - |
+              echo "waiting for the supervisor to expose Hermes"
+              until [ -s /shared/nginx.conf ]; do sleep 2; done
+              exec nginx -c /shared/nginx.conf
+          ports:
+            - name: http
+              containerPort: {{ .Values.bridge.port }}
+          # Ready only when Hermes answers through the whole path: nginx, the
+          # relay, the sandbox. A rollout of this Deployment waits for that.
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+          resources:
+            {{- toYaml .Values.bridge.proxyResources | nindent 12 }}
+          volumeMounts:
+            - { name: mtls, mountPath: /mtls, readOnly: true }
+            - { name: shared, mountPath: /shared, readOnly: true }
+      volumes:
+        - name: tools
+          emptyDir: {}
+        - name: shared
+          emptyDir: {}
+        - name: config
+          configMap:
+            name: hermes-openshell-bridge
+        # The participant's sandbox policy, owned by tenant-policy. Optional:
+        # until that Application syncs, the supervisor uses the baseline above.
+        # The kubelet refreshes it in place, and the supervisor re-applies the
+        # policy when its content changes.
+        - name: policy
+          configMap:
+            name: openshell-sandbox-policy
+            optional: true
+        # Created by the gateway chart's certgen hook, before this Deployment.
+        - name: mtls
+          secret:
+            secretName: openshell-client-tls
+---
+# Same name and port as the plain Hermes Service, so the console's contract does
+# not change with the runtime.
+apiVersion: v1
+kind: Service
+metadata:
+  name: hermes-agent
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: hermes-openshell-bridge
+    {{- include "to.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  selector:
+    app.kubernetes.io/name: hermes-openshell-bridge
+  ports:
+    - name: http
+      port: {{ .Values.bridge.port }}
+      targetPort: http

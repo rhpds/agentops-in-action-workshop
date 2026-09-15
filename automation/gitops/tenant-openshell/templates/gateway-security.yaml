@@ -1,0 +1,139 @@
+{{- include "to.checks" . -}}
+{{- $ns := include "to.namespace" . -}}
+{{- $gw := include "to.gatewayName" . -}}
+{{- $agentops := include "to.agentopsNamespace" . -}}
+{{/*
+What the vendored chart leaves out, on OpenShift.
+
+The sandbox ServiceAccount needs the privileged SCC: sandbox pods run as root
+with SYS_ADMIN, NET_ADMIN and SYS_PTRACE so the supervisor can set up Landlock
+and the sandbox's network namespace. The grant is a RoleBinding, confined to
+this namespace, which participants have no rights in.
+
+And ingress is closed down:
+
+  gateway   only from this namespace: the bridge (CLI and relay) and sandbox
+            callbacks. Participants' pods cannot reach its API.
+  sandbox   only the gateway's exec tunnel on 2222. The relay needs no ingress;
+            it rides the sandbox's outbound connection. The chart ships a policy
+            for this, but it selects openshell.ai/managed-by, which is not on
+            the pods; they carry only agents.x-k8s.io/sandbox-name-hash.
+  bridge    only from the participant's lab namespace, where the console runs.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $gw }}-sandbox-privileged-scc
+  namespace: {{ $ns }}
+  labels:
+    {{- include "to.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:openshift:scc:privileged
+subjects:
+  - kind: ServiceAccount
+    name: {{ $gw }}-sandbox
+    namespace: {{ $ns }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: openshell-gateway-ingress
+  namespace: {{ $ns }}
+  labels:
+    {{- include "to.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: openshell
+      app.kubernetes.io/instance: {{ $gw }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: openshell-sandbox-ingress
+  namespace: {{ $ns }}
+  labels:
+    {{- include "to.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: agents.x-k8s.io/sandbox-name-hash
+        operator: Exists
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: openshell
+              app.kubernetes.io/instance: {{ $gw }}
+      ports:
+        - port: 2222
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: hermes-openshell-bridge-ingress
+  namespace: {{ $ns }}
+  labels:
+    {{- include "to.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: hermes-openshell-bridge
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $agentops }}
+      ports:
+        - port: {{ .Values.bridge.port }}
+          protocol: TCP
+{{- if .Values.policyRollout.enabled }}
+---
+# tenant-policy's mcp-gateway-rollout Job runs in the lab namespace and restarts
+# the bridge here after a policy sync.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Values.policyRollout.serviceAccount }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "to.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Values.policyRollout.serviceAccount }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "to.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Values.policyRollout.serviceAccount }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.policyRollout.serviceAccount }}
+    namespace: {{ $agentops }}
+{{- end }}

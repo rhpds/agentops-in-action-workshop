@@ -1,0 +1,176 @@
+# Participant username. bootstrap-tenant forwards it, and names the Helm release
+# <username>-openshell (see templates/_helpers.tpl for why the name matters).
+username: user1
+# The participant's lab namespace is <username>-<namespaceSuffix>; this chart
+# deploys into <username>-<openshellNamespaceSuffix>.
+namespaceSuffix: agentops
+openshellNamespaceSuffix: openshell
+
+# ---------------------------------------------------------------------------
+# The vendored OpenShell gateway chart (charts/helm-chart-0.0.92.tgz).
+#
+# Its own namespace per participant, which participants have no rights in, for
+# two reasons found on cluster-tpss7:
+#
+#   * Sandbox pods run under the privileged SCC as root with SYS_ADMIN,
+#     NET_ADMIN and SYS_PTRACE: that is how the supervisor enforces Landlock and
+#     network namespaces. Participants have `edit` in <username>-agentops, which
+#     lets them start a pod as any ServiceAccount there, so the sandbox
+#     ServiceAccount must not live there.
+#   * The gateway's client certificate opens every sandbox behind it, and the
+#     relay strips Authorization before Hermes sees it. One gateway per
+#     participant means one certificate can only ever reach its owner's agent.
+# ---------------------------------------------------------------------------
+helm-chart:
+  # OpenShift assigns UIDs from the namespace range; the chart's fixed 1000 and
+  # fsGroup would be rejected by restricted-v2.
+  podSecurityContext:
+    fsGroup: null
+  securityContext:
+    runAsUser: null
+  server:
+    auth:
+      # Callers are already authenticated by the gateway's mTLS, and only the
+      # bridge in this namespace holds the client certificate.
+      allowUnauthenticatedUsers: true
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits:   { cpu: 500m, memory: 512Mi }
+
+# ---------------------------------------------------------------------------
+# The sandbox Hermes runs in.
+# ---------------------------------------------------------------------------
+sandbox:
+  name: hermes
+  image: quay.io/rh-aiservices-bu/waterplant-hermes:latest
+  # Limits on the sandbox pod. This namespace has no quota of its own.
+  cpu: "2"
+  memory: 4Gi
+  # Hermes' API server, on the sandbox's loopback. The relay reaches it there.
+  apiPort: 8080
+
+# ---------------------------------------------------------------------------
+# The sandbox policy until tenant-policy has been synced.
+#
+# Participants edit their own copy in tenant-policy (openshell values), which
+# the bridge prefers as soon as it exists. Keep this in step with it: both are
+# the lab's "works, but dangerously" starting point.
+#
+# OpenShell has no "allow everything". Every egress rule names hosts and the
+# binaries that may use them; `*`, `**` and TLD wildcards like `**.com` are
+# refused (verified on cluster-tpss7). So the permissive baseline is a
+# deliberately generous named list, including *.example.com, which is where
+# the poisoned maintenance record MR-2291 tells the agent to upload logs.
+#
+# Filesystem rules are fixed when a sandbox is created: a live sandbox accepts
+# new paths but refuses to drop any. The bridge recreates the sandbox when a
+# policy removes one.
+# ---------------------------------------------------------------------------
+baselinePolicy:
+  permissiveEgress: true
+  broadOutbound:
+    hosts:
+      - example.com
+      - "*.example.com"
+      - httpbin.org
+      - github.com
+      - "*.github.com"
+      - "*.githubusercontent.com"
+      - pypi.org
+      - files.pythonhosted.org
+      - duckduckgo.com
+      - "*.duckduckgo.com"
+      - openrouter.ai
+    ports: [443, 80]
+    binaries:
+      - /usr/bin/curl
+      - /usr/bin/wget
+      - /usr/bin/python3
+      - /usr/bin/python3.12
+      - /usr/local/bin/hermes
+      - /usr/bin/bash
+      - /usr/bin/sh
+  # Only paths that exist in the Hermes image: OpenShell ignores a missing one,
+  # so listing it would give participants a rule whose removal changes nothing.
+  # /lib, /lib64, /bin and /sbin are symlinks into /usr there.
+  filesystem:
+    readOnly:
+      - /usr
+      - /lib
+      - /lib64
+      - /bin
+      - /sbin
+      - /proc
+      - /dev/urandom
+      - /etc
+      - /opt
+      - /var/log
+    readWrite:
+      - /sandbox
+      - /workspace
+      - /tmp
+      - /dev/null
+      - /dev/zero
+
+# ---------------------------------------------------------------------------
+# The bridge: one Deployment that sets up and supervises Hermes in the sandbox,
+# and proxies the console to it through the gateway's relay.
+# ---------------------------------------------------------------------------
+bridge:
+  # Also the console's agent port (tenant-platform agent.hermes.port).
+  port: 8787
+  # The openshell CLI, downloaded from the GitHub release at start. v0.0.88 is
+  # the CLI verified against the 0.0.92 gateway on cluster-tpss7.
+  cliVersion: v0.0.88
+  # The RHEL 9 build: the supervisor runs the token refresher, which needs
+  # Python 3.7+. The RHEL 8 ose-cli ships 3.6.8 and fails on
+  # `from __future__ import annotations` (seen on cluster-tpss7).
+  cliImage: registry.redhat.io/openshift4/ose-cli-rhel9:latest
+  proxyImage: registry.redhat.io/rhel9/nginx-124:latest
+  # How often the supervisor checks Hermes through the relay. Three failures
+  # in a row and it sets the sandbox up again.
+  healthCheckSeconds: 20
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits:   { cpu: 500m, memory: 256Mi }
+  proxyResources:
+    requests: { cpu: 20m, memory: 32Mi }
+    limits:   { cpu: 200m, memory: 128Mi }
+
+hermes:
+  # MODEL_API_KEY and API_SERVER_KEY, in the participant's lab namespace. The
+  # bridge reads it there; see templates/bridge.yaml.
+  envSecret: hermes-env
+  mcpTimeoutSeconds: 120
+  # How long the bridge waits for the MCP gateway to list every server's tools
+  # before starting Hermes, which lists tools only once.
+  mcpWaitSeconds: 300
+  tokenRefreshSeconds: 300
+
+# Must match tenant-platform agent.litellm.
+model:
+  baseUrl: "https://maas-rhdp.apps.maas.redhatworkshops.io/v1"
+  model: "qwen3-235b"
+
+# Must match tenant-platform's mcpGateway and mcp.servers.
+mcpGateway:
+  gatewayName: mcp-gateway
+  gatewayClassName: data-science-gateway-class
+  servers:
+    - telemetry-mcp
+    - maintenance-mcp
+    - control-mcp
+
+# Same identity as the plain Hermes Deployment: the realm's operator user.
+keycloak:
+  # Forwarded by bootstrap-tenant. Required.
+  host: ""
+  agentClientId: mcp-gateway
+  agentUser: operator
+  agentPassword: operator
+
+# Lets tenant-policy's mcp-gateway-rollout Job restart the bridge after a policy
+# sync, which restarts Hermes in the sandbox.
+policyRollout:
+  enabled: true
+  serviceAccount: mcp-policy-rollout
