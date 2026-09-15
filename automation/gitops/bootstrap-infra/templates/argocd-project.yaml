@@ -30,6 +30,10 @@ spec:
     # Per-participant namespaces, one per attendee.
     - namespace: '*-{{ .Values.lab.namespaceSuffix }}'
       server: https://kubernetes.default.svc
+    # Per-participant OpenShell namespaces: the gateway, the Hermes sandbox and
+    # its bridge (tenant-openshell).
+    - namespace: '*-{{ .Values.lab.openshellNamespaceSuffix }}'
+      server: https://kubernetes.default.svc
     # bootstrap-tenant creates the two per-participant Applications here.
     - namespace: {{ .Values.lab.argocdNamespace }}
       server: https://kubernetes.default.svc

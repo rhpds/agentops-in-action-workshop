@@ -246,6 +246,18 @@ agent:
   # tini and runs non-root, which is what OpenShift needs.
   #
   hermes:
+    # Where Hermes runs:
+    #
+    #   pod        a plain Deployment in this namespace (templates/agent-hermes.yaml)
+    #   openshell  inside an OpenShell sandbox in <username>-<openshellNamespaceSuffix>,
+    #              deployed by the tenant-openshell chart. This chart then only
+    #              points the console at that namespace's bridge and lets it reach
+    #              the MCP gateway (templates/agent-hermes-openshell.yaml).
+    #
+    # pod here so the chart renders standalone; bootstrap-tenant forwards the
+    # lab's choice.
+    runtime: pod
+    openshellNamespaceSuffix: openshell
     # Built from hermes/Containerfile in the agent repo and pushed to the same
     # Quay org as everything else. It layers hermes-agent's optional [mcp]
     # extra on, which the base image ships without — and without it the MCP

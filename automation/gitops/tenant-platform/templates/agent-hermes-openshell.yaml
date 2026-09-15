@@ -1,0 +1,40 @@
+{{- if and (eq .Values.agent.harness "hermes") (eq (.Values.agent.hermes.runtime | default "pod") "openshell") }}
+{{- if not .Values.mcpGateway.enabled }}
+{{- fail "agent.hermes.runtime openshell reaches tools only through this participant's MCP Gateway; set mcpGateway.enabled" }}
+{{- end }}
+{{- $ns := printf "%s-%s" .Values.username .Values.namespaceSuffix -}}
+{{- $openshellNs := printf "%s-%s" .Values.username .Values.agent.hermes.openshellNamespaceSuffix -}}
+{{/*
+Hermes in an OpenShell sandbox: the lab-namespace side.
+
+Hermes, its sandbox and the bridge the console talks to are all in the
+participant's OpenShell namespace, deployed by the tenant-openshell chart. ui.yaml
+points the console at the bridge. This lets that namespace's sandbox, and the
+bridge's readiness check, reach this participant's MCP Gateway, which otherwise
+only accepts traffic from inside this namespace.
+
+Envoy pods only. The MCP servers stay reachable from the gateway alone
+(bootstrap-infra's AdminNetworkPolicy), so the sandbox cannot go around it.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mcp-gateway-from-openshell
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/part-of: water-plant
+    rhdp.redhat.com/lab: agentops-in-action
+spec:
+  podSelector:
+    matchLabels:
+      gateway.networking.k8s.io/gateway-name: {{ .Values.mcpGateway.gatewayName }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $openshellNs }}
+      ports:
+        - port: 8080
+          protocol: TCP
+{{- end }}

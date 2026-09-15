@@ -1,4 +1,4 @@
-{{- if eq .Values.agent.harness "hermes" }}
+{{- if and (eq .Values.agent.harness "hermes") (eq (.Values.agent.hermes.runtime | default "pod") "pod") }}
 {{- $ns := printf "%s-%s" .Values.username .Values.namespaceSuffix -}}
 {{- $viaGateway := .Values.mcpGateway.enabled -}}
 {{- $gwSvc := printf "%s-%s.%s.svc.cluster.local" .Values.mcpGateway.gatewayName .Values.mcpGateway.gatewayClassName $ns -}}

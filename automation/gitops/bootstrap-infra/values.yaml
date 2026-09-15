@@ -12,6 +12,10 @@ lab:
   # Per-participant namespace is <username>-<namespaceSuffix>. Must match
   # namespaceSuffix in bootstrap-tenant, tenant-platform and tenant-policy.
   namespaceSuffix: agentops
+  # Each participant's OpenShell gateway and Hermes sandbox run in
+  # <username>-<openshellNamespaceSuffix>, which participants have no rights in.
+  # Must match bootstrap-tenant and tenant-openshell.
+  openshellNamespaceSuffix: openshell
   # Where the RHDP-provisioned Keycloak runs. Each participant's realm is a
   # KeycloakRealmImport, which must live beside the Keycloak CR, so tenant
   # Applications need this as an allowed destination.

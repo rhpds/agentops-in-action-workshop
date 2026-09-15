@@ -54,7 +54,14 @@ spec:
             */}}
             {{- if eq .Values.agent.harness "hermes" }}
             - name: AGENT_URL
+              {{- if eq (.Values.agent.hermes.runtime | default "pod") "openshell" }}
+              # The bridge in the participant's OpenShell namespace, which relays
+              # to Hermes in the sandbox. Same Service name, port and protocol as
+              # the plain Deployment, so nothing else here changes.
+              value: {{ .Values.ui.agentUrl | default (printf "http://hermes-agent.%s-%s.svc:%v" .Values.username .Values.agent.hermes.openshellNamespaceSuffix .Values.agent.hermes.port) | quote }}
+              {{- else }}
               value: {{ .Values.ui.agentUrl | default (printf "http://hermes-agent.%s.svc:%v" $ns .Values.agent.hermes.port) | quote }}
+              {{- end }}
             - name: AGENT_PROTOCOL
               value: openai
             - name: AGENT_MODEL

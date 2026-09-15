@@ -1,6 +1,10 @@
 {{- if .Values.mcpGateway.enabled }}
 {{- $ns := printf "%s-%s" .Values.username .Values.namespaceSuffix -}}
 {{- $r := .Values.mcpGateway.rollout -}}
+{{- $clients := list -}}
+{{- range $r.clientDeployments }}
+{{- $clients = append $clients (replace "{username}" $.Values.username .) -}}
+{{- end }}
 {{/*
 Makes a policy sync actually take effect on the gateway, and on the agent.
 
@@ -26,7 +30,11 @@ So, in order:
   3. Probe the gateway rather than trusting status: an unauthenticated
      initialize must return 401 when enforced and 200 when not, three times
      running. If it doesn't settle, restart it again (up to three times).
-  4. Restart the MCP clients, which reconnect and list tools again.
+  4. Restart the MCP clients, which reconnect and list tools again. An entry
+     is a Deployment in this namespace, or <namespace>/<name>: Hermes in an
+     OpenShell sandbox is restarted by restarting its bridge in
+     <username>-openshell, which grants this Job that (tenant-openshell).
+     Entries whose Deployment does not exist are skipped.
 
 The sync stays in progress until all of that finishes. So "Synced" on this
 Application means the gateway enforces what the policy says and the agent is
@@ -80,7 +88,7 @@ spec:
             - name: ENFORCED
               value: {{ .Values.mcpGateway.enforced | quote }}
             - name: CLIENTS
-              value: {{ join " " $r.clientDeployments | quote }}
+              value: {{ join " " $clients | quote }}
           resources:
             requests:
               cpu: 50m
@@ -166,11 +174,15 @@ spec:
               log "gateway answers an unauthenticated initialize with $EXPECT"
 
               # 4. The agent's MCP session did not survive the gateway restart.
-              for d in $CLIENTS; do
-                oc get deploy "$d" -n "$NS" >/dev/null 2>&1 || continue
-                log "restarting $d"
-                oc rollout restart "deploy/$d" -n "$NS" >/dev/null || fail "could not restart $d"
-                oc rollout status "deploy/$d" -n "$NS" --timeout=600s || fail "$d did not come back"
+              for entry in $CLIENTS; do
+                case "$entry" in
+                  */*) dns="${entry%%/*}"; d="${entry#*/}" ;;
+                  *)   dns="$NS"; d="$entry" ;;
+                esac
+                oc get deploy "$d" -n "$dns" >/dev/null 2>&1 || continue
+                log "restarting $dns/$d"
+                oc rollout restart "deploy/$d" -n "$dns" >/dev/null || fail "could not restart $dns/$d"
+                oc rollout status "deploy/$d" -n "$dns" --timeout=600s || fail "$dns/$d did not come back"
               done
               log "policy is live on the gateway and the agent has reconnected"
 {{- end }}

@@ -37,11 +37,14 @@ mcpGateway:
     image: registry.redhat.io/openshift4/ose-cli:latest
     # Created by tenant-platform (templates/mcp-policy-rollout-rbac.yaml).
     serviceAccount: mcp-policy-rollout
-    # MCP clients to restart after the gateway. Whichever harness isn't
-    # deployed is skipped.
+    # MCP clients to restart after the gateway: a Deployment in the lab
+    # namespace, or <namespace>/<name>, with {username} filled in. Any that
+    # isn't deployed is skipped, so every harness and runtime can be listed.
     clientDeployments:
       - hermes-agent
       - waterplant-agent
+      # Hermes in an OpenShell sandbox: restarting its bridge restarts Hermes.
+      - "{username}-openshell/hermes-openshell-bridge"
     # Covers up to three gateway restarts plus the agent's rollout.
     timeoutSeconds: 1200
 

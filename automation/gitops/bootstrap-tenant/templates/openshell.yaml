@@ -1,0 +1,71 @@
+{{- if and (eq .Values.platform.agentHarness "hermes") (eq .Values.platform.hermesRuntime "openshell") }}
+{{- $keycloakHost := .Values.keycloak.host | default (printf "sso.%s" .Values.deployer.domain) -}}
+{{- $user := include "tenant.username" . -}}
+{{- $ns := printf "%s-%s" $user .Values.openshellNamespaceSuffix -}}
+{{/*
+The participant's OpenShell namespace and the Application that fills it: their
+own OpenShell gateway, the sandbox Hermes runs in, and the bridge the console
+talks to. See tenant-openshell.
+
+Its own namespace, and the participant gets no RoleBinding in it, unlike
+<username>-agentops where they have edit. Sandbox pods run privileged, and the
+gateway's client certificate opens every sandbox behind it; neither belongs
+where a participant can start pods or read Secrets.
+
+Platform-owned, so auto-sync with self-heal like the platform Application.
+*/}}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $ns }}
+  labels:
+    app.kubernetes.io/managed-by: argocd
+    rhdp.redhat.com/lab: agentops-in-action
+    rhdp.redhat.com/participant: {{ $user }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{ $user }}-openshell
+  namespace: {{ .Values.gitops.argocdNamespace }}
+  annotations:
+    # After the platform Application (10): the bridge waits for this
+    # participant's MCP Gateway and realm, which that one creates.
+    argocd.argoproj.io/sync-wave: "15"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: {{ .Values.gitops.argocdProject }}
+  source:
+    repoURL: {{ .Values.gitops.repoURL }}
+    targetRevision: {{ .Values.gitops.targetRevision }}
+    path: automation/gitops/tenant-openshell
+    helm:
+      # The vendored OpenShell chart names its Service and its cluster-scoped
+      # RBAC after the release, so it must be unique per participant.
+      releaseName: {{ $user }}-openshell
+      parameters:
+        - name: username
+          value: {{ $user | quote }}
+        - name: namespaceSuffix
+          value: {{ .Values.namespaceSuffix | quote }}
+        - name: openshellNamespaceSuffix
+          value: {{ .Values.openshellNamespaceSuffix | quote }}
+        - name: keycloak.host
+          value: {{ $keycloakHost | quote }}
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: {{ $ns }}
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: true
+    syncOptions:
+      # Created above, at an earlier sync wave.
+      - CreateNamespace=false
+    retry:
+      limit: 5
+      backoff: { duration: 15s, factor: 2, maxDuration: 3m }
+{{- end }}
