@@ -4,20 +4,24 @@
 {{- $gwHost := include "to.gatewayHost" . -}}
 {{- $mcpHost := include "to.mcpGatewayHost" . -}}
 {{- $mcpUrl := printf "http://%s:8080/mcp" $mcpHost -}}
-{{- $modelHost := regexReplaceAll "^https?://([^/:]+).*$" .Values.model.baseUrl "${1}" -}}
 {{/*
 The bridge between the console and Hermes in the sandbox.
 
 Two containers:
 
-  supervisor  Uses the openshell CLI to create the sandbox, apply its policy,
+  supervisor  Uses the openshell CLI to create the sandbox with its policy,
               write Hermes' files, start Hermes and its token refresher inside
               it, and expose Hermes through the gateway's relay. Then watches
-              Hermes through the relay and does it all again if it stops
-              answering.
+              Hermes through the relay, and the sandbox policy for changes, and
+              does it all again when either needs it.
   relay-proxy nginx on :8787, forwarding to the relay with the gateway's client
               certificate and the relay's Host header, unbuffered so streamed
               replies stream.
+
+The sandbox policy participants edit is tenant-policy's openshell-sandbox-policy
+ConfigMap in this namespace, mounted at /policy. Until that Application has been
+synced it does not exist, and the supervisor uses the baseline shipped here
+(templates/_sandbox-policy.tpl), which is the same permissive starting point.
 
 Why a supervisor rather than something declarative. A sandbox pod always runs
 `sleep infinity`; the command given to `openshell sandbox create` is a one-off
@@ -126,65 +130,10 @@ data:
         enabled: true
         extra:
           skip_auth: true
-  # OpenShell policy. Egress is an allowlist; anything not named is refused.
-  policy.yaml: |
-    version: 1
-
-    filesystem_policy:
-      include_workdir: true
-      read_only:
-        - /usr
-        - /lib
-        - /lib64
-        - /bin
-        - /sbin
-        - /proc
-        - /dev/urandom
-        - /etc
-        - /app
-        - /opt
-        - /var/log
-      read_write:
-        - /sandbox
-        - /workspace
-        - /tmp
-        - /home/sandbox
-        - /dev/null
-        - /dev/zero
-
-    landlock:
-      compatibility: best_effort
-
-    process:
-      run_as_user: sandbox
-      run_as_group: sandbox
-
-    network_policies:
-      model_endpoint:
-        name: "Model endpoint"
-        endpoints:
-          - { host: {{ $modelHost | quote }}, port: 443, protocol: rest, enforcement: enforce, access: full }
-        binaries:
-          - { path: /usr/bin/python3 }
-          - { path: /usr/bin/python3.12 }
-          - { path: /usr/local/bin/hermes }
-      # Tools only through this participant's gateway. There is deliberately no
-      # rule for the MCP servers themselves.
-      mcp_gateway:
-        name: "MCP Gateway"
-        endpoints:
-          - { host: {{ $mcpHost | quote }}, port: 8080, protocol: rest, enforcement: enforce, access: full }
-        binaries:
-          - { path: /usr/bin/python3 }
-          - { path: /usr/bin/python3.12 }
-          - { path: /usr/local/bin/hermes }
-      keycloak_token:
-        name: "Keycloak token endpoint (mcp-token-refresh.py)"
-        endpoints:
-          - { host: {{ .Values.keycloak.host | quote }}, port: 443, protocol: rest, enforcement: enforce, access: full }
-        binaries:
-          - { path: /usr/bin/python3 }
-          - { path: /usr/bin/python3.12 }
+  # The sandbox policy used until tenant-policy's openshell-sandbox-policy
+  # exists. See templates/_sandbox-policy.tpl.
+  baseline-policy.yaml: |
+{{ include "to.baselinePolicy" . | indent 4 }}
   # __GATEWAY_HOST__ and __RELAY_HOST__ are filled in by the supervisor once the
   # relay exists; nginx waits for the rendered file.
   nginx.conf.template: |
@@ -312,6 +261,7 @@ spec:
           volumeMounts:
             - { name: tools, mountPath: /tools }
             - { name: config, mountPath: /config, readOnly: true }
+            - { name: policy, mountPath: /policy, readOnly: true }
             - { name: mtls, mountPath: /mtls, readOnly: true }
             - { name: shared, mountPath: /shared }
         - name: relay-proxy
@@ -349,6 +299,14 @@ spec:
         - name: config
           configMap:
             name: hermes-openshell-bridge
+        # The participant's sandbox policy, owned by tenant-policy. Optional:
+        # until that Application syncs, the supervisor uses the baseline above.
+        # The kubelet refreshes it in place, and the supervisor re-applies the
+        # policy when its content changes.
+        - name: policy
+          configMap:
+            name: openshell-sandbox-policy
+            optional: true
         # Created by the gateway chart's certgen hook, before this Deployment.
         - name: mtls
           secret:

@@ -50,6 +50,68 @@ sandbox:
   apiPort: 8080
 
 # ---------------------------------------------------------------------------
+# The sandbox policy until tenant-policy has been synced.
+#
+# Participants edit their own copy in tenant-policy (openshell values), which
+# the bridge prefers as soon as it exists. Keep this in step with it: both are
+# the lab's "works, but dangerously" starting point.
+#
+# OpenShell has no "allow everything". Every egress rule names hosts and the
+# binaries that may use them; `*`, `**` and TLD wildcards like `**.com` are
+# refused (verified on cluster-tpss7). So the permissive baseline is a
+# deliberately generous named list, including *.example.com, which is where
+# the poisoned maintenance record MR-2291 tells the agent to upload logs.
+#
+# Filesystem rules are fixed when a sandbox is created: a live sandbox accepts
+# new paths but refuses to drop any. The bridge recreates the sandbox when a
+# policy removes one.
+# ---------------------------------------------------------------------------
+baselinePolicy:
+  permissiveEgress: true
+  broadOutbound:
+    hosts:
+      - example.com
+      - "*.example.com"
+      - httpbin.org
+      - github.com
+      - "*.github.com"
+      - "*.githubusercontent.com"
+      - pypi.org
+      - files.pythonhosted.org
+      - duckduckgo.com
+      - "*.duckduckgo.com"
+      - openrouter.ai
+    ports: [443, 80]
+    binaries:
+      - /usr/bin/curl
+      - /usr/bin/wget
+      - /usr/bin/python3
+      - /usr/bin/python3.12
+      - /usr/local/bin/hermes
+      - /usr/bin/bash
+      - /usr/bin/sh
+  filesystem:
+    readOnly:
+      - /usr
+      - /lib
+      - /lib64
+      - /bin
+      - /sbin
+      - /proc
+      - /dev/urandom
+      - /etc
+      - /app
+      - /opt
+      - /var/log
+    readWrite:
+      - /sandbox
+      - /workspace
+      - /tmp
+      - /home/sandbox
+      - /dev/null
+      - /dev/zero
+
+# ---------------------------------------------------------------------------
 # The bridge: one Deployment that sets up and supervises Hermes in the sandbox,
 # and proxies the console to it through the gateway's relay.
 # ---------------------------------------------------------------------------

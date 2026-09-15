@@ -114,6 +114,12 @@ spec:
         # dangerously" starting point; module 5 turns it on.
         - name: mcpGateway.enforced
           value: {{ .Values.policy.mcpGatewayEnforced | quote }}
+        # Hermes in an OpenShell sandbox: this Application also holds the
+        # sandbox policy participants edit.
+        - name: openshell.enabled
+          value: {{ and (eq .Values.platform.agentHarness "hermes") (eq .Values.platform.hermesRuntime "openshell") | quote }}
+        - name: openshell.namespaceSuffix
+          value: {{ .Values.openshellNamespaceSuffix | quote }}
         # Whether this participant has a gateway at all. Without one, the
         # PostSync Job that restarts the gateway and agent has nothing to do.
         - name: mcpGateway.enabled

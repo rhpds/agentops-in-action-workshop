@@ -49,6 +49,84 @@ mcpGateway:
     timeoutSeconds: 1200
 
 # The realm issuer is https://<host>/realms/waterplant-<username>. Forwarded by
-# bootstrap-tenant; required only when mcpGateway.enforced is true.
+# bootstrap-tenant; required when mcpGateway.enforced or openshell.enabled.
 keycloak:
   host: ""
+
+# The OpenShell policy around Hermes' sandbox.
+# See templates/openshell-sandbox-policy.yaml.
+openshell:
+  # Whether this participant's Hermes runs in an OpenShell sandbox (forwarded
+  # by bootstrap-tenant). Without one there is nothing to apply this to.
+  enabled: false
+  namespaceSuffix: openshell
+
+  # true  -> the lab's starting condition: the binaries below may reach every
+  #          host below, including *.example.com, where the poisoned
+  #          maintenance record sends diagnostics
+  # false -> only what the agent needs: the model endpoint, this participant's
+  #          MCP Gateway and Keycloak, each for named binaries only
+  permissiveEgress: true
+
+  # OpenShell has no "allow everything": every rule names hosts and binaries,
+  # and it refuses `*`, `**` and TLD wildcards such as `**.com`. So "broad" is a
+  # generous named list.
+  broadOutbound:
+    hosts:
+      - example.com
+      - "*.example.com"
+      - httpbin.org
+      - github.com
+      - "*.github.com"
+      - "*.githubusercontent.com"
+      - pypi.org
+      - files.pythonhosted.org
+      - duckduckgo.com
+      - "*.duckduckgo.com"
+      - openrouter.ai
+    ports: [443, 80]
+    binaries:
+      - /usr/bin/curl
+      - /usr/bin/wget
+      - /usr/bin/python3
+      - /usr/bin/python3.12
+      - /usr/local/bin/hermes
+      - /usr/bin/bash
+      - /usr/bin/sh
+
+  # Removing a path here recreates the sandbox, because a live one cannot drop
+  # a path. Hermes needs /sandbox (its home) read-write.
+  filesystem:
+    readOnly:
+      - /usr
+      - /lib
+      - /lib64
+      - /bin
+      - /sbin
+      - /proc
+      - /dev/urandom
+      - /etc
+      - /app
+      - /opt
+      - /var/log
+    readWrite:
+      - /sandbox
+      - /workspace
+      - /tmp
+      - /home/sandbox
+      - /dev/null
+      - /dev/zero
+
+  # More rules, in OpenShell's network_policies shape, e.g.
+  #   docs_site:
+  #     name: "Plant documentation"
+  #     endpoints:
+  #       - { host: docs.example.org, port: 443, protocol: rest, enforcement: enforce, access: read-only }
+  #     binaries:
+  #       - { path: /usr/local/bin/hermes }
+  extraNetworkPolicies: {}
+
+  # Must match tenant-platform: where the model and this participant's MCP
+  # Gateway are.
+  modelBaseUrl: "https://maas-rhdp.apps.maas.redhatworkshops.io/v1"
+  gatewayClassName: data-science-gateway-class

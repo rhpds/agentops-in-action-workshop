@@ -13,6 +13,7 @@ WORK=/tmp/work
 mkdir -p "$WORK/probe/mcp-tokens"
 GATEWAY_ENDPOINT="https://${GATEWAY_HOST}:8080"
 RELAY_HOST=""
+APPLIED_POLICY=""
 
 log()   { echo "[$(date -u +%H:%M:%S)] $*"; }
 strip() { sed 's/\x1b\[[0-9;]*m//g'; }
@@ -23,6 +24,15 @@ X()     { openshell sandbox exec --name "$SANDBOX_NAME" -- /bin/sh -c "$1"; }
 secret_value() {
   oc get secret "$HERMES_ENV_SECRET" -n "$AGENTOPS_NS" -o "jsonpath={.data.$1}" 2>/dev/null | base64 -d
 }
+
+# The sandbox policy participants edit lives in tenant-policy, mounted at
+# /policy once that Application has been synced. Until then, the chart's
+# baseline, which is equally permissive: an unsynced policy Application means
+# open everywhere else in the lab too (no AuthPolicy, no NetworkPolicy).
+policy_file() {
+  if [ -s /policy/policy.yaml ]; then echo /policy/policy.yaml; else echo /config/baseline-policy.yaml; fi
+}
+policy_hash() { sha256sum "$(policy_file)" | cut -c1-12; }
 
 connect_cli() {
   local mtls="$XDG_CONFIG_HOME/openshell/gateways/lab/mtls"
@@ -36,6 +46,53 @@ connect_cli() {
 
 sandbox_phase() {
   openshell sandbox list 2>/dev/null | strip | awk -v n="$SANDBOX_NAME" '$1 == n {print $NF}'
+}
+
+# The policy is given at creation, because filesystem rules are fixed then: a
+# live sandbox accepts new paths but refuses to drop any.
+create_sandbox() {
+  log "creating sandbox $SANDBOX_NAME from $IMAGE_REF with $1"
+  # `-- echo ready` prints "No such file or directory" after the sandbox is up;
+  # harmless, and the phase check below is what counts.
+  openshell sandbox create --name "$SANDBOX_NAME" --from "$IMAGE_REF" --policy "$1" \
+    --cpu "$SANDBOX_CPU" --memory "$SANDBOX_MEMORY" --no-tty -- echo ready 2>&1 | strip | tail -3
+}
+
+wait_ready() {
+  local i phase
+  log "waiting for sandbox $SANDBOX_NAME to be Ready"
+  for i in $(seq 1 60); do
+    phase=$(sandbox_phase)
+    [ "$phase" = "Ready" ] && return 0
+    sleep 5
+  done
+  log "sandbox not Ready after 300s (phase: ${phase:-none})"
+  return 1
+}
+
+# Applies the current policy. Network changes load into the running sandbox.
+# A policy that removes a filesystem path cannot be applied live, so the
+# sandbox is recreated with it; Hermes' files are rewritten afterwards anyway.
+apply_policy() {
+  local pf out i
+  pf=$(policy_file)
+  log "applying the sandbox policy from $pf (sha256 $(policy_hash))"
+  if out=$(openshell policy set --policy "$pf" --wait "$SANDBOX_NAME" 2>&1); then
+    APPLIED_POLICY=$(policy_hash)
+    return 0
+  fi
+  if printf '%s' "$out" | grep -q "cannot be removed on a live sandbox"; then
+    log "the policy removes filesystem paths, which a live sandbox cannot drop; recreating $SANDBOX_NAME"
+    openshell sandbox delete "$SANDBOX_NAME" 2>&1 | strip | tail -1
+    for i in $(seq 1 60); do [ -z "$(sandbox_phase)" ] && break; sleep 5; done
+    create_sandbox "$pf"
+    wait_ready || return 1
+    APPLIED_POLICY=$(policy_hash)
+    return 0
+  fi
+  # Most often a policy participants edited into something OpenShell refuses.
+  log "policy rejected: $(printf '%s' "$out" | strip | grep -vE '^\s*$' | tr -s ' ' | tr -d '│×' | tr '\n' ' ' | cut -c1-400)"
+  return 1
 }
 
 # put_file <local path> <sandbox path> <mode>
@@ -53,7 +110,7 @@ relay_healthy() {
 }
 
 provision() {
-  local i phase out url
+  local i out url
   MODEL_API_KEY=$(secret_value MODEL_API_KEY)
   API_SERVER_KEY=$(secret_value API_SERVER_KEY)
   if [ -z "$MODEL_API_KEY" ] || [ -z "$API_SERVER_KEY" ]; then
@@ -62,23 +119,10 @@ provision() {
   fi
 
   if [ -z "$(sandbox_phase)" ]; then
-    log "creating sandbox $SANDBOX_NAME from $IMAGE_REF"
-    openshell sandbox create --name "$SANDBOX_NAME" --from "$IMAGE_REF" \
-      --cpu "$SANDBOX_CPU" --memory "$SANDBOX_MEMORY" --no-tty -- echo ready 2>&1 | strip | tail -3
+    create_sandbox "$(policy_file)"
   fi
-  log "waiting for sandbox $SANDBOX_NAME to be Ready"
-  for i in $(seq 1 60); do
-    phase=$(sandbox_phase)
-    [ "$phase" = "Ready" ] && break
-    if [ "$i" -eq 60 ]; then log "sandbox not Ready after 300s (phase: ${phase:-none})"; return 1; fi
-    sleep 5
-  done
-
-  log "applying the sandbox policy"
-  if ! out=$(openshell policy set --policy /config/policy.yaml --wait "$SANDBOX_NAME" 2>&1); then
-    log "policy set failed: $(printf '%s' "$out" | strip | tail -3)"
-    return 1
-  fi
+  wait_ready || return 1
+  apply_policy || return 1
 
   # Hermes lists tools once, at start-up. Starting it before the gateway has
   # discovered every server leaves it without those tools for good.
@@ -124,7 +168,7 @@ EOF
   log "restarting Hermes and its token refresher inside the sandbox"
   X 'for p in $(ps -eo pid,args | awk "/[h]ermes gateway run|mcp-token-refres[h]/ {print \$1}"); do kill "$p" 2>/dev/null; done; sleep 2; true' >/dev/null 2>&1
   if ! X ". /sandbox/.hermes-env.sh && python3 /sandbox/mcp-token-refresh.py" >/dev/null 2>&1; then
-    log "token fetch inside the sandbox failed; check the policy's keycloak_token rule"
+    log "token fetch inside the sandbox failed; the sandbox policy must let python3 reach Keycloak"
     return 1
   fi
   # setsid and a subshell reparent both to the supervisor, so exec returns.
@@ -164,6 +208,13 @@ until provision; do log "set-up failed; retrying in 30s"; sleep 30; done
 failures=0
 while true; do
   sleep "$HEALTH_CHECK_SECONDS"
+  # A participant synced a new sandbox policy (the mounted ConfigMap changed).
+  if [ "$(policy_hash)" != "$APPLIED_POLICY" ]; then
+    log "the sandbox policy changed; applying it and restarting Hermes"
+    until provision; do log "set-up failed; retrying in 30s"; sleep 30; done
+    failures=0
+    continue
+  fi
   if relay_healthy; then failures=0; continue; fi
   failures=$((failures + 1))
   log "Hermes did not answer through the relay ($failures/3)"
