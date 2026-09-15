@@ -30,6 +30,10 @@ Roles are granted and revoked in the participant's Keycloak realm, not here:
 this policy says "a tool call needs the matching role", the realm says who has
 it. Verified on cluster-tpss7: withheld role -> 403, grant -> 200, revoke -> 403.
 
+A sync does not take effect by itself. The mcp-gateway-rollout PostSync Job
+restarts the gateway and the agent so the policy takes effect reliably; see
+templates/mcp-gateway-rollout.yaml for why.
+
 One known limitation to teach around: Hermes' MCP client surfaces the 403 as a
 dropped connection and a 5 s timeout, and reports "a network issue or service
 outage". The denial is real; the agent's explanation of it is wrong. Authorino's

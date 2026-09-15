@@ -1,0 +1,176 @@
+{{- if .Values.mcpGateway.enabled }}
+{{- $ns := printf "%s-%s" .Values.username .Values.namespaceSuffix -}}
+{{- $r := .Values.mcpGateway.rollout -}}
+{{/*
+Makes a policy sync actually take effect on the gateway, and on the agent.
+
+Runs after every sync of this Application. Without it, a policy change is
+applied to a running Envoy, and that is not reliable. Observed on cluster-tpss7
+(RHCL 1.4.3, OpenShift Gateway Envoy 1.36):
+
+  - Kuadrant loads its policy module into the gateway's Envoy at runtime, from
+    kuadrant-operator-wasm in kuadrant-system. On a running Envoy that fetch
+    failed ("Retry limit exceeded"). The module is fail-closed, so every request
+    got 503, while both AuthPolicies still reported Enforced=True.
+  - The next in-place load segfaulted Envoy ("Wasm remote code fetch is
+    unstable and may cause a crash").
+  - An Envoy that STARTS with the policy already present loads it cleanly.
+  - Hermes did not survive the outage either. Its MCP session was left closed
+    for good (ClosedResourceError on every tool call) until it restarted.
+
+So, in order:
+
+  1. Wait until Kuadrant has finished: the AuthPolicies are Enforced and its
+     EnvoyFilter exists, or, when not enforced, both are gone.
+  2. Restart the gateway's Envoy pod, so the module loads at startup.
+  3. Probe the gateway rather than trusting status: an unauthenticated
+     initialize must return 401 when enforced and 200 when not, three times
+     running. If it doesn't settle, restart it again (up to three times).
+  4. Restart the MCP clients, which reconnect and list tools again.
+
+The sync stays in progress until all of that finishes. So "Synced" on this
+Application means the gateway enforces what the policy says and the agent is
+using it. When it can't get there, the sync fails and this Job's log says why.
+The commonest cause is turning enforcement off without Prune, which leaves
+the AuthPolicies in place.
+
+The ServiceAccount and Role live in tenant-platform, so editing this chart
+can't widen what the Job is allowed to do.
+*/}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mcp-gateway-rollout
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: mcp-gateway-rollout
+    app.kubernetes.io/part-of: water-plant
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    # Keep the last run, and its log, until the next sync replaces it.
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  # A retry would restart everything again. The script retries internally.
+  backoffLimit: 0
+  activeDeadlineSeconds: {{ $r.timeoutSeconds }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mcp-gateway-rollout
+    spec:
+      serviceAccountName: {{ $r.serviceAccount }}
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: rollout
+          image: {{ $r.image }}
+          env:
+            # oc writes its discovery cache under $HOME. The image's is not
+            # writable under a random UID.
+            - name: HOME
+              value: /tmp
+            - name: NS
+              value: {{ $ns | quote }}
+            - name: GW
+              value: {{ .Values.mcpGateway.gatewayName | quote }}
+            - name: ENFORCED
+              value: {{ .Values.mcpGateway.enforced | quote }}
+            - name: CLIENTS
+              value: {{ join " " $r.clientDeployments | quote }}
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -uo pipefail
+              log()  { echo "[$(date -u +%H:%M:%S)] $*"; }
+              fail() { log "FAILED: $*"; exit 1; }
+              # wait_until <seconds> <what> <command...>
+              wait_until() {
+                local limit=$1 what=$2; shift 2
+                local end=$((SECONDS + limit))
+                until "$@"; do
+                  [ "$SECONDS" -ge "$end" ] && fail "timed out after ${limit}s waiting for $what"
+                  sleep 5
+                done
+              }
+              has_filter()   { oc get envoyfilter "kuadrant-auth-$GW" -n "$NS" >/dev/null 2>&1; }
+              no_filter()    { ! has_filter; }
+              no_policies()  { [ -z "$(oc get authpolicy -n "$NS" -o name 2>/dev/null)" ]; }
+
+              # 1. Let Kuadrant finish before Envoy restarts, or the new pod
+              #    starts without the change and loads it in place anyway.
+              if [ "$ENFORCED" = "true" ]; then
+                EXPECT=401
+                for p in mcp-auth-policy mcp-authz-policy; do
+                  log "waiting for AuthPolicy $p to be Enforced"
+                  oc wait "authpolicy/$p" -n "$NS" --for=condition=Enforced --timeout=300s >/dev/null \
+                    || fail "AuthPolicy $p never reported Enforced"
+                done
+                wait_until 300 "Kuadrant's EnvoyFilter kuadrant-auth-$GW" has_filter
+              else
+                EXPECT=200
+                log "not enforced: waiting for the AuthPolicies to be removed"
+                wait_until 60 "the AuthPolicies to be removed. Enforcement is off but they are still here; sync with Prune enabled" no_policies
+                wait_until 180 "Kuadrant to remove EnvoyFilter kuadrant-auth-$GW" no_filter
+              fi
+              # istiod picks the change up from the API; give it a moment
+              # before the new Envoy asks for its config.
+              sleep 15
+
+              DEPLOY=$(oc get deploy -n "$NS" -l "gateway.networking.k8s.io/gateway-name=$GW" -o jsonpath='{.items[0].metadata.name}')
+              [ -n "$DEPLOY" ] || fail "no Deployment found for Gateway $GW"
+              URL="http://$DEPLOY.$NS.svc.cluster.local:8080/mcp"
+              INIT='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"mcp-gateway-rollout","version":"1"}}}'
+              probe() {
+                curl -s -o /dev/null -w '%{http_code}' -m 5 -X POST \
+                  -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' \
+                  --data "$INIT" "$URL" 2>/dev/null
+              }
+              settled() {
+                local good=0 code
+                for _ in $(seq 1 36); do
+                  code=$(probe); code=${code:-000}
+                  if [ "$code" = "$EXPECT" ]; then
+                    good=$((good + 1)); [ "$good" -ge 3 ] && return 0
+                  else
+                    good=0; log "  gateway answered $code, want $EXPECT"
+                  fi
+                  sleep 5
+                done
+                return 1
+              }
+
+              # 2 and 3. Restart Envoy so the module loads at startup, then check it.
+              ok=""
+              for attempt in 1 2 3; do
+                log "restarting the gateway Envoy (attempt $attempt)"
+                oc delete pod -n "$NS" -l "gateway.networking.k8s.io/gateway-name=$GW" --wait=true >/dev/null \
+                  || fail "could not delete the gateway pod"
+                if settled; then ok=1; break; fi
+              done
+              [ -n "$ok" ] || fail "the gateway never settled on HTTP $EXPECT for an unauthenticated initialize"
+              log "gateway answers an unauthenticated initialize with $EXPECT"
+
+              # 4. The agent's MCP session did not survive the gateway restart.
+              for d in $CLIENTS; do
+                oc get deploy "$d" -n "$NS" >/dev/null 2>&1 || continue
+                log "restarting $d"
+                oc rollout restart "deploy/$d" -n "$NS" >/dev/null || fail "could not restart $d"
+                oc rollout status "deploy/$d" -n "$NS" --timeout=600s || fail "$d did not come back"
+              done
+              log "policy is live on the gateway and the agent has reconnected"
+{{- end }}

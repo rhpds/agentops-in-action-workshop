@@ -108,6 +108,10 @@ spec:
         # dangerously" starting point; module 5 turns it on.
         - name: mcpGateway.enforced
           value: {{ .Values.policy.mcpGatewayEnforced | quote }}
+        # Whether this participant has a gateway at all. Without one, the
+        # PostSync Job that restarts the gateway and agent has nothing to do.
+        - name: mcpGateway.enabled
+          value: {{ .Values.platform.mcpGateway | quote }}
   destination:
     server: https://kubernetes.default.svc
     namespace: {{ include "tenant.namespace" . }}

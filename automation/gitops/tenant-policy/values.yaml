@@ -27,6 +27,23 @@ mcpGateway:
   enforced: false
   # Must match tenant-platform's mcpGateway.gatewayName.
   gatewayName: mcp-gateway
+  # Whether this participant has a gateway at all (tenant-platform's
+  # mcpGateway.enabled, forwarded by bootstrap-tenant). Gates the rollout Job.
+  enabled: false
+  # PostSync Job that makes a sync take effect: it restarts the gateway's Envoy
+  # and the agent. See templates/mcp-gateway-rollout.yaml.
+  rollout:
+    # Needs oc and curl. Already pulled for the cluster's InstallPlan approver.
+    image: registry.redhat.io/openshift4/ose-cli:latest
+    # Created by tenant-platform (templates/mcp-policy-rollout-rbac.yaml).
+    serviceAccount: mcp-policy-rollout
+    # MCP clients to restart after the gateway. Whichever harness isn't
+    # deployed is skipped.
+    clientDeployments:
+      - hermes-agent
+      - waterplant-agent
+    # Covers up to three gateway restarts plus the agent's rollout.
+    timeoutSeconds: 1200
 
 # The realm issuer is https://<host>/realms/waterplant-<username>. Forwarded by
 # bootstrap-tenant; required only when mcpGateway.enforced is true.
