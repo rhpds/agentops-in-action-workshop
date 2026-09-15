@@ -59,7 +59,10 @@ bridge:
   # The openshell CLI, downloaded from the GitHub release at start. v0.0.88 is
   # the CLI verified against the 0.0.92 gateway on cluster-tpss7.
   cliVersion: v0.0.88
-  cliImage: registry.redhat.io/openshift4/ose-cli:latest
+  # The RHEL 9 build: the supervisor runs the token refresher, which needs
+  # Python 3.7+. The RHEL 8 ose-cli ships 3.6.8 and fails on
+  # `from __future__ import annotations` (seen on cluster-tpss7).
+  cliImage: registry.redhat.io/openshift4/ose-cli-rhel9:latest
   proxyImage: registry.redhat.io/rhel9/nginx-124:latest
   # How often the supervisor checks Hermes through the relay. Three failures
   # in a row and it sets the sandbox up again.
