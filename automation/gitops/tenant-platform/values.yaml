@@ -47,20 +47,106 @@ plantApi:
 # ---------------------------------------------------------------------------
 # MCP servers — stateless proxies onto plant-api.
 #
-# One image, three entrypoints. Streamable HTTP on /mcp, never stdio: MCP
-# Gateway can only route, authorize and token-exchange over HTTP (§D3).
+# Streamable HTTP on /mcp, never stdio: MCP Gateway can only route, authorize
+# and token-exchange over HTTP (§D3). `hint` is what the gateway's
+# discover_tools meta-tool returns to help an agent choose a server.
 # ---------------------------------------------------------------------------
 mcp:
   servers:
     - name: telemetry-mcp
       repository: mcp-telemetry
+      hint: "Read-only plant telemetry: pump status, safety status, water quality, reservoir level, valve positions."
     - name: maintenance-mcp
       repository: mcp-maintenance
+      hint: "Maintenance history and work orders: search records, get details, list/create/update work orders."
     - name: control-mcp
       repository: mcp-control
+      hint: "Plant control: set pump speed, start/stop pumps, open/close valves, emergency shutdown."
   resources:
     requests: { cpu: 50m, memory: 128Mi }
     limits:   { cpu: 300m, memory: 256Mi }
+
+# ---------------------------------------------------------------------------
+# MCP Gateway — this participant's own. See templates/mcp-gateway.yaml.
+#
+# Off by default here so the chart renders standalone; bootstrap-tenant
+# forwards true. When on, the agent's tool calls go through the gateway rather
+# than straight to the MCP servers, and bootstrap-infra's AdminNetworkPolicy
+# makes that the only route.
+#
+# The authorization policies are not here — they are participant-editable and
+# live in tenant-policy (mcpGateway.enforced).
+# ---------------------------------------------------------------------------
+mcpGateway:
+  enabled: false
+  # bootstrap-infra's AdminNetworkPolicy selects Envoy pods by this name.
+  gatewayName: mcp-gateway
+  # RHOAI's class: same controller (openshift.io/gateway-controller/v1) and no
+  # parametersRef of its own. Reused rather than creating openshift-default,
+  # which the Cluster Ingress Operator watches and would act on.
+  gatewayClassName: data-science-gateway-class
+  # One replica. The class default (2-10 replicas at a 2 CPU limit each) does
+  # not fit the participant quota.
+  #
+  # The CPU limit covers startup, not traffic. Under enforcement Envoy compiles
+  # Kuadrant's policy module before it reports ready, which took about 28s at
+  # 500m, likely throttled. A full core shortens that and is still well inside
+  # the 8 CPU limit quota.
+  envoyResources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits:   { cpu: "1", memory: 512Mi }
+  # Seconds Envoy may take to report ready before the kubelet restarts it, as
+  # startupProbe failureThreshold x 1s. See templates/mcp-gateway.yaml.
+  envoyStartupSeconds: 180
+  # How often the agent's token is refreshed. Also the worst-case delay before
+  # a role granted in Keycloak reaches the agent: 1200s was measured as a
+  # 20-minute wait for a participant who grants a role and retries.
+  tokenRefreshSeconds: 300
+
+# ---------------------------------------------------------------------------
+# Keycloak — this participant's realm (created by templates/mcp-gateway.yaml)
+# ---------------------------------------------------------------------------
+keycloak:
+  # sso.<apps domain>. Forwarded by bootstrap-tenant.
+  host: ""
+  # RHDP's Keycloak. The realm import must live beside this CR.
+  namespace: keycloak
+  crName: keycloak
+  # The identity the agent's tool calls carry: the realm's operator user,
+  # through the public mcp-gateway client. These are lab credentials, printed
+  # in the lab guide, on a fictional plant — not secrets.
+  agentClientId: mcp-gateway
+  agentUser: operator
+  agentPassword: operator
+  adminPassword: redhat
+  # Every tool role declared in the realm, per MCP server.
+  toolRoles:
+    telemetry-mcp:
+      - get_plant_safety_status
+      - get_pump_status
+      - get_all_pump_status
+      - get_water_quality
+      - get_reservoir_level
+      - get_valve_positions
+    maintenance-mcp:
+      - search_maintenance_history
+      - get_maintenance_record
+      - list_work_orders
+      - create_work_order
+      - update_work_order
+    control-mcp:
+      - set_pump_speed
+      - start_pump
+      - stop_pump
+      - open_valve
+      - close_valve
+      - dump_plant_configuration
+      - emergency_shutdown
+  # Declared but not granted to the operator: the roles the exercises grant.
+  withheldFromOperator:
+    control-mcp:
+      - dump_plant_configuration   # Scenario 3
+      - emergency_shutdown         # Scenario 4
 
 # Coarse egress restriction as defence in depth. Deliberately permissive at
 # baseline — the interesting per-binary policy is OpenShell's job in module 4,
@@ -129,6 +215,10 @@ agent:
   # hermes requires a `hermes-env` Secret in the namespace — see
   # agent.hermes.envSecret below. Without it the pod cannot start, so tenant
   # provisioning has to create it alongside litellm-credentials.
+  #
+  # With mcpGateway.enabled, only the hermes harness is wired to the gateway.
+  # The waterplant agent still dials the MCP servers directly, which
+  # bootstrap-infra's AdminNetworkPolicy blocks.
   harness: hermes
 
   replicas: 1
@@ -171,9 +261,9 @@ agent:
     home: /app/.hermes
     storageSize: 5Gi
     mcpTimeoutSeconds: 120
-    # How long to wait for the MCP servers before failing the pod. Hermes only
-    # dials them at start-up and never reconnects, so starting without them
-    # yields an agent that silently falls back to its local shell.
+    # How long to wait for MCP before failing the pod. Hermes lists tools once at
+    # start-up and never refreshes, so starting before they exist yields an
+    # agent that silently falls back to its local shell.
     mcpWaitSeconds: 180
     # Two keys, both plain-named. The HERMES_ENV_* convention only works when
     # the repo's entrypoint.sh is present to strip the prefix, and the
@@ -191,3 +281,7 @@ agent:
     resources:
       requests: { cpu: 500m, memory: 1Gi }
       limits:   { cpu: "2",  memory: 4Gi }
+    # The token-refresh sidecar, gateway mode only.
+    tokenRefreshResources:
+      requests: { cpu: 10m, memory: 32Mi }
+      limits:   { cpu: 100m, memory: 64Mi }

@@ -11,11 +11,25 @@ cluster-mc86p sitting 47 minutes with both Subscriptions in UpgradePending, no
 CSVs, and the DataScienceCluster, MLflow, EvalHub and ClusterRole all Missing
 behind the wave gate. That is not viable for an event.
 
-This Job restores the intent of the pin rather than removing it. It approves
-ONLY an InstallPlan whose clusterServiceVersionNames contains the exact
-startingCSV pinned in values.yaml. A later InstallPlan produced by a catalog
-refresh carries a different CSV, does not match, and is left alone — so the
-initial install is unattended and upgrades still are not.
+This Job restores the intent of the pin rather than removing it. It approves an
+InstallPlan only when:
+
+  1. it contains the exact startingCSV pinned in values.yaml, AND
+  2. every CSV it contains is either pinned or listed under that operator's
+     `dependencies`.
+
+A later InstallPlan produced by a catalog refresh carries different CSVs, fails
+(1), and is left alone — so the initial install is unattended and upgrades
+still are not.
+
+(2) exists because an InstallPlan is not one-CSV-per-plan. RHCL's plan carries
+five: authorino-operator, mcp-gateway, rhcl-operator, limitador-operator and
+dns-operator, in that order. An earlier revision matched only
+clusterServiceVersionNames[0], which is authorino-operator — so the pinned
+rhcl-operator and mcp-gateway CSVs never matched, and a fresh cluster would
+have stalled exactly as cluster-mc86p did. Matching anywhere in the list fixes
+that; the allowlist stops "anywhere in the list" from approving whatever else
+OLM happened to resolve alongside.
 
 Do NOT replace this with installPlanApproval: Automatic. That defeats the pin
 over time, which is the outcome operators.yaml argues against at length.
@@ -52,8 +66,7 @@ metadata:
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
     argocd.argoproj.io/sync-wave: "-2"
 rules:
-  # Cluster-scoped because the InstallPlans live in one namespace per operator
-  # (redhat-ods-operator, agent-sandbox-system, and any others enabled later),
+  # Cluster-scoped because the InstallPlans live in one namespace per operator,
   # and that set is driven by values.yaml rather than fixed here.
   - apiGroups: [operators.coreos.com]
     resources: [installplans]
@@ -114,32 +127,54 @@ spec:
 
               # ns=csv pairs, one per enabled operator, straight from values.yaml
               PAIRS="{{- range $k, $op := .Values.operators }}{{- if $op.enabled }}{{ $op.namespace }}={{ $op.csv }} {{ end }}{{- end }}"
+              # Every CSV an approved InstallPlan may contain: all pinned CSVs plus
+              # their declared dependencies.
+              ALLOWED=" {{- range $k, $op := .Values.operators }}{{- if $op.enabled }} {{ $op.csv }}{{- range $op.dependencies }} {{ . }}{{- end }}{{- end }}{{- end }} "
               echo "waiting to approve InstallPlans for: $PAIRS"
+              echo "allowed CSVs: $ALLOWED"
 
               for pair in $PAIRS; do
                 NS="${pair%%=*}"
                 CSV="${pair#*=}"
                 echo "--- $NS / $CSV"
                 while true; do
-                  # Only an InstallPlan carrying the exact pinned CSV qualifies.
-                  IP=$(oc get installplan -n "$NS" \
-                        -o jsonpath="{range .items[?(@.spec.clusterServiceVersionNames[0]=='$CSV')]}{.metadata.name} {.spec.approved}{'\n'}{end}" \
-                        2>/dev/null | head -1 || true)
-                  NAME=$(echo "$IP" | awk '{print $1}')
-                  APPROVED=$(echo "$IP" | awk '{print $2}')
+                  # name|approved|["csv-a","csv-b",...] — one line per InstallPlan.
+                  # grep for the quoted CSV so rhcl-operator.v1.4.3 cannot match a
+                  # longer name that merely contains it.
+                  LINE=$(oc get installplan -n "$NS" \
+                        -o jsonpath='{range .items[*]}{.metadata.name}{"|"}{.spec.approved}{"|"}{.spec.clusterServiceVersionNames}{"\n"}{end}' \
+                        2>/dev/null | grep -F "\"$CSV\"" | head -1 || true)
 
-                  if [ -n "$NAME" ]; then
+                  if [ -n "$LINE" ]; then
+                    NAME=$(echo "$LINE" | cut -d'|' -f1)
+                    APPROVED=$(echo "$LINE" | cut -d'|' -f2)
+                    CSVS=$(echo "$LINE" | cut -d'|' -f3- | tr -d '[]"' | tr ',' ' ')
+
                     if [ "$APPROVED" = "true" ]; then
                       echo "    $NAME already approved — nothing to do"
                       break
                     fi
-                    echo "    approving $NAME"
+
+                    UNEXPECTED=""
+                    for c in $CSVS; do
+                      case "$ALLOWED" in
+                        *" $c "*) ;;
+                        *) UNEXPECTED="$UNEXPECTED $c" ;;
+                      esac
+                    done
+                    if [ -n "$UNEXPECTED" ]; then
+                      echo "    REFUSING $NAME: contains CSVs that are neither pinned nor declared:$UNEXPECTED"
+                      echo "    Review them, then add to operators.<name>.dependencies in values.yaml if intended."
+                      exit 1
+                    fi
+
+                    echo "    approving $NAME ($CSVS)"
                     oc patch installplan "$NAME" -n "$NS" --type merge -p '{"spec":{"approved":true}}'
                     break
                   fi
 
                   if [ "$(date +%s)" -ge "$DEADLINE" ]; then
-                    echo "    TIMEOUT: no InstallPlan for $CSV appeared in $NS."
+                    echo "    TIMEOUT: no InstallPlan containing $CSV appeared in $NS."
                     echo "    Most likely the pinned startingCSV no longer exists in the catalog —"
                     echo "    re-verify operators.*.csv in values.yaml against this cluster."
                     exit 1

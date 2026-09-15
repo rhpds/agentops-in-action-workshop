@@ -1,0 +1,389 @@
+{{- if .Values.mcpGateway.enabled }}
+{{- $ns := printf "%s-%s" .Values.username .Values.namespaceSuffix -}}
+{{- $gw := .Values.mcpGateway.gatewayName -}}
+{{- $svc := printf "%s-%s.%s.svc.cluster.local" $gw .Values.mcpGateway.gatewayClassName $ns -}}
+{{- $kcHost := required "keycloak.host is required when mcpGateway.enabled (forwarded by bootstrap-tenant)" .Values.keycloak.host -}}
+{{- $realm := printf "waterplant-%s" .Values.username -}}
+{{/*
+This participant's own MCP Gateway.
+
+One per participant rather than one shared, because a shared broker federates
+every tenant's tools into a single list: prefixes come from the server type,
+so every tenant's control_set_pump_speed collides; every agent sees every
+tenant's tools; and the AuthPolicies on a shared Gateway would need patching
+by 30 Applications that then fight over one object. Here the gateway, the
+broker, the routes, the registrations and the realm all belong to this
+participant, and editing any of them affects no one else.
+
+Traffic path for one tool call:
+
+  agent -> Gateway listener `mcp`  (public; mcp-auth-policy authenticates)
+        -> broker (MCPGatewayExtension) picks the upstream server
+        -> Gateway listener `mcps` (internal, <server>.mcp.local;
+                                    mcp-authz-policy checks tool:<name>)
+        -> MCP server Service
+
+The AuthPolicies live in tenant-policy, not here: they are what participants
+edit. This chart provides only the mechanism.
+
+Four OpenShift-specific settings, each of which broke something when absent —
+all found on cluster-tpss7:
+
+  * networking.istio.io/service-type: ClusterIP. OpenShift's gateway controller
+    creates a LoadBalancer Service, and with no LB provider it never gets an
+    address, so the Gateway reports Programmed=False indefinitely.
+  * parametersRef -> one Envoy replica with bounded resources. The class
+    default is an HPA of 2-10 replicas with a 2 CPU limit each, which on its
+    own blows the participant's 8 CPU limit quota before the broker starts.
+  * privateHost. The broker hair-pins tool calls back through the gateway and
+    defaults to <gateway>-istio.<ns>.svc; OpenShift names the Service
+    <gateway>-<gatewayclass>, so the default host does not exist.
+  * publicHost. The listener has no hostname, and without publicHost the
+    extension is rejected outright.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $gw }}-parameters
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: {{ $gw }}
+    app.kubernetes.io/part-of: water-plant
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+data:
+  deployment: |
+    spec:
+      template:
+        spec:
+          containers:
+            - name: istio-proxy
+              resources:
+                {{- toYaml .Values.mcpGateway.envoyResources | nindent 16 }}
+              # Istio's default startup probe allows about 30s (30 x 1s). With an
+              # AuthPolicy in place, Envoy compiles Kuadrant's 5.4 MB policy
+              # module before it reports ready, and that took about 28s here. So
+              # a start under enforcement was often killed just before it
+              # finished, over and over. Only the threshold is overridden; the
+              # patch is merged, so Istio's health check stays.
+              startupProbe:
+                failureThreshold: {{ .Values.mcpGateway.envoyStartupSeconds }}
+  horizontalPodAutoscaler: |
+    spec:
+      minReplicas: 1
+      maxReplicas: 1
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  # The AdminNetworkPolicy in bootstrap-infra selects Envoy pods by this name.
+  name: {{ $gw }}
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: {{ $gw }}
+    app.kubernetes.io/part-of: water-plant
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    networking.istio.io/service-type: ClusterIP
+spec:
+  gatewayClassName: {{ .Values.mcpGateway.gatewayClassName }}
+  infrastructure:
+    parametersRef:
+      group: ""
+      kind: ConfigMap
+      name: {{ $gw }}-parameters
+  listeners:
+    - name: mcp
+      protocol: HTTP
+      port: 8080
+      allowedRoutes:
+        namespaces:
+          from: Same
+    - name: mcps
+      protocol: HTTP
+      port: 8080
+      hostname: "*.mcp.local"
+      allowedRoutes:
+        namespaces:
+          from: Same
+---
+apiVersion: mcp.kuadrant.io/v1alpha1
+kind: MCPGatewayExtension
+metadata:
+  name: {{ $gw }}
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/part-of: water-plant
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: {{ $gw }}
+    # Explicit, although the CRD documents it as optional and defaulting to the
+    # extension's own namespace. The 0.7.1 controller does not apply that
+    # default: without this it looks the Gateway up in namespace "" and rejects
+    # the extension with "invalid: gateway target /mcp-gateway not found" —
+    # observed on cluster-tpss7. Every registration then reports "no valid
+    # mcpgatewayextensions configured", so the whole gateway is dead.
+    namespace: {{ $ns }}
+    sectionName: mcp
+  httpRouteManagement: Enabled
+  publicHost: {{ $svc | quote }}
+  privateHost: {{ printf "%s:8080" $svc | quote }}
+  oauthProtectedResource:
+    resourceName: "Water Plant MCP Gateway ({{ .Values.username }})"
+    resource: {{ printf "http://%s:8080/mcp" $svc | quote }}
+    authorizationServers:
+      - {{ printf "https://%s/realms/%s" $kcHost $realm | quote }}
+    bearerMethodsSupported: [header]
+    scopesSupported: [openid, groups, roles]
+{{- range .Values.mcp.servers }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ .name }}-route
+  namespace: {{ $ns }}
+  labels:
+    mcp-server: "true"
+    app.kubernetes.io/part-of: water-plant
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  parentRefs:
+    - name: {{ $gw }}
+      sectionName: mcps
+  hostnames:
+    - {{ .name }}.mcp.local
+  rules:
+    - matches:
+        - path: { type: PathPrefix, value: / }
+      backendRefs:
+        - name: {{ .name }}
+          port: 8080
+---
+apiVersion: mcp.kuadrant.io/v1alpha1
+kind: MCPServerRegistration
+metadata:
+  # The broker sends x-mcp-servername as <namespace>/<this name>, and the
+  # Keycloak client IDs below must match it exactly.
+  name: {{ .name }}
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/part-of: water-plant
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  # telemetry-mcp -> telemetry_, so get_pump_status becomes
+  # telemetry_get_pump_status on the federated list.
+  prefix: {{ printf "%s_" (trimSuffix "-mcp" .name) }}
+  hint: {{ .hint | quote }}
+  category:
+    - {{ trimSuffix "-mcp" .name }}
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: {{ .name }}-route
+{{- end }}
+---
+{{/*
+This participant's Keycloak realm — where tool roles are granted and revoked.
+
+Adapted from deploy/keycloak/realms/waterplant-realm-template.yaml with two
+changes. Client IDs follow the tenant namespace, because they must equal the
+x-mcp-servername the broker sends. And the confidential wp-dev/hermes-agent
+client is gone: its secret could not live in git, and Hermes authenticates as
+the realm's operator user anyway, so its tool scope is capped at the operator
+persona rather than a full-access service account.
+
+Lives in the Keycloak namespace (a KeycloakRealmImport must sit beside its
+Keycloak CR), which is why bootstrap-infra's AppProject allows that
+destination.
+
+A realm import is applied once. Selfheal on this Application re-applies the CR,
+not the realm contents, so a participant's role changes in the Keycloak admin
+console survive a sync — which is the point, since that is the exercise.
+*/}}
+{{- $kc := .Values.keycloak }}
+apiVersion: k8s.keycloak.org/v2alpha1
+kind: KeycloakRealmImport
+metadata:
+  name: {{ $realm }}
+  namespace: {{ $kc.namespace }}
+  labels:
+    rhdp.redhat.com/lab: agentops-in-action
+    rhdp.redhat.com/participant: {{ .Values.username }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  keycloakCRName: {{ $kc.crName }}
+  realm:
+    realm: {{ $realm }}
+    id: {{ $realm }}
+    enabled: true
+    displayName: "Water Plant — {{ .Values.username }}"
+    sslRequired: external
+    registrationAllowed: false
+    loginWithEmailAllowed: true
+    duplicateEmailsAllowed: false
+    resetPasswordAllowed: false
+    editUsernameAllowed: false
+    bruteForceProtected: true
+    accessTokenLifespan: 1800
+    ssoSessionMaxLifespan: 1800
+
+    roles:
+      realm:
+        - name: operator
+          description: Plant operator — normal shift duties
+      client:
+        # Declared so they appear in the admin console and can be granted or
+        # withheld during the exercises. The authz policy checks
+        # ('tool:' + x-mcp-toolname) in resource_access[x-mcp-servername].roles
+{{- range $server, $tools := $kc.toolRoles }}
+        {{ printf "%s/%s" $ns $server | quote }}:
+{{- range $tools }}
+          - name: {{ printf "tool:%s" . | quote }}
+{{- end }}
+{{- end }}
+
+    groups:
+      - name: operators
+        subGroups: []
+    defaultGroups:
+      - operators
+
+    clients:
+      # Public client the agent authenticates through (password grant).
+      - clientId: {{ $kc.agentClientId }}
+        name: MCP Gateway Client
+        enabled: true
+        publicClient: true
+        directAccessGrantsEnabled: true
+        standardFlowEnabled: true
+        implicitFlowEnabled: false
+        redirectUris:
+          - "http://localhost:*"
+          - "http://127.0.0.1:*"
+          - "https://localhost:*"
+        webOrigins:
+          - "*"
+        protocol: openid-connect
+        attributes:
+          pkce.code.challenge.method: S256
+        defaultClientScopes:
+          - openid
+          - roles
+          - groups
+{{- range $server, $tools := $kc.toolRoles }}
+      # One bearer-only client per MCP server; its ID is the broker's
+      # x-mcp-servername for that server.
+      - clientId: {{ printf "%s/%s" $ns $server | quote }}
+        name: {{ $server | quote }}
+        enabled: true
+        bearerOnly: true
+        publicClient: false
+        serviceAccountsEnabled: false
+        protocol: openid-connect
+        defaultClientScopes:
+          - openid
+{{- end }}
+
+    clientScopes:
+      - name: groups
+        protocol: openid-connect
+        attributes:
+          include.in.token.scope: "true"
+        protocolMappers:
+          - name: groups
+            protocol: openid-connect
+            protocolMapper: oidc-group-membership-mapper
+            consentRequired: false
+            config:
+              full.path: "false"
+              introspection.token.claim: "true"
+              userinfo.token.claim: "true"
+              id.token.claim: "true"
+              access.token.claim: "true"
+              claim.name: groups
+      - name: roles
+        protocol: openid-connect
+        attributes:
+          include.in.token.scope: "true"
+        protocolMappers:
+          - name: resource_access
+            protocol: openid-connect
+            protocolMapper: oidc-usermodel-client-role-mapper
+            consentRequired: false
+            config:
+              multivalued: "true"
+              userinfo.token.claim: "true"
+              id.token.claim: "true"
+              access.token.claim: "true"
+              claim.name: "resource_access.${client_id}.roles"
+              jsonType.label: String
+
+    users:
+      # Realm admin: the account a participant uses to grant and revoke tool
+      # roles at https://<keycloak-host>/admin/{{ $realm }}/console
+      - username: admin
+        email: admin@waterplant.local
+        firstName: Realm
+        lastName: Admin
+        enabled: true
+        emailVerified: true
+        credentials:
+          - type: password
+            value: {{ $kc.adminPassword | quote }}
+            temporary: false
+        clientRoles:
+          realm-management:
+            - realm-admin
+
+      # Operator persona, and the identity the agent's tool calls carry.
+      # Holds every declared tool role except those listed under
+      # withheldFromOperator — the ones the exercises grant.
+      - username: {{ $kc.agentUser }}
+        email: operator@waterplant.local
+        firstName: Plant
+        lastName: Operator
+        enabled: true
+        emailVerified: true
+        credentials:
+          - type: password
+            value: {{ $kc.agentPassword | quote }}
+            temporary: false
+        realmRoles:
+          - operator
+        groups:
+          - operators
+        clientRoles:
+{{- range $server, $tools := $kc.toolRoles }}
+{{- $withheld := index $kc.withheldFromOperator $server | default list }}
+          {{ printf "%s/%s" $ns $server | quote }}:
+{{- range $tools }}
+{{- if not (has . $withheld) }}
+            - {{ printf "tool:%s" . | quote }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+    clientScopeMappings:
+{{- range $server, $tools := $kc.toolRoles }}
+{{- $withheld := index $kc.withheldFromOperator $server | default list }}
+      {{ printf "%s/%s" $ns $server | quote }}:
+        - client: {{ $kc.agentClientId }}
+          roles:
+{{- range $tools }}
+{{- if not (has . $withheld) }}
+            - {{ printf "tool:%s" . | quote }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

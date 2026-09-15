@@ -1,0 +1,112 @@
+{{- if .Values.mcpGateway.enabled }}
+{{/*
+Cluster-level half of the MCP Gateway: one Kuadrant, one network rule.
+
+Everything per-participant — the Gateway, its MCPGatewayExtension (the broker),
+the HTTPRoutes and MCPServerRegistrations, the Keycloak realm — lives in the
+tenant charts. Each participant gets their own gateway rather than a shared
+one, because a shared broker federates every tenant's tools into one list:
+with 30 tenants the prefixes collide (every tenant has a `control_set_pump_speed`),
+every agent sees every tenant's tools, and the shared AuthPolicies would have to
+be patched per tenant by 30 Applications that then fight each other.
+
+What stays shared is what is safe to share. Kuadrant is a cluster singleton
+that reconciles AuthPolicies in every namespace; Authorino and Limitador
+instances land in its namespace and serve all of them. Per-tenant isolation
+comes from each policy targeting that tenant's own Gateway, not from separate
+Authorino instances.
+*/}}
+apiVersion: kuadrant.io/v1beta1
+kind: Kuadrant
+metadata:
+  name: kuadrant
+  namespace: {{ .Values.operators.rhcl.namespace }}
+  labels:
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    # After the Subscriptions (-2): the CRD does not exist until RHCL installs.
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec: {}
+---
+{{/*
+Makes each participant's MCP Gateway an actual boundary.
+
+The MCP lifecycle operator puts a NetworkPolicy on every MCPServer that allows
+ingress on the server port with no `from` selector. NetworkPolicies are
+additive, so nothing in a tenant namespace can take that allowance away, and the
+operator recreates its policy if deleted. Without this rule a pod with no token
+reached telemetry-mcp directly with HTTP 200, around every gateway policy —
+verified on cluster-tpss7 before this was written.
+
+An AdminNetworkPolicy is evaluated before NetworkPolicies, so a Deny here wins.
+
+Two sources are allowed, both verified from the MCP server's own access log:
+  - the gateway's Envoy pods, which carry tools/call traffic
+  - the broker, which connects to upstream servers directly for discovery and
+    health pings (the majority of connections in the log)
+
+The v1alpha1 API has no "same namespace as the subject" peer, and two ANPs at
+one priority are undefined behaviour, so one ANP per tenant does not scale.
+This single rule therefore allows any lab gateway pod rather than only the
+tenant's own. That does not open a cross-tenant path in practice: another
+tenant's Envoy only routes where its HTTPRoutes point, and a route to a
+Service in someone else's namespace needs a ReferenceGrant in that namespace,
+which a participant cannot create.
+
+Kubelet readiness probes originate from the node, not a namespace peer, so they
+are unaffected.
+*/}}
+apiVersion: policy.networking.k8s.io/v1alpha1
+kind: AdminNetworkPolicy
+metadata:
+  name: mcp-servers-gateway-only
+  labels:
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  priority: {{ .Values.mcpGateway.networkPolicyPriority }}
+  subject:
+    pods:
+      namespaceSelector:
+        matchLabels:
+          rhdp.redhat.com/lab: agentops-in-action
+      podSelector:
+        matchLabels:
+          app: mcp-server
+  ingress:
+    # First match wins.
+    - name: allow-gateway-envoy
+      action: Allow
+      from:
+        - pods:
+            namespaceSelector:
+              matchLabels:
+                rhdp.redhat.com/lab: agentops-in-action
+            podSelector:
+              matchLabels:
+                gateway.networking.k8s.io/gateway-name: {{ .Values.mcpGateway.gatewayName }}
+      ports:
+        - portNumber: { protocol: TCP, port: {{ .Values.mcpGateway.serverPort }} }
+    - name: allow-gateway-broker
+      action: Allow
+      from:
+        - pods:
+            namespaceSelector:
+              matchLabels:
+                rhdp.redhat.com/lab: agentops-in-action
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/managed-by: mcp-gateway-controller
+      ports:
+        - portNumber: { protocol: TCP, port: {{ .Values.mcpGateway.serverPort }} }
+    - name: deny-everyone-else
+      action: Deny
+      from:
+        # Every namespace, including the tenant's own: the agent pod, a
+        # participant's debug pod, anything that is not the gateway.
+        - namespaces: {}
+      ports:
+        - portNumber: { protocol: TCP, port: {{ .Values.mcpGateway.serverPort }} }
+{{- end }}
