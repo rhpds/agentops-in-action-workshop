@@ -95,7 +95,9 @@ openshell:
       - /usr/bin/sh
 
   # Removing a path here recreates the sandbox, because a live one cannot drop
-  # a path. Hermes needs /sandbox (its home) read-write.
+  # a path. Hermes needs /sandbox (its home) read-write. Every path listed exists
+  # in the Hermes image; /lib, /lib64, /bin and /sbin are symlinks into /usr.
+  # /var/log holds OpenShell's own logs, including its OCSF audit log.
   filesystem:
     readOnly:
       - /usr
@@ -106,14 +108,12 @@ openshell:
       - /proc
       - /dev/urandom
       - /etc
-      - /app
       - /opt
       - /var/log
     readWrite:
       - /sandbox
       - /workspace
       - /tmp
-      - /home/sandbox
       - /dev/null
       - /dev/zero
 

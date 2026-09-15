@@ -90,6 +90,9 @@ baselinePolicy:
       - /usr/local/bin/hermes
       - /usr/bin/bash
       - /usr/bin/sh
+  # Only paths that exist in the Hermes image: OpenShell ignores a missing one,
+  # so listing it would give participants a rule whose removal changes nothing.
+  # /lib, /lib64, /bin and /sbin are symlinks into /usr there.
   filesystem:
     readOnly:
       - /usr
@@ -100,14 +103,12 @@ baselinePolicy:
       - /proc
       - /dev/urandom
       - /etc
-      - /app
       - /opt
       - /var/log
     readWrite:
       - /sandbox
       - /workspace
       - /tmp
-      - /home/sandbox
       - /dev/null
       - /dev/zero
 
