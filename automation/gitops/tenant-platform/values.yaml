@@ -87,9 +87,17 @@ mcpGateway:
   gatewayClassName: data-science-gateway-class
   # One replica. The class default (2-10 replicas at a 2 CPU limit each) does
   # not fit the participant quota.
+  #
+  # The CPU limit covers startup, not traffic. Under enforcement Envoy compiles
+  # Kuadrant's policy module before it reports ready, which took about 28s at
+  # 500m, likely throttled. A full core shortens that and is still well inside
+  # the 8 CPU limit quota.
   envoyResources:
     requests: { cpu: 50m, memory: 128Mi }
-    limits:   { cpu: 500m, memory: 512Mi }
+    limits:   { cpu: "1", memory: 512Mi }
+  # Seconds Envoy may take to report ready before the kubelet restarts it, as
+  # startupProbe failureThreshold x 1s. See templates/mcp-gateway.yaml.
+  envoyStartupSeconds: 180
   # How often the agent's token is refreshed. Also the worst-case delay before
   # a role granted in Keycloak reaches the agent: 1200s was measured as a
   # 20-minute wait for a participant who grants a role and retries.

@@ -60,6 +60,14 @@ data:
             - name: istio-proxy
               resources:
                 {{- toYaml .Values.mcpGateway.envoyResources | nindent 16 }}
+              # Istio's default startup probe allows about 30s (30 x 1s). With an
+              # AuthPolicy in place, Envoy compiles Kuadrant's 5.4 MB policy
+              # module before it reports ready, and that took about 28s here. So
+              # a start under enforcement was often killed just before it
+              # finished, over and over. Only the threshold is overridden; the
+              # patch is merged, so Istio's health check stays.
+              startupProbe:
+                failureThreshold: {{ .Values.mcpGateway.envoyStartupSeconds }}
   horizontalPodAutoscaler: |
     spec:
       minReplicas: 1
