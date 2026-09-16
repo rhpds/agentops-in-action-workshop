@@ -40,3 +40,4 @@ Claude will walk you through the entire content lifecycle — from intake and sp
 3. `cd agentops-in-action-workshop`
 4. Start Claude CLI: `claude`
 5. Run `/rhdp-publishing-house` — and you're off!
+
