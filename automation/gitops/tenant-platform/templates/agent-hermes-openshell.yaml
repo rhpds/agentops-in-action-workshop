@@ -10,11 +10,24 @@ Hermes in an OpenShell sandbox: the lab-namespace side.
 Hermes, its sandbox and the bridge the console talks to are all in the
 participant's OpenShell namespace, deployed by the tenant-openshell chart. ui.yaml
 points the console at the bridge. This lets that namespace's sandbox, and the
-bridge's readiness check, reach this participant's MCP Gateway, which otherwise
-only accepts traffic from inside this namespace.
+bridge's readiness check, reach this participant's MCP Gateway.
 
 Envoy pods only. The MCP servers stay reachable from the gateway alone
 (bootstrap-infra's AdminNetworkPolicy), so the sandbox cannot go around it.
+
+The same-namespace rule is load-bearing, not tidiness. A NetworkPolicy that
+selects a pod denies every other source, and the gateway's own broker sits in
+THIS namespace: it hair-pins each tool call back to the Gateway Service
+(the MCPGatewayExtension's privateHost) to open a session with an MCP server.
+With only the OpenShell rule, that hop is refused, and the gateway lists tools
+but every call fails — Envoy logs ext_proc_error_per-message_timeout_exceeded
+and returns 504 after 10s, and the agent reports a 5s tool timeout with no
+mention of the network. Seen on cluster-cj8gk.
+
+tenant-policy's allow-ingress-within-namespace covers the same traffic, which is
+why this was invisible on a cluster whose policy Application had been synced.
+That one belongs to participants, is manual-sync, and may not exist yet on a
+fresh tenant. Nothing platform-owned may depend on it.
 */}}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -30,10 +43,19 @@ spec:
       gateway.networking.k8s.io/gateway-name: {{ .Values.mcpGateway.gatewayName }}
   policyTypes: [Ingress]
   ingress:
+    # The participant's OpenShell namespace: the sandbox and the bridge.
     - from:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: {{ $openshellNs }}
+      ports:
+        - port: 8080
+          protocol: TCP
+    # This namespace: the broker's hair-pin for every tool call, and the
+    # console. See the note above — without this the gateway answers
+    # tools/list and 504s every tools/call.
+    - from:
+        - podSelector: {}
       ports:
         - port: 8080
           protocol: TCP
