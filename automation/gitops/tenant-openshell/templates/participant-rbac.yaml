@@ -1,0 +1,68 @@
+{{- if .Values.participantAccess.enabled }}
+{{- include "to.checks" . -}}
+{{- $ns := include "to.namespace" . -}}
+{{/*
+What the participant may see in their OpenShell namespace.
+
+Read-only, deliberately, and the boundary is not fussiness:
+
+  * Sandbox pods run under the privileged SCC as root with SYS_ADMIN, NET_ADMIN
+    and SYS_PTRACE — that is how the supervisor enforces Landlock and the
+    sandbox's network namespace. OpenShift grants a pod whatever the POD's
+    ServiceAccount may use, so anyone who can create a pod beside
+    <release>-sandbox can start a privileged one as it and own the node. On a
+    shared 30-tenant cluster that reaches every other participant. Hence no
+    create, and no pods/exec.
+  * The gateway's client certificate (openshell-client-tls) opens the OpenShell
+    API, which runs with allowUnauthenticatedUsers. Whoever reads that Secret
+    can create sandboxes from any image as that same ServiceAccount. Hence no
+    secrets.
+
+What they do get is what module 4 needs: the bridge's supervisor log, which is
+where an OpenShell policy rejection is reported ("policy rejected: ..."), the
+sandbox policy as loaded (the openshell-sandbox-policy ConfigMap), and the pods
+and workloads themselves. Deployments and ReplicaSets are included so
+`oc logs deploy/hermes-openshell-bridge` resolves rather than failing on the
+Deployment lookup.
+
+Sandboxes themselves are already readable cluster-wide, from the
+agentops-participant ClusterRole in bootstrap-infra.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: participant-read
+  namespace: {{ $ns }}
+  labels:
+    {{- include "to.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "services", "configmaps", "events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets", "statefulsets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: participant-read
+  namespace: {{ $ns }}
+  labels:
+    {{- include "to.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: participant-read
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: User
+    name: {{ .Values.username }}
+{{- end }}

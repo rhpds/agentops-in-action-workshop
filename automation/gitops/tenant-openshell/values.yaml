@@ -174,3 +174,15 @@ keycloak:
 policyRollout:
   enabled: true
   serviceAccount: mcp-policy-rollout
+
+# Read-only access for the participant in this namespace: pods and their logs,
+# ConfigMaps, Services, events, and the workloads above them. No Secrets, no
+# exec, no creating anything — see templates/participant-rbac.yaml for why that
+# line is where it is.
+#
+# Without this a participant cannot read the bridge's supervisor log, which is
+# the only place an OpenShell policy rejection is reported, and module 4 becomes
+# guesswork. Found on cluster-9c6nx, where the tenant could see the bridge pod
+# but not its log.
+participantAccess:
+  enabled: true
