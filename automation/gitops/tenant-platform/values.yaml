@@ -156,6 +156,25 @@ networkPolicy:
   baselinePermissive: true
 
 # ---------------------------------------------------------------------------
+# Letting the participant sync their own policy Application
+#
+# Modules 4-6 have participants change policy and sync it. Neither the
+# Kubernetes API nor ArgoCD's own RBAC allows that by default, so this chart
+# grants it — scoped to their one Application, by name. See
+# templates/argocd-participant-rbac.yaml.
+#
+# It lives in this Application, which auto-syncs, rather than in bootstrap-tenant
+# where the Applications are created: that one syncs manually, and a participant
+# cannot trigger it either, so a tenant provisioned before this existed would
+# never receive the grant.
+# ---------------------------------------------------------------------------
+participantPolicySync:
+  enabled: true
+  # Where bootstrap-tenant creates the per-participant Applications. Must match
+  # bootstrap-tenant's gitops.argocdNamespace.
+  argocdNamespace: openshift-gitops
+
+# ---------------------------------------------------------------------------
 # Operator console
 #
 # The dashboard reads plant-api directly, so it stays useful when the agent is

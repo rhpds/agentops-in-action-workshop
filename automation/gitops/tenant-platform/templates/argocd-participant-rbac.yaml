@@ -1,0 +1,72 @@
+{{- if .Values.participantPolicySync.enabled }}
+{{- $user := .Values.username -}}
+{{- $argocdNs := .Values.participantPolicySync.argocdNamespace -}}
+{{/*
+Lets the participant sync their own policy Application.
+
+Modules 4-6 are "change the policy, sync it, watch what happens", and without
+this a participant cannot do either half: the Kubernetes API refuses
+applications.argoproj.io outright, and ArgoCD's own RBAC grants them nothing
+(argocd-rbac-cm binds roles to admin groups only, with an empty policy.default),
+even though RHDP provisions a local ArgoCD account per user. Observed as
+user-dsgtx on cluster-9c6nx.
+
+Kubernetes RBAC rather than ArgoCD's policy.csv, deliberately. That ConfigMap is
+rendered by the GitOps operator from the ArgoCD CR, which RHDP's provisioning
+also writes; a chart editing either would be overwritten or would clobber their
+settings. Nothing here touches ArgoCD's configuration.
+
+A sync IS a write to the Application: the CLI and the UI both set .operation,
+and the application-controller acts on it. So `oc patch` is a first-class way to
+sync, and it keeps the lab on the one tool participants already use:
+
+  oc patch application {{ $user }}-policy -n {{ $argocdNs }} --type merge \
+    -p '{"operation":{"sync":{"prune":true,"syncStrategy":{"hook":{}}}}}'
+
+syncStrategy.hook matters: it runs the PostSync Job that restarts the gateway
+and the agent. An "apply" strategy skips hooks, and ArgoCD then carries that
+choice forward into later syncs of the same Application.
+
+Scoped to this participant's policy Application by name, with no list or watch,
+so a participant cannot enumerate other tenants' Applications. Editing helm
+parameters (how mcpGateway.enforced and the OpenShell policy are changed) is the
+same `patch` verb, so one rule covers both halves of the exercise. The platform
+Application is deliberately not included: it is the part they must not edit.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $user }}-policy-sync
+  namespace: {{ $argocdNs }}
+  labels:
+    app.kubernetes.io/part-of: water-plant
+    rhdp.redhat.com/lab: agentops-in-action
+    rhdp.redhat.com/participant: {{ $user }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+rules:
+  - apiGroups: ["argoproj.io"]
+    resources: ["applications"]
+    resourceNames: [{{ printf "%s-policy" $user | quote }}]
+    verbs: ["get", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $user }}-policy-sync
+  namespace: {{ $argocdNs }}
+  labels:
+    app.kubernetes.io/part-of: water-plant
+    rhdp.redhat.com/lab: agentops-in-action
+    rhdp.redhat.com/participant: {{ $user }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $user }}-policy-sync
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: User
+    name: {{ $user }}
+{{- end }}
