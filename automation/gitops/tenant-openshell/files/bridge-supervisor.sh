@@ -194,7 +194,12 @@ setup_otel() {
   log "MLflow experiment $MLFLOW_EXPERIMENT is id $id"
   install_otel_plugin || { log "hermes_otel not installed; tracing is off"; return 0; }
   configure_otel "$token" "$id" || { log "hermes_otel not configured; tracing is off"; return 0; }
-  log "hermes_otel installed, posting spans to $MLFLOW_TRACKING_URI"
+  # Where the spans actually go, which is the relay rather than
+  # MLFLOW_TRACKING_URI: the bridge talks to MLflow directly, the sandbox
+  # cannot. Read it back from the template so the two can never disagree.
+  local endpoint
+  endpoint=$(sed -n 's/^[[:space:]]*endpoint:[[:space:]]*//p' /config/hermes-otel-config.yaml.template | head -1 | tr -d '"')
+  log "hermes_otel installed, posting spans to ${endpoint:-the configured endpoint}"
 }
 
 relay_healthy() {
