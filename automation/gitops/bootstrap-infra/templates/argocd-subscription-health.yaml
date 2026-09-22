@@ -1,0 +1,194 @@
+{{- if .Values.argocdHealthChecks.enabled }}
+{{- $ns := .Values.lab.argocdNamespace -}}
+{{/*
+Stop ArgoCD treating a deliberately refused operator upgrade as unhealthy.
+
+Every operator here is pinned with installPlanApproval: Manual, and
+templates/installplan-approver.yaml approves only the pinned CSVs. That is the
+point. But the moment a catalog refresh offers a newer CSV, OLM creates an
+InstallPlan we will never approve, and the Subscription then reports
+InstallPlanPending=True (RequiresApproval) and state UpgradePending for good.
+
+ArgoCD's built-in health check calls that Progressing. Subscriptions are sync
+wave -2, and ArgoCD will not start a later wave until the current one is
+healthy, so the whole bootstrap sync wedges behind a state we chose. Seen on
+cluster-jddlk: rhods-operator.3.5.1 appeared in the catalog, the approver
+correctly refused it, and the sync sat on "waiting for healthy state of
+Subscription/rhods-operator" for eight hours. Everything after wave -2 never
+applied — including EvalHub at wave 10, which is why agentops-shared was empty
+and module 2 had no scorecard.
+
+The check below says what we mean: pinned and refusing an upgrade is healthy;
+a broken catalog is not.
+
+Applied by patching the ArgoCD CR, because the GitOps operator renders
+argocd-cm from it and reverts direct edits. Only spec.resourceHealthChecks is
+written, and only when our entry is absent: RHDP owns other fields of that CR
+(the per-participant accounts under extraConfig, and rbac), and patching it
+makes the operator restart ArgoCD, which would interrupt the sync running this.
+
+PreSync so the customisation exists before wave -2 is evaluated.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-subscription-health
+  namespace: {{ $ns }}
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "-6"
+data:
+  check.lua: |
+    local hs = {}
+    if obj.status ~= nil then
+      if obj.status.conditions ~= nil then
+        for _, c in ipairs(obj.status.conditions) do
+          if c.type == "CatalogSourcesUnhealthy" and c.status == "True" then
+            hs.status = "Degraded"
+            hs.message = c.message or "catalog source is unhealthy"
+            return hs
+          end
+        end
+      end
+      if obj.status.state == "AtLatestKnown" then
+        hs.status = "Healthy"
+        hs.message = "at the pinned version"
+        return hs
+      end
+      if obj.status.state == "UpgradePending" then
+        hs.status = "Healthy"
+        hs.message = "a newer version is offered and deliberately not approved: this lab pins every operator"
+        return hs
+      end
+      if obj.status.installedCSV ~= nil then
+        hs.status = "Healthy"
+        hs.message = obj.status.installedCSV .. " installed"
+        return hs
+      end
+    end
+    hs.status = "Progressing"
+    hs.message = "waiting for the subscription to report a state"
+    return hs
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argocd-health-patcher
+  namespace: {{ $ns }}
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "-6"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argocd-health-patcher
+  namespace: {{ $ns }}
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "-6"
+rules:
+  - apiGroups: ["argoproj.io"]
+    resources: ["argocds"]
+    resourceNames: [{{ .Values.argocdHealthChecks.argocdName | quote }}]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argocd-health-patcher
+  namespace: {{ $ns }}
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "-6"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: argocd-health-patcher
+subjects:
+  - kind: ServiceAccount
+    name: argocd-health-patcher
+    namespace: {{ $ns }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: argocd-health-patcher
+  namespace: {{ $ns }}
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "-6"
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: argocd-health-patcher
+    spec:
+      serviceAccountName: argocd-health-patcher
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: patch
+          image: {{ .Values.argocdHealthChecks.image }}
+          command: ["/bin/bash", "-c"]
+          env:
+            - { name: HOME, value: /tmp }
+            - { name: ARGOCD_NS, value: {{ $ns | quote }} }
+            - { name: ARGOCD_NAME, value: {{ .Values.argocdHealthChecks.argocdName | quote }} }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits:   { cpu: 200m, memory: 256Mi }
+          volumeMounts:
+            - { name: check, mountPath: /check, readOnly: true }
+          args:
+            - |
+              set -uo pipefail
+              log() { echo "[$(date -u +%H:%M:%S)] $*"; }
+              oc get argocd "$ARGOCD_NAME" -n "$ARGOCD_NS" -o json > /tmp/argocd.json \
+                || { log "cannot read ArgoCD/$ARGOCD_NAME in $ARGOCD_NS"; exit 1; }
+              python3 - /tmp/argocd.json /check/check.lua /tmp/patch.json <<'PY'
+              import json, sys
+              cr, lua_path, out = sys.argv[1], sys.argv[2], sys.argv[3]
+              spec = json.load(open(cr)).get("spec", {})
+              checks = spec.get("resourceHealthChecks") or []
+              lua = open(lua_path).read()
+              for c in checks:
+                  if c.get("group") == "operators.coreos.com" and c.get("kind") == "Subscription":
+                      if c.get("check") == lua:
+                          print("unchanged")
+                          raise SystemExit(0)
+                      checks = [x for x in checks if x is not c]
+                      break
+              checks.append({"group": "operators.coreos.com", "kind": "Subscription", "check": lua})
+              json.dump({"spec": {"resourceHealthChecks": checks}}, open(out, "w"))
+              print("patch")
+              PY
+              if [ ! -s /tmp/patch.json ]; then
+                log "Subscription health check already current; leaving the ArgoCD CR alone"
+                exit 0
+              fi
+              log "adding the Subscription health check to ArgoCD/$ARGOCD_NAME"
+              # Merge patch: only spec.resourceHealthChecks is written, so the
+              # accounts and rbac RHDP sets on this CR are untouched. The
+              # operator then re-renders argocd-cm and restarts ArgoCD.
+              oc patch argocd "$ARGOCD_NAME" -n "$ARGOCD_NS" --type merge --patch-file /tmp/patch.json \
+                || { log "patch failed"; exit 1; }
+              log "done"
+      volumes:
+        - name: check
+          configMap:
+            name: argocd-subscription-health
+{{- end }}

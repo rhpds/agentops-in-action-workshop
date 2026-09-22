@@ -113,6 +113,23 @@ operators:
 # templates/installplan-approver.yaml for why this is not just
 # installPlanApproval: Automatic, and why it shares sync wave -2.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# ArgoCD health customisation for pinned Subscriptions
+#
+# Pinning every operator means refusing the upgrades a catalog refresh offers,
+# and a Subscription with an unapproved InstallPlan never looks healthy to
+# ArgoCD. Since Subscriptions are wave -2, that wedges the whole bootstrap sync
+# behind a state we chose on purpose. See
+# templates/argocd-subscription-health.yaml.
+# ---------------------------------------------------------------------------
+argocdHealthChecks:
+  enabled: true
+  # The ArgoCD CR the GitOps operator renders argocd-cm from. Only
+  # spec.resourceHealthChecks is written, and only when missing.
+  argocdName: openshift-gitops
+  # Needs oc and python3.7+; the RHEL 8 ose-cli ships Python 3.6.
+  image: registry.redhat.io/openshift4/ose-cli-rhel9:latest
+
 installPlanApprover:
   enabled: true
   # Needs `oc` only. ose-cli is already pullable on any RHDP cluster.
