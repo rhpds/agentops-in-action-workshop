@@ -52,7 +52,17 @@ platform:
   # it overrides image.namespace in tenant-platform rather than merging with
   # it — the two have to agree, and this one wins.
   imageNamespace: rh-aiservices-bu
-  # Shared MLflow URL surfaced in the operator console. Empty renders no link.
+  # Where the operator console links for MLflow traces.
+  #
+  # Empty means https://rh-ai.<deployer.domain>/mlflow — RHOAI's dashboard
+  # gateway, which is where the MLflow operator surfaces the UI. MLflow has no
+  # Route of its own, so that gateway is the only way in, and it is reachable by
+  # any participant: RHOAI's Auth CR allows system:authenticated.
+  #
+  # Set explicitly if a cluster's dashboard is not at rh-ai.<domain>; that
+  # prefix was confirmed on cluster-jddlk, where all six RHOAI *-params
+  # ConfigMaps record it as gateway-domain, but it is not read from the cluster
+  # at render time.
   mlflowUrl: ""
   # "hermes" (the harness the lab ships) or "waterplant" (our own agent, kept
   # as a fallback and as the control case for BYOA comparisons). Per

@@ -48,8 +48,22 @@ spec:
           value: {{ .Values.namespaceSuffix | quote }}
         - name: image.namespace
           value: {{ .Values.platform.imageNamespace | quote }}
+        # The console shows an MLflow link when this is set, and hides it when
+        # empty — which it always was, so modules 1, 2 and 6 had no way in to
+        # the traces they are built on.
+        #
+        # MLflow has no Route of its own: the operator runs it in the RHOAI
+        # applications namespace and surfaces it under RHOAI's own dashboard,
+        # behind the data-science-gateway. On cluster-jddlk that gateway is
+        # rh-ai.<apps domain>, recorded identically as gateway-domain in every
+        # *-params ConfigMap, and the rhods-dashboard Route 301s to it. Its
+        # /mlflow path redirects through OpenShift OAuth, which every
+        # participant can complete: RHOAI's Auth CR allows system:authenticated.
+        #
+        # Derived like keycloak.host, and overridable: the rh-ai prefix was
+        # confirmed on one cluster, not read from a cluster-wide source.
         - name: ui.mlflowUrl
-          value: {{ .Values.platform.mlflowUrl | quote }}
+          value: {{ .Values.platform.mlflowUrl | default (printf "https://rh-ai.%s/mlflow" .Values.deployer.domain) | quote }}
         # Which agent harness this participant gets. Forwarded so the choice
         # belongs to the catalog item, rather than needing a commit to
         # tenant-platform's values — which would also switch every participant
