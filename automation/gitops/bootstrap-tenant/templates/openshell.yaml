@@ -55,6 +55,11 @@ spec:
           value: {{ .Values.openshellNamespaceSuffix | quote }}
         - name: keycloak.host
           value: {{ $keycloakHost | quote }}
+        # Whether this participant's Hermes traces to MLflow. The bridge
+        # installs the hermes_otel plugin and creates the experiment; the
+        # sandbox policy has to allow the egress, which tenant-policy owns.
+        - name: mlflow.enabled
+          value: {{ .Values.platform.mlflowTracing | quote }}
   destination:
     server: https://kubernetes.default.svc
     namespace: {{ $ns }}

@@ -117,6 +117,16 @@ openshell:
       - /dev/null
       - /dev/zero
 
+  # Where Hermes' traces go. The hermes_otel plugin posts spans to MLflow's
+  # in-cluster Service, and OpenShell refuses any host not named here: without
+  # this rule its proxy answers 403 and the sandbox emits nothing, however much
+  # MLflow itself allows (verified on cluster-jddlk). Turning it off is one way
+  # to show an agent going dark.
+  mlflow:
+    enabled: true
+    host: mlflow.redhat-ods-applications.svc.cluster.local
+    port: 8443
+
   # More rules, in OpenShell's network_policies shape, e.g.
   #   docs_site:
   #     name: "Plant documentation"

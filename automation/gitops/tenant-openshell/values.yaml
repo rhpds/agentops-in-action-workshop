@@ -152,6 +152,47 @@ model:
   baseUrl: "https://maas-rhdp.apps.maas.redhatworkshops.io/v1"
   model: "qwen3-235b"
 
+# ---------------------------------------------------------------------------
+# MLflow tracing. Hermes emits OTLP spans through the hermes_otel plugin, which
+# the bridge installs into the sandbox and configures per participant. Module 2
+# captures its baseline scorecard from these traces.
+#
+# Authorization is plain Kubernetes RBAC. MLflow runs with
+# --app-name=kubernetes-auth and self_subject_access_review, so every request
+# becomes a SelfSubjectAccessReview against group mlflow.kubeflow.org in the
+# workspace namespace, which is <username>-agentops. No CRD backs that group
+# and none is needed: RBAC matches the strings. Verified on cluster-jddlk —
+# without the Role in templates/bridge.yaml, writes are 403 PERMISSION_DENIED
+# while reads succeed.
+# ---------------------------------------------------------------------------
+mlflow:
+  enabled: true
+  # The Service the MLflow operator creates in the RHOAI applications
+  # namespace. Spans go to <trackingUri>/v1/traces, which is at the server
+  # root; the REST API is under <trackingUri>/mlflow/api/... — not the same
+  # prefix, which is easy to get wrong.
+  trackingUri: "https://mlflow.redhat-ods-applications.svc.cluster.local:8443"
+  # The same host and port again, for the sandbox policy's egress rule. Without
+  # it OpenShell's proxy answers 403 and no span ever leaves the sandbox.
+  host: mlflow.redhat-ods-applications.svc.cluster.local
+  port: 8443
+  # The experiment traces land in, created by the bridge when missing. Empty
+  # means the participant's username.
+  experimentName: ""
+  # MLflow takes the caller's identity from this token. The projected token the
+  # bridge mounts rotates, and the sandbox holds a static file, so the bridge
+  # mints a long-lived one for its own ServiceAccount. templates/bridge.yaml
+  # grants exactly that and nothing else; this cluster honours 8760h.
+  tokenDurationHours: 8760
+  # hermes_otel is not in the sandbox image, so the bridge fetches it and
+  # pushes it in. Pinned to a commit rather than a branch, like every other
+  # version in this lab.
+  plugin:
+    repo: briancaffey/hermes-otel
+    # Release hermes-otel 1.13.0, 2026-09-22.
+    commit: a2afa2203e55f3bc261003f4f86fa01b62be32db
+    sha256: b0b1c82011d0dbcbfeaa370cb9e74ffb7370c0fb42742f19824a37394e54c077
+
 # Must match tenant-platform's mcpGateway and mcp.servers.
 mcpGateway:
   gatewayName: mcp-gateway

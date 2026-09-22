@@ -90,6 +90,90 @@ subjects:
   - kind: ServiceAccount
     name: hermes-openshell-bridge
     namespace: {{ $ns }}
+{{- if .Values.mlflow.enabled }}
+---
+# MLflow turns every request into a Kubernetes SelfSubjectAccessReview: it runs
+# with --app-name=kubernetes-auth and self_subject_access_review, and reviews
+# against the namespace named in X-MLflow-Workspace, which is this
+# participant's lab namespace. Creating the experiment is `create`; posting
+# spans to /v1/traces is `update` on the same resource — the plugin's
+# rules_base.py maps the OTLP route to experiments, with the experiment name
+# from the x-mlflow-experiment-id header as the RBAC resourceName.
+#
+# Nothing serves mlflow.kubeflow.org: there is no CRD, and none is needed,
+# because access review matches these strings against RBAC and no object is
+# ever created. Without this Role, reads answer 200 and writes 403
+# PERMISSION_DENIED (verified on cluster-jddlk).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: hermes-openshell-bridge-mlflow
+  namespace: {{ $agentops }}
+  labels:
+    {{- include "to.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+rules:
+  - apiGroups: ["mlflow.kubeflow.org"]
+    resources: ["experiments"]
+    verbs: ["get", "list", "create", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: hermes-openshell-bridge-mlflow
+  namespace: {{ $agentops }}
+  labels:
+    {{- include "to.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: hermes-openshell-bridge-mlflow
+subjects:
+  - kind: ServiceAccount
+    name: hermes-openshell-bridge
+    namespace: {{ $ns }}
+---
+# MLflow reads the caller's identity from the bearer token, and the sandbox
+# holds a static file while the bridge's projected token rotates. So the bridge
+# mints a long-lived one for itself. resourceNames keeps that to its own
+# ServiceAccount: it cannot mint a token for the sandbox's privileged one,
+# which lives in this namespace too.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: hermes-openshell-bridge-token
+  namespace: {{ $ns }}
+  labels:
+    {{- include "to.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+rules:
+  - apiGroups: [""]
+    resources: ["serviceaccounts/token"]
+    resourceNames: ["hermes-openshell-bridge"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: hermes-openshell-bridge-token
+  namespace: {{ $ns }}
+  labels:
+    {{- include "to.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: hermes-openshell-bridge-token
+subjects:
+  - kind: ServiceAccount
+    name: hermes-openshell-bridge
+    namespace: {{ $ns }}
+{{- end }}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -130,6 +214,35 @@ data:
         enabled: true
         extra:
           skip_auth: true
+{{- if .Values.mlflow.enabled }}
+
+    # Traces to MLflow. The supervisor installs the plugin and writes its
+    # config into the sandbox; Hermes only has to switch it on.
+    plugins:
+      enabled: [hermes_otel]
+{{- end }}
+{{- if .Values.mlflow.enabled }}
+  # hermes_otel's own config. The supervisor fills in the experiment id and the
+  # token: the token authenticates the participant's agent to MLflow, so it
+  # never belongs in a manifest.
+  hermes-otel-config.yaml.template: |
+    enabled: true
+    force_flush_on_session_end: true
+    capture_sender_id: true
+    capture_conversation_history: true
+    backends:
+      - type: otlp
+        name: mlflow
+        # OTLP ingest sits at the server root, not under the /mlflow prefix the
+        # REST API uses.
+        endpoint: {{ printf "%s/v1/traces" .Values.mlflow.trackingUri | quote }}
+        metrics: false
+        logs: false
+        headers:
+          x-mlflow-experiment-id: "__MLFLOW_EXPERIMENT_ID__"
+          Authorization: "Bearer __MLFLOW_TOKEN__"
+          X-MLflow-Workspace: {{ $agentops | quote }}
+{{- end }}
   # The sandbox policy used until tenant-policy's openshell-sandbox-policy
   # exists. See templates/_sandbox-policy.tpl.
   baseline-policy.yaml: |
@@ -253,6 +366,21 @@ spec:
             - { name: MCP_PASSWORD, value: {{ .Values.keycloak.agentPassword | quote }} }
             - name: MCP_TOKEN_URL
               value: {{ printf "https://%s/realms/waterplant-%s/protocol/openid-connect/token" .Values.keycloak.host .Values.username | quote }}
+            # This namespace, for the token the bridge mints for itself.
+            - { name: OPENSHELL_NS, value: {{ $ns | quote }} }
+            - { name: MLFLOW_ENABLED, value: {{ .Values.mlflow.enabled | quote }} }
+{{- if .Values.mlflow.enabled }}
+            - { name: MLFLOW_TRACKING_URI, value: {{ .Values.mlflow.trackingUri | quote }} }
+            - { name: MLFLOW_EXPERIMENT, value: {{ .Values.mlflow.experimentName | default .Values.username | quote }} }
+            - { name: MLFLOW_TOKEN_DURATION_HOURS, value: {{ .Values.mlflow.tokenDurationHours | quote }} }
+            - name: MLFLOW_PLUGIN_URL
+              value: {{ printf "https://github.com/%s/archive/%s.tar.gz" .Values.mlflow.plugin.repo .Values.mlflow.plugin.commit | quote }}
+            - { name: MLFLOW_PLUGIN_SHA256, value: {{ .Values.mlflow.plugin.sha256 | quote }} }
+            # GitHub names the archive's top directory <repo>-<commit>, and the
+            # package is one level inside it.
+            - name: MLFLOW_PLUGIN_SUBDIR
+              value: {{ printf "%s-%s/hermes_otel" (last (splitList "/" .Values.mlflow.plugin.repo)) .Values.mlflow.plugin.commit | quote }}
+{{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: [ALL] }

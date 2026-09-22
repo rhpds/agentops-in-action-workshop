@@ -54,6 +54,16 @@ network_policies:
     binaries:
       - { path: /usr/bin/python3 }
       - { path: /usr/bin/python3.12 }
+{{- if $o.mlflow.enabled }}
+  mlflow_tracing:
+    name: "MLflow tracing (hermes_otel)"
+    endpoints:
+      - { host: {{ $o.mlflow.host | quote }}, port: {{ $o.mlflow.port }}, protocol: rest, enforcement: enforce, access: full }
+    binaries:
+      - { path: /usr/bin/python3 }
+      - { path: /usr/bin/python3.12 }
+      - { path: /usr/local/bin/hermes }
+{{- end }}
 {{- if $o.permissiveEgress }}
   broad_outbound:
     name: "Broad outbound (baseline)"

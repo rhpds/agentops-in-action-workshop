@@ -64,6 +64,11 @@ platform:
   # ConfigMaps record it as gateway-domain, but it is not read from the cluster
   # at render time.
   mlflowUrl: ""
+  # Whether this participant's Hermes emits OTLP traces to MLflow. Only the
+  # openshell runtime does: the bridge installs the hermes_otel plugin into the
+  # sandbox and creates the participant's experiment. The plain Hermes
+  # Deployment ignores this.
+  mlflowTracing: true
   # "hermes" (the harness the lab ships) or "waterplant" (our own agent, kept
   # as a fallback and as the control case for BYOA comparisons). Per
   # participant, so one attendee can be given the other harness without

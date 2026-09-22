@@ -102,6 +102,101 @@ put_file() {
   X "mkdir -p \"\$(dirname '$2')\" && printf '%s' '$b64' | base64 -d > '$2' && chmod $3 '$2'" >/dev/null
 }
 
+# put_blob <local path> <sandbox path>
+# put_file in chunks. The plugin tarball's base64 is far longer than one exec
+# command line holds.
+put_blob() {
+  local b64 i n
+  b64=$(base64 -w0 "$1")
+  n=${#b64}
+  X "rm -f '$2.b64'" >/dev/null || return 1
+  i=0
+  while [ "$i" -lt "$n" ]; do
+    X "printf '%s' '${b64:$i:16000}' >> '$2.b64'" >/dev/null || return 1
+    i=$((i + 16000))
+  done
+  X "base64 -d '$2.b64' > '$2' && rm -f '$2.b64'" >/dev/null
+}
+
+otel_enabled() { [ "${MLFLOW_ENABLED:-false}" = "true" ] && [ -n "${MLFLOW_TRACKING_URI:-}" ]; }
+
+# MLflow identifies the caller by this token and authorizes it with a
+# SelfSubjectAccessReview, so the agent needs one of its own: the bridge's
+# projected token rotates, and what goes into the sandbox is a static file.
+# templates/bridge.yaml allows this ServiceAccount to mint a token for itself
+# and for nothing else.
+mlflow_token() {
+  oc create token hermes-openshell-bridge -n "$OPENSHELL_NS" \
+    --duration="${MLFLOW_TOKEN_DURATION_HOURS}h" 2>/dev/null
+}
+
+# mlflow_experiment_id <token>
+# The experiment this participant's traces land in, created once. The REST API
+# is under /mlflow; only OTLP ingest is at the server root.
+mlflow_experiment_id() {
+  local token="$1" id
+  id=$(curl -sk --max-time 30 -H "Authorization: Bearer $token" \
+        -H "X-MLflow-Workspace: $AGENTOPS_NS" \
+        "${MLFLOW_TRACKING_URI}/mlflow/api/2.0/mlflow/experiments/get-by-name?experiment_name=${MLFLOW_EXPERIMENT}" 2>/dev/null \
+        | python3 -c "import sys,json;print(json.load(sys.stdin).get('experiment',{}).get('experiment_id',''))" 2>/dev/null)
+  if [ -z "$id" ]; then
+    id=$(curl -sk --max-time 30 -X POST -H "Authorization: Bearer $token" \
+          -H "X-MLflow-Workspace: $AGENTOPS_NS" -H "Content-Type: application/json" \
+          -d "{\"name\":\"${MLFLOW_EXPERIMENT}\"}" \
+          "${MLFLOW_TRACKING_URI}/mlflow/api/2.0/mlflow/experiments/create" 2>/dev/null \
+          | python3 -c "import sys,json;print(json.load(sys.stdin).get('experiment_id',''))" 2>/dev/null)
+  fi
+  printf '%s' "$id"
+}
+
+# hermes_otel is not in the sandbox image. It is fetched here, in the bridge,
+# where no sandbox policy applies, checked against the pinned digest and pushed
+# in. So a participant who tightens their policy stops the traces leaving, not
+# the install.
+install_otel_plugin() {
+  local dir="$WORK/otel"
+  rm -rf "$dir"; mkdir -p "$dir/pkg"
+  if ! curl -fsSL --max-time 120 "$MLFLOW_PLUGIN_URL" -o "$dir/src.tar.gz"; then
+    log "could not download hermes_otel from $MLFLOW_PLUGIN_URL"
+    return 1
+  fi
+  if [ "$(sha256sum "$dir/src.tar.gz" | cut -d' ' -f1)" != "$MLFLOW_PLUGIN_SHA256" ]; then
+    log "hermes_otel does not match its pinned sha256; not installing it"
+    return 1
+  fi
+  tar -xzf "$dir/src.tar.gz" --strip-components=2 -C "$dir/pkg" "$MLFLOW_PLUGIN_SUBDIR" || return 1
+  tar -czf "$dir/pkg.tar.gz" -C "$dir/pkg" .
+  put_blob "$dir/pkg.tar.gz" /tmp/hermes-otel.tar.gz || return 1
+  X "mkdir -p /sandbox/.hermes/plugins/hermes_otel && tar -xzf /tmp/hermes-otel.tar.gz -C /sandbox/.hermes/plugins/hermes_otel && rm -f /tmp/hermes-otel.tar.gz" >/dev/null || return 1
+  rm -rf "$dir"
+}
+
+# configure_otel <token> <experiment id>
+configure_otel() {
+  local rc
+  sed -e "s|__MLFLOW_EXPERIMENT_ID__|$2|g" -e "s|__MLFLOW_TOKEN__|$1|g" \
+    /config/hermes-otel-config.yaml.template > "$WORK/hermes-otel-config.yaml"
+  put_file "$WORK/hermes-otel-config.yaml" /sandbox/.hermes/plugins/hermes_otel/config.yaml 600
+  rc=$?
+  rm -f "$WORK/hermes-otel-config.yaml"
+  return $rc
+}
+
+# Tracing is best-effort: a participant whose MLflow is unreachable should still
+# get a working agent, just an unobservable one. Says which it was.
+setup_otel() {
+  otel_enabled || return 0
+  local token id
+  token=$(mlflow_token)
+  if [ -z "$token" ]; then log "could not mint an MLflow token; tracing is off"; return 0; fi
+  id=$(mlflow_experiment_id "$token")
+  if [ -z "$id" ]; then log "no MLflow experiment $MLFLOW_EXPERIMENT; tracing is off"; return 0; fi
+  log "MLflow experiment $MLFLOW_EXPERIMENT is id $id"
+  install_otel_plugin || { log "hermes_otel not installed; tracing is off"; return 0; }
+  configure_otel "$token" "$id" || { log "hermes_otel not configured; tracing is off"; return 0; }
+  log "hermes_otel installed, posting spans to $MLFLOW_TRACKING_URI"
+}
+
 relay_healthy() {
   [ -n "$RELAY_HOST" ] || return 1
   [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
@@ -162,6 +257,11 @@ EOF
   put_file /config/mcp-token-refresh.py /sandbox/mcp-token-refresh.py 700 || ok=0
   rm -f "$WORK/config.yaml" "$WORK/env.sh"
   if [ "$ok" -ne 1 ]; then log "could not write files into the sandbox"; return 1; fi
+
+  # Before Hermes starts: it reads its plugins at start-up, as it does its
+  # tools. Hermes' config enables hermes_otel, so the plugin and its config
+  # have to be in place by then.
+  setup_otel
 
   # Stop whatever an earlier bridge started. The bracketed patterns keep the
   # command from matching its own command line.
