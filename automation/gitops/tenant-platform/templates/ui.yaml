@@ -1,4 +1,84 @@
 {{- $ns := printf "%s-%s" .Values.username .Values.namespaceSuffix -}}
+{{- $uiSa := "water-plant-ui" -}}
+{{/*
+Identity for the console.
+
+Its own ServiceAccount rather than the namespace's `default`, because of what
+the RoleBinding below grants: read access to this participant's MLflow traces.
+The participant has `edit` here, so anything they run would inherit a grant made
+to `default`.
+*/}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $uiSa }}
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: water-plant-ui
+    app.kubernetes.io/part-of: water-plant
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+{{- if .Values.ui.mlflowUrl }}
+---
+{{/*
+Lets the console resolve which MLflow trace a turn just produced, so it can end
+the turn with a link to that trace instead of MLflow's front door.
+
+It needs this because Hermes loops server-side: no tool call crosses the wire to
+the console, and module 6 has participants debug an over-restrictive policy from
+the trace. The calls are not lost — hermes_otel exports them — but without a
+link the participant is left to find their own turn among the others.
+
+Read-only, unlike the bridge's Role in tenant-openshell, which also writes. Same
+non-existent API group: nothing serves mlflow.kubeflow.org and nothing needs to,
+because MLflow runs --app-name=kubernetes-auth and every request becomes a
+SelfSubjectAccessReview matching these strings.
+
+Two traps when checking this by hand, both hit on cluster-jddlk:
+`oc auth can-i get experiments.mlflow.kubeflow.org` answers "no" even when the
+access is granted, because there is no CRD for it to resolve — post a real
+SubjectAccessReview instead, which answers allowed:true and names the binding.
+And the authorizer caches denials for 300s, so a lookup tried before this
+existed keeps failing for five minutes after it does.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $uiSa }}-mlflow-read
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: water-plant-ui
+    app.kubernetes.io/part-of: water-plant
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+rules:
+  - apiGroups: ["mlflow.kubeflow.org"]
+    resources: ["experiments"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $uiSa }}-mlflow-read
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: water-plant-ui
+    app.kubernetes.io/part-of: water-plant
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $uiSa }}-mlflow-read
+subjects:
+  - kind: ServiceAccount
+    name: {{ $uiSa }}
+    namespace: {{ $ns }}
+{{- end }}
+---
 {{/*
 The operator console.
 
@@ -31,6 +111,7 @@ spec:
         app.kubernetes.io/name: water-plant-ui
         app.kubernetes.io/part-of: water-plant
     spec:
+      serviceAccountName: {{ $uiSa }}
       securityContext:
         runAsNonRoot: true
         seccompProfile:
@@ -102,6 +183,18 @@ spec:
             {{- end }}
             - name: MLFLOW_URL
               value: {{ .Values.ui.mlflowUrl | quote }}
+            {{- if .Values.ui.mlflowUrl }}
+            # Which experiment holds this participant's traces, so the console
+            # can find the one its own turn just wrote. Defaults the same way
+            # the bridge's MLFLOW_EXPERIMENT does — the participant's username —
+            # because they must name the same experiment or the console searches
+            # somewhere Hermes never wrote to.
+            #
+            # Inert on the waterplant harness, which emits its tool calls to the
+            # console directly and never reaches this code path.
+            - name: MLFLOW_EXPERIMENT
+              value: {{ .Values.ui.mlflowExperiment | default .Values.username | quote }}
+            {{- end }}
             - name: NAMESPACE
               value: {{ $ns }}
           securityContext:

@@ -186,7 +186,18 @@ ui:
   # this chart actually deployed and speaks that harness's protocol. Set a
   # value only to aim the console at an agent outside this chart.
   agentUrl: ""
+  # Set this and the console does two things with it: links its header to
+  # MLflow, and — since Hermes's tool calls never cross the wire — ends each
+  # turn with a link to that turn's own trace. The second also creates the
+  # read-only RBAC the console's ServiceAccount needs to search for it. Empty,
+  # neither happens and the console says plainly that the harness exposes no
+  # tool calls.
   mlflowUrl: ""
+  # The experiment the console searches. Empty means the participant's
+  # username, which is what the bridge names it. Change one and you must change
+  # the other, or the console searches an experiment Hermes never wrote to and
+  # every turn falls back to MLflow's front door.
+  mlflowExperiment: ""
   route:
     enabled: true
     timeout: 600s
