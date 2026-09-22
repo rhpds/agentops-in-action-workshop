@@ -72,10 +72,28 @@ spec:
               # and the caller's identity stops at the console. That is a real
               # loss for the identity scenarios; /api/config reports it rather
               # than letting an exercise fail silently.
+              #
+              # optional, because a hard reference here took out whole tenants
+              # on three clusters. The console is sync wave 2 and the gateway's
+              # MCPServerRegistrations are wave 3: with the Secret absent this
+              # container could not start, the Deployment never went healthy,
+              # the sync failed at wave 2, and wave 3 never ran. The gateway
+              # then federated only its own two broker tools, the agent waited
+              # for tool prefixes that could never appear, and the console
+              # reported "agent unreachable" — no part of which names a missing
+              # Secret. On cluster-jddlk ArgoCD's retries were exhausted and a
+              # participant could not recover it, because the platform
+              # Application is deliberately beyond their reach.
+              #
+              # Unset, the console still serves the dashboard and the chat pane
+              # fails per request. On the openshell runtime the key is inert
+              # anyway: the relay strips Authorization and the gateway's mTLS
+              # authenticates the caller.
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.agent.hermes.envSecret }}
                   key: API_SERVER_KEY
+                  optional: true
             {{- else }}
             - name: AGENT_URL
               value: {{ .Values.ui.agentUrl | default (printf "http://waterplant-agent.%s.svc:8080" $ns) | quote }}
