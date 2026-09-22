@@ -58,7 +58,7 @@ network_policies:
   mlflow_tracing:
     name: "MLflow tracing (hermes_otel)"
     endpoints:
-      - { host: {{ $o.mlflow.host | quote }}, port: {{ $o.mlflow.port }}, protocol: rest, enforcement: enforce, access: full }
+      - { host: {{ printf "%s.%s-%s.svc.cluster.local" $o.mlflow.relayServiceName .Values.username $o.namespaceSuffix | quote }}, port: {{ $o.mlflow.relayPort }}, protocol: rest, enforcement: enforce, access: full }
     binaries:
       - { path: /usr/bin/python3 }
       - { path: /usr/bin/python3.12 }

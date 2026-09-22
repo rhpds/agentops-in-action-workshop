@@ -172,10 +172,28 @@ mlflow:
   # root; the REST API is under <trackingUri>/mlflow/api/... — not the same
   # prefix, which is easy to get wrong.
   trackingUri: "https://mlflow.redhat-ods-applications.svc.cluster.local:8443"
-  # The same host and port again, for the sandbox policy's egress rule. Without
-  # it OpenShell's proxy answers 403 and no span ever leaves the sandbox.
+  # The MLflow Service the relay forwards to, and the name its certificate
+  # carries (SAN: mlflow.redhat-ods-applications.svc.cluster.local).
   host: mlflow.redhat-ods-applications.svc.cluster.local
   port: 8443
+  # Hermes cannot post spans to MLflow directly. OpenShell enforces egress with
+  # a MITM proxy that re-originates TLS, and its trust store holds only public
+  # roots — 147 of them, none from OpenShift. MLflow's certificate is issued by
+  # openshift-service-serving-signer, so the proxy allows the connection and
+  # then fails the handshake: the OCSF audit log shows NET:OPEN ALLOWED
+  # [policy:mlflow_tracing] followed by NET:FAIL 20ms later, and the exporter
+  # reports "Failed to export span batch" (cluster-jddlk). Neither the gateway
+  # chart nor the gateway pod exposes anything for that trust store, and
+  # RHOAI's public route answers 302 to OAuth, which an exporter cannot follow.
+  #
+  # So the bridge relays. nginx beside the supervisor listens on plain HTTP and
+  # forwards to MLflow over HTTPS, verifying it against the service CA
+  # OpenShift injects. Plain HTTP to an in-cluster host is exactly what the MCP
+  # Gateway rule already does, and that path works. The sandbox policy
+  # therefore names the relay, not MLflow.
+  relay:
+    serviceName: hermes-mlflow-relay
+    port: 8788
   # The experiment traces land in, created by the bridge when missing. Empty
   # means the participant's username.
   experimentName: ""

@@ -31,6 +31,15 @@ names the release <username>-openshell.
 {{- end -}}
 
 {{/*
+The MLflow relay, in the bridge pod. Hermes posts spans to it over plain HTTP
+and nginx forwards them to MLflow over HTTPS, because OpenShell's egress proxy
+cannot verify MLflow's service-CA certificate. See values.yaml's mlflow.relay.
+*/}}
+{{- define "to.mlflowRelayHost" -}}
+{{- printf "%s.%s.svc.cluster.local" .Values.mlflow.relay.serviceName (include "to.namespace" .) -}}
+{{- end -}}
+
+{{/*
 The vendored chart puts everything in the release namespace, and the bridge
 assumes it is <username>-openshell.
 */}}

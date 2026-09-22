@@ -233,9 +233,11 @@ data:
     backends:
       - type: otlp
         name: mlflow
-        # OTLP ingest sits at the server root, not under the /mlflow prefix the
-        # REST API uses.
-        endpoint: {{ printf "%s/v1/traces" .Values.mlflow.trackingUri | quote }}
+        # The relay in this pod, over plain HTTP: OpenShell's egress proxy
+        # cannot verify MLflow's service-CA certificate, so the sandbox never
+        # speaks to MLflow directly. OTLP ingest sits at the server root, not
+        # under the /mlflow prefix the REST API uses.
+        endpoint: {{ printf "http://%s:%v/v1/traces" (include "to.mlflowRelayHost" .) .Values.mlflow.relay.port | quote }}
         metrics: false
         logs: false
         headers:
@@ -284,6 +286,32 @@ data:
           client_max_body_size 10m;
         }
       }
+{{- if .Values.mlflow.enabled }}
+      # The MLflow relay. Spans arrive from the sandbox as plain HTTP and leave
+      # as HTTPS, verified against the service CA OpenShift injects at
+      # /service-ca. This exists because OpenShell's egress proxy re-originates
+      # TLS and trusts only public roots, so it cannot verify MLflow's
+      # service-CA certificate; plain HTTP in-cluster is a path it does allow.
+      server {
+        listen {{ .Values.mlflow.relay.port }};
+        location / {
+          proxy_pass https://{{ .Values.mlflow.host }}:{{ .Values.mlflow.port }};
+          proxy_http_version 1.1;
+          proxy_set_header Host {{ .Values.mlflow.host }};
+          proxy_set_header Connection "";
+          proxy_ssl_trusted_certificate /service-ca/service-ca.crt;
+          proxy_ssl_verify on;
+          proxy_ssl_verify_depth 2;
+          proxy_ssl_name {{ .Values.mlflow.host }};
+          proxy_ssl_server_name on;
+          proxy_buffering off;
+          proxy_request_buffering off;
+          proxy_read_timeout 120s;
+          proxy_send_timeout 120s;
+          client_max_body_size 10m;
+        }
+      }
+{{- end }}
     }
 ---
 apiVersion: apps/v1
@@ -404,6 +432,10 @@ spec:
           ports:
             - name: http
               containerPort: {{ .Values.bridge.port }}
+{{- if .Values.mlflow.enabled }}
+            - name: mlflow-relay
+              containerPort: {{ .Values.mlflow.relay.port }}
+{{- end }}
           # Ready only when Hermes answers through the whole path: nginx, the
           # relay, the sandbox. A rollout of this Deployment waits for that.
           readinessProbe:
@@ -419,6 +451,9 @@ spec:
           volumeMounts:
             - { name: mtls, mountPath: /mtls, readOnly: true }
             - { name: shared, mountPath: /shared, readOnly: true }
+{{- if .Values.mlflow.enabled }}
+            - { name: service-ca, mountPath: /service-ca, readOnly: true }
+{{- end }}
       volumes:
         - name: tools
           emptyDir: {}
@@ -439,6 +474,13 @@ spec:
         - name: mtls
           secret:
             secretName: openshell-client-tls
+{{- if .Values.mlflow.enabled }}
+        # OpenShift's service CA, put there by the service-ca operator. nginx
+        # verifies MLflow against it.
+        - name: service-ca
+          configMap:
+            name: mlflow-service-ca
+{{- end }}
 ---
 # Same name and port as the plain Hermes Service, so the console's contract does
 # not change with the runtime.
@@ -459,3 +501,39 @@ spec:
     - name: http
       port: {{ .Values.bridge.port }}
       targetPort: http
+{{- if .Values.mlflow.enabled }}
+---
+# Empty on purpose: the service-ca operator fills in service-ca.crt, and
+# refreshes it when the CA rotates.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mlflow-service-ca
+  namespace: {{ $ns }}
+  labels:
+    {{- include "to.labels" . | nindent 4 }}
+  annotations:
+    service.beta.openshift.io/inject-cabundle: "true"
+    argocd.argoproj.io/sync-wave: "-1"
+---
+# Where the sandbox posts its spans. The name is what the sandbox policy allows
+# and what hermes_otel is pointed at, so the two must agree — both come from
+# mlflow.relay in values.yaml.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.mlflow.relay.serviceName }}
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: hermes-openshell-bridge
+    {{- include "to.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  selector:
+    app.kubernetes.io/name: hermes-openshell-bridge
+  ports:
+    - name: mlflow-relay
+      port: {{ .Values.mlflow.relay.port }}
+      targetPort: mlflow-relay
+{{- end }}

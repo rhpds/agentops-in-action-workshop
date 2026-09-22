@@ -124,8 +124,13 @@ openshell:
   # to show an agent going dark.
   mlflow:
     enabled: true
-    host: mlflow.redhat-ods-applications.svc.cluster.local
-    port: 8443
+    # The relay in the bridge pod, not MLflow itself. OpenShell's egress proxy
+    # re-originates TLS and trusts only public roots, while MLflow's
+    # certificate comes from OpenShift's service CA — so a rule naming MLflow
+    # directly is allowed by policy and then dropped at the handshake. nginx in
+    # the bridge relays plain HTTP to MLflow's HTTPS instead.
+    relayServiceName: hermes-mlflow-relay
+    relayPort: 8788
 
   # More rules, in OpenShell's network_policies shape, e.g.
   #   docs_site:

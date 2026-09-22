@@ -98,6 +98,19 @@ spec:
       ports:
         - port: {{ .Values.bridge.port }}
           protocol: TCP
+{{- if .Values.mlflow.enabled }}
+    # The sandbox posts its spans to the MLflow relay in this pod. It is in this
+    # namespace, so a podSelector — and sandbox pods carry only
+    # agents.x-k8s.io/sandbox-name-hash, as noted above.
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: agents.x-k8s.io/sandbox-name-hash
+                operator: Exists
+      ports:
+        - port: {{ .Values.mlflow.relay.port }}
+          protocol: TCP
+{{- end }}
 {{- if .Values.policyRollout.enabled }}
 ---
 # tenant-policy's mcp-gateway-rollout Job runs in the lab namespace and restarts
