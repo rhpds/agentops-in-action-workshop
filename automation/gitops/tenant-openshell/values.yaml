@@ -234,6 +234,26 @@ policyRollout:
   enabled: true
   serviceAccount: mcp-policy-rollout
 
+# ---------------------------------------------------------------------------
+# Prototype: watches Keycloak for tool: role changes on the operator user and
+# re-provisions Hermes as soon as it sees one, instead of waiting on
+# mcp-token-refresh.py's own schedule (hermes.tokenRefreshSeconds) — which by
+# itself was measured to leave a grant or revoke unreflected for up to 20
+# minutes, because Hermes' MCP client does not reconnect just because the
+# token file on disk changed. See files/bridge-supervisor.sh's role_watch_loop.
+#
+# Polls the realm admin REST API rather than reacting to a Keycloak webhook:
+# this cluster's Keycloak has no webhook feature enabled, and turning one on
+# is a cluster-wide change, not a per-tenant one, so it is out of scope here.
+# ---------------------------------------------------------------------------
+roleWatch:
+  enabled: true
+  pollSeconds: 5
+  adminUser: admin
+  # Must match tenant-platform's keycloak.adminPassword. Lab credential, not
+  # a secret — see the comment there.
+  adminPassword: redhat
+
 # Read-only access for the participant in this namespace: pods and their logs,
 # ConfigMaps, Services, events, and the workloads above them. No Secrets, no
 # exec, no creating anything — see templates/participant-rbac.yaml for why that

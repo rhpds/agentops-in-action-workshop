@@ -13,7 +13,10 @@ Two containers:
               write Hermes' files, start Hermes and its token refresher inside
               it, and expose Hermes through the gateway's relay. Then watches
               Hermes through the relay, and the sandbox policy for changes, and
-              does it all again when either needs it.
+              does it all again when either needs it. If roleWatch.enabled, a
+              second background loop in the same container also watches the
+              operator's Keycloak tool: roles and does the same the moment
+              those change — see files/bridge-supervisor.sh's role_watch_loop.
   relay-proxy nginx on :8787, forwarding to the relay with the gateway's client
               certificate and the relay's Host header, unbuffered so streamed
               replies stream.
@@ -396,6 +399,10 @@ spec:
               value: {{ printf "https://%s/realms/waterplant-%s/protocol/openid-connect/token" .Values.keycloak.host .Values.username | quote }}
             # This namespace, for the token the bridge mints for itself.
             - { name: OPENSHELL_NS, value: {{ $ns | quote }} }
+            - { name: ROLE_WATCH_ENABLED, value: {{ .Values.roleWatch.enabled | quote }} }
+            - { name: ROLE_WATCH_SECONDS, value: {{ .Values.roleWatch.pollSeconds | quote }} }
+            - { name: ROLE_WATCH_ADMIN_USER, value: {{ .Values.roleWatch.adminUser | quote }} }
+            - { name: ROLE_WATCH_ADMIN_PASSWORD, value: {{ .Values.roleWatch.adminPassword | quote }} }
             - { name: MLFLOW_ENABLED, value: {{ .Values.mlflow.enabled | quote }} }
 {{- if .Values.mlflow.enabled }}
             - { name: MLFLOW_TRACKING_URI, value: {{ .Values.mlflow.trackingUri | quote }} }
