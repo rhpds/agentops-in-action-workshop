@@ -14,6 +14,10 @@ mkdir -p "$WORK/probe/mcp-tokens"
 GATEWAY_ENDPOINT="https://${GATEWAY_HOST}:8080"
 RELAY_HOST=""
 APPLIED_POLICY=""
+# Serializes provision(): role_watch_loop below calls it from a background
+# process, and must never overlap the main loop's own calls to it — two
+# concurrent `openshell sandbox create` calls race.
+PROVISION_LOCK=/tmp/work/provision.lock
 
 log()   { echo "[$(date -u +%H:%M:%S)] $*"; }
 strip() { sed 's/\x1b\[[0-9;]*m//g'; }
@@ -93,6 +97,113 @@ apply_policy() {
   # Most often a policy participants edited into something OpenShell refuses.
   log "policy rejected: $(printf '%s' "$out" | strip | grep -vE '^\s*$' | tr -s ' ' | tr -d '│×' | tr '\n' ' ' | cut -c1-400)"
   return 1
+}
+
+# Runs provision() under a lock, so the main loop and role_watch_loop (a
+# separate background process) never call it at the same time. No subshell:
+# provision() sets globals (APPLIED_POLICY, RELAY_HOST) the main loop reads
+# afterward, and a `( ... )` subshell would silently lose those.
+provision_locked() {
+  local lock_fd rc
+  exec {lock_fd}>"$PROVISION_LOCK"
+  if ! flock -w 60 "$lock_fd"; then
+    log "provision already running elsewhere; skipping this trigger"
+    exec {lock_fd}>&-
+    return 1
+  fi
+  provision
+  rc=$?
+  flock -u "$lock_fd"
+  exec {lock_fd}>&-
+  return $rc
+}
+
+# ---------------------------------------------------------------------------
+# Watches Keycloak for changes to the operator's tool: roles and re-provisions
+# Hermes the moment they change. Without this, a grant or revoke only reaches
+# Hermes on mcp-token-refresh.py's next scheduled refresh at best, and was
+# measured to take up to 20 minutes in practice — Hermes' MCP client does not
+# reconnect just because the token file on disk changed underneath it.
+#
+# Polls the realm admin REST API with the realm's admin account rather than a
+# Keycloak webhook: this cluster's Keycloak has no webhook feature enabled,
+# and turning one on is a cluster-wide change this does not need. admin's
+# password is the same lab credential already in git as
+# tenant-platform's keycloak.adminPassword — not a secret, see there.
+#
+# KC_HOST and KC_REALM come from MCP_TOKEN_URL rather than their own values,
+# since that URL already names both.
+#
+# role_watch_loop runs as its own backgrounded process (`&` forks), not just
+# a function call, so provision()'s globals (APPLIED_POLICY, RELAY_HOST) it
+# sets there live only in that process's own memory, not the main loop's.
+# Harmless here: RELAY_HOST is deterministic (SANDBOX_NAME/API_PORT never
+# change), and APPLIED_POLICY is re-derived from the same mounted policy file
+# either process reads, so both always agree once fully provisioned.
+# ---------------------------------------------------------------------------
+KC_ISSUER=${MCP_TOKEN_URL%/protocol/openid-connect/token}
+KC_HOST=$(printf '%s' "$KC_ISSUER" | sed -E 's#^https://([^/]+)/.*#\1#')
+KC_REALM=$(printf '%s' "$KC_ISSUER" | sed -E 's#.*/realms/##')
+
+kc_admin_token() {
+  curl -sk --max-time 10 -X POST \
+    "https://${KC_HOST}/realms/${KC_REALM}/protocol/openid-connect/token" \
+    -d grant_type=password -d client_id="$MCP_CLIENT_ID" \
+    -d username="$ROLE_WATCH_ADMIN_USER" -d password="$ROLE_WATCH_ADMIN_PASSWORD" \
+    2>/dev/null | python3 -c "import sys,json;print(json.load(sys.stdin)['access_token'])" 2>/dev/null
+}
+
+kc_operator_id() {
+  local token="$1"
+  curl -sk --max-time 10 -H "Authorization: Bearer $token" \
+    "https://${KC_HOST}/admin/realms/${KC_REALM}/users?username=${MCP_USERNAME}&exact=true" \
+    2>/dev/null | python3 -c "import sys,json;print(json.load(sys.stdin)[0]['id'])" 2>/dev/null
+}
+
+# Hashes every tool: role currently mapped onto the operator, across every
+# MCP server client. Any grant or revoke changes the hash.
+kc_role_hash() {
+  local token="$1" id="$2"
+  curl -sk --max-time 10 -H "Authorization: Bearer $token" \
+    "https://${KC_HOST}/admin/realms/${KC_REALM}/users/${id}/role-mappings" \
+    2>/dev/null | python3 -c "
+import sys, json, hashlib
+try:
+    d = json.load(sys.stdin)
+    pairs = sorted(
+        f\"{cm['client']}:{r['name']}\"
+        for cm in d.get('clientMappings', {}).values()
+        for r in cm.get('mappings', [])
+    )
+    print(hashlib.sha256(','.join(pairs).encode()).hexdigest()[:16])
+except Exception:
+    pass
+" 2>/dev/null
+}
+
+# Runs for the life of the container, alongside the main loop. Started only
+# once the first provision() has already succeeded.
+role_watch_loop() {
+  local token id hash last
+  log "role watch: polling every ${ROLE_WATCH_SECONDS}s for tool: role changes on $MCP_USERNAME"
+  token=$(kc_admin_token)
+  id=$(kc_operator_id "$token")
+  if [ -z "$id" ]; then
+    log "role watch: could not resolve $MCP_USERNAME's user id; role watch is off"
+    return
+  fi
+  last=$(kc_role_hash "$token" "$id")
+  while true; do
+    sleep "$ROLE_WATCH_SECONDS"
+    token=$(kc_admin_token) || continue
+    hash=$(kc_role_hash "$token" "$id")
+    [ -z "$hash" ] && continue
+    if [ "$hash" != "$last" ]; then
+      log "role watch: $MCP_USERNAME's tool roles changed; re-provisioning Hermes"
+      last="$hash"
+      provision_locked || log "role watch: re-provisioning failed; the main loop will retry on its own schedule"
+    fi
+  done
 }
 
 # put_file <local path> <sandbox path> <mode>
@@ -308,7 +419,13 @@ EOF
 }
 
 connect_cli
-until provision; do log "set-up failed; retrying in 30s"; sleep 30; done
+until provision_locked; do log "set-up failed; retrying in 30s"; sleep 30; done
+
+if [ "${ROLE_WATCH_ENABLED:-false}" = "true" ]; then
+  role_watch_loop &
+else
+  log "role watch is off (ROLE_WATCH_ENABLED != true)"
+fi
 
 failures=0
 while true; do
@@ -316,7 +433,7 @@ while true; do
   # A participant synced a new sandbox policy (the mounted ConfigMap changed).
   if [ "$(policy_hash)" != "$APPLIED_POLICY" ]; then
     log "the sandbox policy changed; applying it and restarting Hermes"
-    until provision; do log "set-up failed; retrying in 30s"; sleep 30; done
+    until provision_locked; do log "set-up failed; retrying in 30s"; sleep 30; done
     failures=0
     continue
   fi
@@ -325,7 +442,7 @@ while true; do
   log "Hermes did not answer through the relay ($failures/3)"
   if [ "$failures" -ge 3 ]; then
     log "setting the sandbox up again (it may have restarted)"
-    until provision; do log "set-up failed; retrying in 30s"; sleep 30; done
+    until provision_locked; do log "set-up failed; retrying in 30s"; sleep 30; done
     failures=0
   fi
 done
