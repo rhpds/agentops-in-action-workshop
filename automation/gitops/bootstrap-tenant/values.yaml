@@ -24,6 +24,15 @@ openshellNamespaceSuffix: openshell
 deployer:
   domain: apps.example.com
 
+# Rendered into the hermes-env Secret in <username>-agentops. Supplied by the
+# tenant catalog item via ocp4_workload_gitops_bootstrap_helm_values.
+#   modelApiKey   the participant's LiteLLM virtual key (sk-…)
+#   apiServerKey  Hermes' static bearer, one random value per participant
+# Never commit real values here.
+secrets:
+  modelApiKey: ""
+  apiServerKey: ""
+
 # RHDP's Keycloak. Empty means sso.<deployer.domain>, which is where RHDP
 # publishes it (verified on cluster-tpss7). Forwarded to both tenant
 # Applications: the platform one creates the participant's realm and points the
