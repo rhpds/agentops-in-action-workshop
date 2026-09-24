@@ -132,8 +132,20 @@ argocdHealthChecks:
 
 installPlanApprover:
   enabled: true
-  # Needs `oc` only. ose-cli is already pullable on any RHDP cluster.
-  image: registry.redhat.io/openshift4/ose-cli:latest
+  # Needs `oc` only, and the tag matters more than it looks: this was
+  # registry.redhat.io/openshift4/ose-cli:latest, and that repository *refuses*
+  # the latest tag — "This repository does not use the latest tag ... must be
+  # pulled with an explicit version". On cluster-jlrj2 all three Job pods sat in
+  # ImagePullBackOff for the full timeout and were killed by
+  # activeDeadlineSeconds, so not one line of the approver script ran, no
+  # InstallPlan was approved, no operator installed, the MCPServer CRD never
+  # existed, and every tenant's platform sync failed whole. None of which names
+  # an image tag anywhere in the symptom.
+  #
+  # origin-cli is the same client from quay, needs no registry.redhat.io pull
+  # secret, and is already what hermes' installer Job pulls. Pinned to the
+  # cluster's minor.
+  image: quay.io/openshift/origin-cli:4.22
   # Runs in an operator namespace (created at wave -4) rather than the shared
   # namespace, which is itself only created at wave -2 and would race the Job.
   namespace: redhat-ods-operator
