@@ -1,0 +1,194 @@
+{{- if .Values.kuadrantProviderRestart.enabled }}
+{{/*
+Restarts the Kuadrant operator once the Gateway API provider exists, because it
+only looks for that provider at start-up and this cluster gives it to it late.
+
+The failure this prevents: every AuthPolicy is rejected, permanently.
+
+  $ oc get authpolicy mcp-auth-policy -n <user>-agentops \
+      -o jsonpath='{.status.conditions[?(@.type=="Accepted")].message}'
+  [Gateway API provider (istio / envoy gateway)] is not installed,
+  please restart Kuadrant Operator pod once dependency has been installed
+
+Which is not a race we lose by bad luck — the ordering here guarantees it. The
+Kuadrant operator's Subscription is wave -2. istio arrives with the
+DataScienceCluster at wave 5: OpenShift's own gateway controller reconciles the
+data-science GatewayClass, installs the networking.istio.io CRDs and runs
+istiod in openshift-ingress. So on any cluster that did not already have istio,
+the operator is always running before the thing it checks for exists, and
+`Ready=True` on the Kuadrant CR says nothing about it — verified on
+cluster-kg67l, where the CR read Ready while both AuthPolicies were rejected.
+
+Why it went unnoticed until now: tenant-policy's rollout Job, which asserts
+that an unauthenticated initialize returns 401, could not run either (its image
+tag did not exist — see rollout.image there). With both broken, enabling
+mcpGateway.enforced created two AuthPolicies that looked correct and enforced
+nothing: an unauthenticated tools/call still answered 200, and a withheld tool
+still returned the plant's SCADA endpoints. Module 5's one-line change appeared
+to do nothing at all.
+
+Two things about the restart itself:
+
+  - It must DELETE the pod. `oc rollout restart` is undone here: OLM owns this
+    Deployment and strips the restartedAt annotation, so the pod is never
+    replaced — observed on cluster-kg67l, where the Deployment reported a
+    successful rollout while the same pod kept running.
+  - It must be conditional, or it restarts the operator on every sync of this
+    Application. The condition is the ordering itself: restart only when the
+    running pod started BEFORE the provider's CRD was created. After one
+    restart that is false, so later syncs skip it.
+
+SYNC WAVE: 6 — after the DataScienceCluster at wave 5, since the provider does
+not exist before it. The script still polls, because "DSC healthy" and "istiod
+serving" are not the same instant.
+
+Runs as a Sync hook with BeforeHookCreation so it re-runs cleanly on each sync;
+a plain Job cannot be re-applied, its spec being immutable once created.
+*/}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kuadrant-provider-restart
+  namespace: {{ .Values.kuadrantProviderRestart.namespace }}
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "6"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: agentops-kuadrant-provider-restart
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "6"
+rules:
+  # Cluster-scoped: the CRD whose creation time is the comparison.
+  - apiGroups: [apiextensions.k8s.io]
+    resources: [customresourcedefinitions]
+    verbs: [get, list]
+  # The operator's own pod, in its own namespace. Delete is the whole point;
+  # see the header for why a rollout restart will not do. `watch` is needed
+  # because `oc delete --wait` watches the pod it deleted: without it the delete
+  # still succeeds, but the log fills with "cannot watch resource pods is
+  # forbidden" while it silently falls back to polling — which reads like the
+  # cause of a failure rather than the cosmetic noise it is.
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: agentops-kuadrant-provider-restart
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "6"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: agentops-kuadrant-provider-restart
+subjects:
+  - kind: ServiceAccount
+    name: kuadrant-provider-restart
+    namespace: {{ .Values.kuadrantProviderRestart.namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kuadrant-provider-restart
+  namespace: {{ .Values.kuadrantProviderRestart.namespace }}
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "6"
+spec:
+  backoffLimit: 2
+  # Deliberately LARGER than the script's own budget below. The approver Job
+  # taught this the hard way: it derived its deadline from script start while
+  # activeDeadlineSeconds runs from Job start, so an image pull ate the
+  # difference and the Job was killed before it could print why it gave up.
+  activeDeadlineSeconds: {{ add .Values.kuadrantProviderRestart.timeoutSeconds 120 }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kuadrant-provider-restart
+        rhdp.redhat.com/lab: agentops-in-action
+    spec:
+      serviceAccountName: kuadrant-provider-restart
+      restartPolicy: Never
+      containers:
+        - name: restart
+          image: {{ .Values.kuadrantProviderRestart.image }}
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 200m, memory: 256Mi }
+          command: [/bin/sh, -c]
+          args:
+            - |
+              set -eu
+              NS={{ .Values.kuadrantProviderRestart.namespace }}
+              CRD={{ .Values.kuadrantProviderRestart.providerCrd }}
+              SELECTOR={{ .Values.kuadrantProviderRestart.operatorSelector | quote }}
+              DEADLINE=$(( $(date +%s) + {{ .Values.kuadrantProviderRestart.timeoutSeconds }} ))
+
+              log() { echo "[$(date -u +%H:%M:%S)] $*"; }
+
+              # 1. The provider. Kuadrant detects istio by its API being
+              #    served, so the CRD is the thing to wait for — and its
+              #    creation time is what the comparison below needs.
+              log "waiting for $CRD"
+              until oc get crd "$CRD" >/dev/null 2>&1; do
+                if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+                  log "TIMEOUT: $CRD never appeared."
+                  log "  The Gateway API provider is not installed, so Kuadrant would reject"
+                  log "  every AuthPolicy. Check the DataScienceCluster and the"
+                  log "  data-science GatewayClass before looking at Kuadrant."
+                  exit 1
+                fi
+                sleep 5
+              done
+              crd_at=$(oc get crd "$CRD" -o jsonpath='{.metadata.creationTimestamp}')
+              log "$CRD created at $crd_at"
+
+              # 2. The operator pod. One pod, by the Deployment's own selector:
+              #    control-plane=controller-manager alone also matches Authorino
+              #    and Limitador in this namespace.
+              log "waiting for the Kuadrant operator pod"
+              until [ -n "$(oc get pods -n "$NS" -l "$SELECTOR" \
+                            -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)" ]; do
+                if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+                  log "TIMEOUT: no pod matched $SELECTOR in $NS."
+                  exit 1
+                fi
+                sleep 5
+              done
+              pod=$(oc get pods -n "$NS" -l "$SELECTOR" -o jsonpath='{.items[0].metadata.name}')
+              started=$(oc get pod "$pod" -n "$NS" -o jsonpath='{.status.startTime}')
+              log "$pod started at $started"
+
+              # 3. Restart only if it predates the provider. Idempotent: after
+              #    one restart this is false, so later syncs do nothing.
+              if [ "$(date -d "$started" +%s)" -ge "$(date -d "$crd_at" +%s)" ]; then
+                log "the operator already started after the provider; nothing to do"
+                exit 0
+              fi
+
+              log "the operator predates the provider; deleting $pod so it re-detects"
+              oc delete pod "$pod" -n "$NS" --wait=true
+
+              log "waiting for the replacement to be Ready"
+              until [ "$(oc get pods -n "$NS" -l "$SELECTOR" \
+                        -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' \
+                        2>/dev/null)" = "True" ]; do
+                if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+                  log "TIMEOUT: the replacement pod never became Ready."
+                  exit 1
+                fi
+                sleep 5
+              done
+              log "Kuadrant operator restarted; AuthPolicies will be accepted from here"
+{{- end }}

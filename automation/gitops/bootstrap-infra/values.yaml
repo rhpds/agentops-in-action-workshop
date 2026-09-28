@@ -155,6 +155,33 @@ installPlanApprover:
   timeoutSeconds: 600
 
 # ---------------------------------------------------------------------------
+# Kuadrant provider restart (templates/kuadrant-provider-restart.yaml)
+#
+# The Kuadrant operator looks for the Gateway API provider only at start-up,
+# and installs at wave -2 while istio arrives with the DataScienceCluster at
+# wave 5 — so on a cluster without istio already, it always comes up before the
+# thing it checks for and rejects every AuthPolicy with MissingDependency. This
+# Job restarts it once, and only when the running pod predates the provider.
+# See the template for why the Kuadrant CR's Ready condition cannot be used to
+# detect this, and why a rollout restart does not work.
+# ---------------------------------------------------------------------------
+kuadrantProviderRestart:
+  enabled: true
+  # Same client as the InstallPlan approver, for the same reason.
+  image: quay.io/openshift/origin-cli:4.22
+  # Where the operator runs; also where this Job and its ServiceAccount live.
+  namespace: kuadrant-system
+  # The API whose presence Kuadrant's provider detection turns on, and whose
+  # creationTimestamp the Job compares the operator's start time against.
+  providerCrd: envoyfilters.networking.istio.io
+  # The Deployment's own selector. `control-plane=controller-manager` alone also
+  # matches Authorino and Limitador in this namespace.
+  operatorSelector: app=kuadrant,control-plane=controller-manager
+  # Bounds each wait in the script. The Job's activeDeadlineSeconds is this plus
+  # two minutes, so a slow image pull cannot kill it before it explains itself.
+  timeoutSeconds: 600
+
+# ---------------------------------------------------------------------------
 # MCP Gateway — cluster-level pieces (templates/mcp-gateway-platform.yaml)
 #
 # One Gateway per participant, created by tenant-platform. What lives here is
