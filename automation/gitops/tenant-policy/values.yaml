@@ -33,8 +33,18 @@ mcpGateway:
   # PostSync Job that makes a sync take effect: it restarts the gateway's Envoy
   # and the agent. See templates/mcp-gateway-rollout.yaml.
   rollout:
-    # Needs oc and curl. Already pulled for the cluster's InstallPlan approver.
-    image: registry.redhat.io/openshift4/ose-cli:latest
+    # Needs oc and curl. Same image as the cluster's InstallPlan approver, and
+    # for the same reason it was changed there: registry.redhat.io's ose-cli
+    # repository *refuses* the latest tag, so this Job's pod sat in
+    # ImagePullBackOff until activeDeadlineSeconds killed it (cluster-kg67l).
+    #
+    # That failure is quiet in a way worth knowing about. The AuthPolicies were
+    # created and looked right; only the restart they need to take effect never
+    # happened, so a participant enabling enforcement saw the policies appear
+    # and nothing change — an unauthenticated call still answered 200. This Job
+    # is also the check that would have caught it: it asserts an
+    # unauthenticated initialize returns 401 and fails loudly if not.
+    image: quay.io/openshift/origin-cli:4.22
     # Created by tenant-platform (templates/mcp-policy-rollout-rbac.yaml).
     serviceAccount: mcp-policy-rollout
     # MCP clients to restart after the gateway: a Deployment in the lab
