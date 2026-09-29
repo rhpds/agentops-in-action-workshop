@@ -27,6 +27,10 @@ syncStrategy.hook matters: it runs the PostSync Job that restarts the gateway
 and the agent. An "apply" strategy skips hooks, and ArgoCD then carries that
 choice forward into later syncs of the same Application.
 
+bootstrap-tenant's participant-policy-guard admission policy limits updates to
+exercise Helm parameters and ordinary hook syncs. RBAC alone cannot stop an
+Application update changing the source, destination or the rollout Job image.
+
 Scoped to this participant's policy Application by name, with no list or watch,
 so a participant cannot enumerate other tenants' Applications. Editing helm
 parameters (how mcpGateway.enforced and the OpenShell policy are changed) is the

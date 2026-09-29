@@ -1,30 +1,72 @@
+{{- $ns := include "tenant.namespace" . -}}
+{{- $user := include "tenant.username" . -}}
+# Participants edit policy, not the workloads and credentials enforcing it.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: participant
+  namespace: {{ $ns }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+rules:
+  - apiGroups: [""]
+    resources: [pods, pods/log, services, endpoints, events, configmaps, resourcequotas, limitranges]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [deployments, replicasets, statefulsets]
+    verbs: [get, list, watch]
+  - apiGroups: [route.openshift.io]
+    resources: [routes]
+    verbs: [get, list, watch]
+  - apiGroups: [gateway.networking.k8s.io]
+    resources: [gateways, httproutes]
+    verbs: [get, list, watch]
+  - apiGroups: [mcp.x-k8s.io]
+    resources: [mcpservers]
+    verbs: [get, list, watch]
+  - apiGroups: [mcp.kuadrant.io]
+    resources: [mcpgatewayextensions, mcpserverregistrations]
+    verbs: [get, list, watch]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list, watch]
+  - apiGroups: [agents.x-k8s.io]
+    resources: [sandboxes]
+    verbs: [get, list, watch]
+  - apiGroups: [extensions.agents.x-k8s.io]
+    resources: [sandboxclaims, sandboxtemplates, sandboxwarmpools]
+    verbs: [get, list, watch]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [get, list, watch]
+  - apiGroups: [kuadrant.io]
+    resources: [authpolicies]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [openshell-sandbox-policy]
+    verbs: [patch, update]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    resourceNames: [allow-ingress-within-namespace, egress-baseline]
+    verbs: [patch, update]
+  - apiGroups: [kuadrant.io]
+    resources: [authpolicies]
+    resourceNames: [mcp-auth-policy, mcp-authz-policy]
+    verbs: [patch, update]
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "tenant.username" . }}-edit
-  namespace: {{ include "tenant.namespace" . }}
+  name: participant
+  namespace: {{ $ns }}
   annotations:
     argocd.argoproj.io/sync-wave: "-1"
 roleRef:
   apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: edit
+  kind: Role
+  name: participant
 subjects:
-- apiGroup: rbac.authorization.k8s.io
-  kind: User
-  name: {{ include "tenant.username" . }}
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: {{ include "tenant.namespace" . }}-participant
-  annotations:
-    argocd.argoproj.io/sync-wave: "-1"
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: agentops-participant
-subjects:
-- apiGroup: rbac.authorization.k8s.io
-  kind: User
-  name: {{ include "tenant.username" . }}
+  - apiGroup: rbac.authorization.k8s.io
+    kind: User
+    name: {{ $user }}

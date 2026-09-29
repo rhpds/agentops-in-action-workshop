@@ -1,9 +1,9 @@
 {{- define "to.agentopsNamespace" -}}
-{{- printf "%s-%s" .Values.username .Values.namespaceSuffix -}}
+{{- include "to.namespace" . -}}
 {{- end -}}
 
 {{- define "to.namespace" -}}
-{{- printf "%s-%s" .Values.username .Values.openshellNamespaceSuffix -}}
+{{- printf "%s-%s" .Values.username .Values.namespaceSuffix -}}
 {{- end -}}
 
 {{/*
@@ -41,9 +41,13 @@ cannot verify MLflow's service-CA certificate. See values.yaml's mlflow.relay.
 
 {{/*
 The vendored chart puts everything in the release namespace, and the bridge
-assumes it is <username>-openshell.
+requires it to match the combined <username>-<namespaceSuffix> namespace.
 */}}
 {{- define "to.checks" -}}
+{{- $sandboxNs := (index .Values "helm-chart").server.sandboxNamespace | default .Release.Namespace -}}
+{{- if ne $sandboxNs (include "to.namespace" .) -}}
+{{- fail "helm-chart.server.sandboxNamespace must match the participant namespace" -}}
+{{- end -}}
 {{- if ne .Release.Namespace (include "to.namespace" .) -}}
 {{- fail (printf "deploy into %s, not %s" (include "to.namespace" .) .Release.Namespace) -}}
 {{- end -}}

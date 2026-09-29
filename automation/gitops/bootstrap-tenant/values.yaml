@@ -14,11 +14,6 @@ username: ""
 # namespaceSuffix in bootstrap-infra, tenant-platform and tenant-policy.
 namespaceSuffix: agentops
 
-# With platform.hermesRuntime openshell, the participant's OpenShell gateway and
-# Hermes sandbox run in <username>-<openshellNamespaceSuffix>. Must match
-# bootstrap-infra, which allows it as an ArgoCD destination.
-openshellNamespaceSuffix: openshell
-
 # The cluster's apps domain. Used to derive the Keycloak host below when the
 # catalog item does not pass one explicitly.
 deployer:
@@ -91,7 +86,7 @@ platform:
   # Where Hermes runs, with agentHarness hermes:
   #
   #   openshell  inside an OpenShell sandbox, in the participant's own
-  #              <username>-openshell namespace (templates/openshell.yaml,
+  #              <username>-agentops namespace (templates/openshell.yaml,
   #              tenant-openshell). Needs mcpGateway: the sandbox reaches tools
   #              only through it.
   #   pod        a plain Deployment in <username>-agentops, no sandbox.
@@ -113,13 +108,14 @@ policy:
 
 # ---------------------------------------------------------------------------
 # Per-tenant resource limits
-# Lab workload: one agent pod + sidecar + generated-code sandbox
+# Includes application workloads, OpenShell gateway, bridge, sandbox and sync Jobs.
+# Validate aggregate capacity for the event size before provisioning all tenants.
 # ---------------------------------------------------------------------------
 quota:
   requests:
-    cpu: "4"
-    memory: "8Gi"
-  limits:
     cpu: "8"
     memory: "16Gi"
+  limits:
+    cpu: "12"
+    memory: "24Gi"
   maxPods: "20"
