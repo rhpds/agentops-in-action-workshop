@@ -36,6 +36,12 @@ maxUsers: 30
 # approver refuses any plan containing a CSV that is neither pinned nor listed,
 # so a catalog change cannot slip an unreviewed operator in alongside a pinned
 # one.
+#
+# `wave` overrides which sync wave an operator's Subscription lands in
+# (installPlanApprover.defaultWave otherwise). It exists for one operator that
+# must install LATE — see rhcl below — and the approver renders one Job per
+# distinct wave to match, because it has to share a wave with the Subscriptions
+# it approves.
 # ---------------------------------------------------------------------------
 operators:
   rhoai:
@@ -61,6 +67,31 @@ operators:
   # v0.11.1 that used to sit here disabled "as the fallback for MCP Gateway".
   # That fallback is no longer needed — MCP Gateway enforces per-tool policy —
   # and both of them ship supported from redhat-operators under RHCL anyway.
+  #
+  # INSTALLS LATE, at wave 6, and that is the fix for a race worth
+  # understanding. The Kuadrant operator looks for the Gateway API provider
+  # (istio) only at start-up, and rejects every AuthPolicy ever after if it was
+  # not there:
+  #
+  #   [Gateway API provider (istio / envoy gateway)] is not installed, please
+  #   restart Kuadrant Operator pod once dependency has been installed
+  #
+  # istio arrives with the DataScienceCluster at wave 5 — OpenShift's gateway
+  # controller reconciles the data-science GatewayClass, installs the
+  # networking.istio.io CRDs and runs istiod. At the default wave the operator
+  # therefore starts before the thing it checks for, on any cluster that did not
+  # already have istio. Observed on cluster-kg67l: both AuthPolicies
+  # Accepted=False/MissingDependency, an unauthenticated tools/call answering
+  # 200, and a withheld tool still returning the plant's SCADA config — module
+  # 5's one-line change appearing to do nothing at all.
+  #
+  # Note what wave 6 does and does not buy. ArgoCD has no health check for a
+  # DataScienceCluster, so it counts as healthy when applied, not when Ready —
+  # wave 6 begins seconds after the DSC exists. What actually orders this is
+  # that OLM takes minutes (resolve, InstallPlan, approve, CSV, pod) while istio
+  # appears ~11s after the DSC. Practical, not guaranteed: if that ever
+  # inverts, the tell is tenant-policy's rollout Job, which asserts an
+  # unauthenticated initialize returns 401 and fails loudly when it does not.
   rhcl:
     enabled: true
     package: rhcl-operator
@@ -68,6 +99,7 @@ operators:
     channel: stable
     csv: rhcl-operator.v1.4.3
     source: redhat-operators
+    wave: 6
     dependencies:
       - authorino-operator.v1.4.3
       - limitador-operator.v1.4.2
@@ -86,6 +118,11 @@ operators:
   # Authorino went to Failed with InterOperatorGroupOwnerConflict ("intersecting
   # operatorgroups provide the same apis"). Observed on cluster-tpss7. Sharing a
   # namespace means one OperatorGroup and RHCL resolved exactly once.
+  #
+  # Shares rhcl's wave as well as its namespace: OLM resolves both into ONE
+  # InstallPlan (rhcl, authorino, limitador, dns and mcp-gateway together —
+  # verified on cluster-kg67l), so splitting the waves would leave one wave's
+  # approver waiting for a plan the other wave's Subscription has not caused yet.
   mcpGatewayOperator:
     enabled: true
     package: mcp-gateway
@@ -93,6 +130,7 @@ operators:
     channel: preview
     csv: mcp-gateway.v0.7.1
     source: redhat-operators
+    wave: 6
 
 # NOTE: sandboxed-containers-operator (Kata) is deliberately NOT installed.
 # The Agent Sandbox deployment is not on bare metal and this cluster runs on
@@ -146,6 +184,10 @@ installPlanApprover:
   # Runs in an operator namespace (created at wave -4) rather than the shared
   # namespace, which is itself only created at wave -2 and would race the Job.
   namespace: redhat-ods-operator
+  # The wave Subscriptions land in unless an operator overrides it with `wave`.
+  # One approver Job is rendered per distinct wave, because an approver must
+  # share the wave of the Subscriptions it approves — see the template.
+  defaultWave: -2
   # Bounds the wait for an InstallPlan to appear. Also the Job's
   # activeDeadlineSeconds; the script stops 30s earlier so it fails with a
   # useful message rather than being killed mid-poll.

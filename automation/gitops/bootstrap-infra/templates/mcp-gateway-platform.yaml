@@ -24,8 +24,11 @@ metadata:
   labels:
     rhdp.redhat.com/lab: agentops-in-action
   annotations:
-    # After the Subscriptions (-2): the CRD does not exist until RHCL installs.
-    argocd.argoproj.io/sync-wave: "1"
+    # Follows RHCL's own wave: the CRD does not exist until RHCL installs, and
+    # RHCL installs late on purpose so the operator finds istio already there
+    # (see rhcl in values.yaml). Derived rather than hardcoded, so moving that
+    # wave cannot leave this one stranded in front of it.
+    argocd.argoproj.io/sync-wave: {{ add1 (.Values.operators.rhcl.wave | default .Values.installPlanApprover.defaultWave) | quote }}
     argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
 spec: {}
 ---

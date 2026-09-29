@@ -67,7 +67,10 @@ metadata:
   labels:
     rhdp.redhat.com/lab: agentops-in-action
   annotations:
-    argocd.argoproj.io/sync-wave: "-2"
+    # Per-operator, because one of them must install after the wave that brings
+    # istio — see rhcl in values.yaml. The approver renders one Job per distinct
+    # wave to match, since it has to share a wave with what it approves.
+    argocd.argoproj.io/sync-wave: {{ $op.wave | default $.Values.installPlanApprover.defaultWave | quote }}
 spec:
   name: {{ $op.package }}
   channel: {{ $op.channel }}
