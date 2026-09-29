@@ -34,14 +34,24 @@ OLM happened to resolve alongside.
 Do NOT replace this with installPlanApproval: Automatic. That defeats the pin
 over time, which is the outcome operators.yaml argues against at length.
 
-SYNC WAVE: -2, the SAME wave as the Subscriptions, and that is load-bearing.
-ArgoCD applies every resource in a wave, then waits for all of them to be
-healthy before moving on. A Subscription is not healthy until its InstallPlan is
-approved, so an approver in any LATER wave can never run — the sync is still
-blocked waiting on the very thing the approver would unblock. Sharing the wave
-means both are applied together and the Job can act while ArgoCD is waiting.
-An EARLIER wave deadlocks the other way: the Job would wait for InstallPlans
-that the Subscriptions have not created yet.
+SYNC WAVE: the SAME wave as the Subscriptions it approves, and that is
+load-bearing. ArgoCD applies every resource in a wave and waits for them to be
+healthy before moving on, so an approver in an EARLIER wave waits for
+InstallPlans the Subscriptions have not created yet. (A LATER wave used to
+deadlock outright, the sync being blocked on the unapproved Subscription the
+approver would have unblocked; templates/argocd-subscription-health.yaml now
+reports pinned Subscriptions Healthy, so that is a stall rather than a deadlock
+— still not something to rely on.)
+
+Which is why this renders ONE JOB PER DISTINCT WAVE rather than one Job for
+everything. Most operators sit at installPlanApprover.defaultWave (-2); rhcl and
+mcp-gateway deliberately install at wave 6, after the DataScienceCluster brings
+istio (see values.yaml). A single approver at -2 would block forever on their
+InstallPlans, which OLM has no reason to create for another five waves.
+
+Each Job waits only for its own wave's pinned CSVs. The allowlist stays global,
+because one InstallPlan can carry CSVs from several operators — rhcl's carries
+five — and a plan is judged by everything inside it.
 
 Runs as a Sync hook with BeforeHookCreation so a changed pin re-runs cleanly —
 a plain Job would fail to apply on the next sync, because a Job's spec is
@@ -91,19 +101,29 @@ subjects:
   - kind: ServiceAccount
     name: installplan-approver
     namespace: {{ .Values.installPlanApprover.namespace }}
+{{- $default := .Values.installPlanApprover.defaultWave }}
+{{- $waves := dict }}
+{{- range $k, $op := .Values.operators }}
+{{- if $op.enabled }}
+{{- $_ := set $waves (toString ($op.wave | default $default)) true }}
+{{- end }}
+{{- end }}
+{{- range $wave, $_ := $waves }}
 ---
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: installplan-approver
-  namespace: {{ .Values.installPlanApprover.namespace }}
+  # The default wave keeps the bare name, so the common case reads as it always
+  # has and only a late wave carries a suffix.
+  name: installplan-approver{{ if ne $wave (toString $default) }}-wave{{ $wave }}{{ end }}
+  namespace: {{ $.Values.installPlanApprover.namespace }}
   annotations:
     argocd.argoproj.io/hook: Sync
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
-    argocd.argoproj.io/sync-wave: "-2"
+    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
 spec:
   backoffLimit: 2
-  activeDeadlineSeconds: {{ .Values.installPlanApprover.timeoutSeconds }}
+  activeDeadlineSeconds: {{ $.Values.installPlanApprover.timeoutSeconds }}
   template:
     metadata:
       labels:
@@ -114,7 +134,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: approve
-          image: {{ .Values.installPlanApprover.image }}
+          image: {{ $.Values.installPlanApprover.image }}
           imagePullPolicy: IfNotPresent
           resources:
             requests: { cpu: 50m, memory: 128Mi }
@@ -123,13 +143,16 @@ spec:
           args:
             - |
               set -eu
-              DEADLINE=$(( $(date +%s) + {{ .Values.installPlanApprover.timeoutSeconds }} - 30 ))
+              DEADLINE=$(( $(date +%s) + {{ $.Values.installPlanApprover.timeoutSeconds }} - 30 ))
 
-              # ns=csv pairs, one per enabled operator, straight from values.yaml
-              PAIRS="{{- range $k, $op := .Values.operators }}{{- if $op.enabled }}{{ $op.namespace }}={{ $op.csv }} {{ end }}{{- end }}"
+              # ns=csv pairs for the operators in THIS wave only. Waiting on a
+              # later wave's CSVs here would block until the deadline, since
+              # their Subscriptions do not exist yet.
+              PAIRS="{{- range $k, $op := $.Values.operators }}{{- if and $op.enabled (eq (toString ($op.wave | default $default)) $wave) }}{{ $op.namespace }}={{ $op.csv }} {{ end }}{{- end }}"
               # Every CSV an approved InstallPlan may contain: all pinned CSVs plus
-              # their declared dependencies.
-              ALLOWED=" {{- range $k, $op := .Values.operators }}{{- if $op.enabled }} {{ $op.csv }}{{- range $op.dependencies }} {{ . }}{{- end }}{{- end }}{{- end }} "
+              # their declared dependencies, across every wave — one plan can carry
+              # several operators' CSVs, and it is judged by all of them.
+              ALLOWED=" {{- range $k, $op := $.Values.operators }}{{- if $op.enabled }} {{ $op.csv }}{{- range $op.dependencies }} {{ . }}{{- end }}{{- end }}{{- end }} "
               echo "waiting to approve InstallPlans for: $PAIRS"
               echo "allowed CSVs: $ALLOWED"
 
@@ -182,5 +205,6 @@ spec:
                   sleep 5
                 done
               done
-              echo "all pinned InstallPlans approved"
+              echo "wave {{ $wave }}: all pinned InstallPlans approved"
+{{- end }}
 {{- end }}
