@@ -2,13 +2,45 @@
 package main
 
 import (
+	_ "embed"
 	"encoding/json"
 	"fmt"
+	apiservercel "k8s.io/apiserver/pkg/cel"
+	"k8s.io/apiserver/pkg/cel/openapi"
+	"k8s.io/kube-openapi/pkg/validation/spec"
 	"os"
+	"strings"
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 )
+
+//go:embed application-schema.json
+var applicationSchema []byte
+
+func applicationEnv() *cel.Env {
+	var schema spec.Schema
+	if err := json.Unmarshal(applicationSchema, &schema); err != nil {
+		panic(err)
+	}
+	decl := openapi.SchemaDeclType(&schema, false).MaybeAssignTypeName("Application")
+	// ObjectMeta is supplied by Kubernetes, not described by the CRD.
+	decl.Fields["metadata"] = apiservercel.NewDeclField("metadata", apiservercel.DynType, true, nil, nil)
+	base, err := cel.NewEnv()
+	if err != nil {
+		panic(err)
+	}
+	opts, err := apiservercel.NewDeclTypeProvider(decl).EnvOptions(base.TypeProvider())
+	if err != nil {
+		panic(err)
+	}
+	opts = append(opts, cel.Variable("object", decl.CelType()), cel.Variable("oldObject", decl.CelType()), cel.Variable("request", cel.DynType))
+	env, err := base.Extend(opts...)
+	if err != nil {
+		panic(err)
+	}
+	return env
+}
 
 type Check struct {
 	Name        string                 `json:"name"`
@@ -28,10 +60,21 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	typed := applicationEnv()
+	// This must fail: dynamic-only checking previously missed this production bug.
+	if _, issues := typed.Compile("object.spec.all(k, true)"); issues.Err() == nil {
+		panic("Application schema was not enforced")
+	}
 	for _, check := range checks {
 		allowed := true
 		for _, expression := range check.Expressions {
-			ast, issues := env.Compile(expression)
+			if check.Object["kind"] == "Application" {
+				if _, issues := typed.Compile(expression); issues.Err() != nil {
+					panic(fmt.Sprintf("%s (typed): %v", check.Name, issues.Err()))
+				}
+			}
+			// Kubernetes escapes reserved schema field names; plain JSON maps do not.
+			ast, issues := env.Compile(strings.ReplaceAll(expression, ".__namespace__", ".namespace"))
 			if issues.Err() != nil {
 				panic(fmt.Sprintf("%s: %v", check.Name, issues.Err()))
 			}

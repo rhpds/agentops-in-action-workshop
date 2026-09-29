@@ -1,0 +1,88 @@
+# Argo CD entry points for the namespace-consolidation branch.
+# This is a template: render it with render-applications.py before applying.
+# Required environment: PARTICIPANT, APPS_DOMAIN (the apps domain, without https://).
+# MODEL_API_KEY and HERMES_API_SERVER_KEY may be supplied in the environment;
+# otherwise the renderer prompts without echoing them. Do not save real keys here.
+#
+# python3 automation/argocd/render-applications.py | oc apply -f -
+#
+# Both bootstrap Applications sync MANUALLY. Sync infrastructure first, then the
+# tenant bootstrap. Its platform and OpenShell children auto-sync; sync the policy
+# child once to install its baseline and run its restart hook.
+#
+# The infrastructure chart owns shared cluster resources. If this cluster already
+# has an infrastructure Application, update that existing Application's branch
+# instead of creating a second owner. See README.md beside this file.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: agentops-bootstrap-infra
+  namespace: openshift-gitops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/rhpds/agentops-in-action-workshop.git
+    targetRevision: namespace-consolidation
+    path: automation/gitops/bootstrap-infra
+    helm:
+      releaseName: agentops-bootstrap-infra
+      valuesObject:
+        deployer:
+          domain: "${APPS_DOMAIN}"
+        lab:
+          sharedNamespace: agentops-shared
+          namespaceSuffix: agentops
+          argocdProject: agentops-in-action
+          argocdNamespace: openshift-gitops
+          keycloakNamespace: keycloak
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: openshift-gitops
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=false
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: "${PARTICIPANT}-bootstrap"
+  namespace: openshift-gitops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/rhpds/agentops-in-action-workshop.git
+    targetRevision: namespace-consolidation
+    path: automation/gitops/bootstrap-tenant
+    helm:
+      releaseName: "${PARTICIPANT}-bootstrap"
+      valuesObject:
+        tenant:
+          username: "${PARTICIPANT}"
+        namespaceSuffix: agentops
+        deployer:
+          domain: "${APPS_DOMAIN}"
+        # Empty derives sso.<APPS_DOMAIN>. Set explicitly for another Keycloak host.
+        keycloak:
+          host: ""
+        gitops:
+          repoURL: https://github.com/rhpds/agentops-in-action-workshop.git
+          # Required: the child Applications must track this branch too.
+          targetRevision: namespace-consolidation
+          argocdNamespace: openshift-gitops
+          argocdProject: agentops-in-action
+        secrets:
+          modelApiKey: "${MODEL_API_KEY}"
+          apiServerKey: "${HERMES_API_SERVER_KEY}"
+        platform:
+          agentHarness: hermes
+          hermesRuntime: openshell
+          mcpGateway: true
+          mlflowTracing: true
+        policy:
+          mcpGatewayEnforced: false
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: openshift-gitops
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=false

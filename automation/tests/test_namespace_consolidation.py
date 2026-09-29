@@ -176,6 +176,24 @@ class Consolidation(unittest.TestCase):
         case('delete source identity', lambda o: o['spec']['source'].pop('repoURL'), False)
         case('sync alternate revision', lambda o: o.update(operation={'sync': {'revision': 'other', 'syncStrategy': {'hook': {}}}}), False)
         case('sync inline manifests', lambda o: o.update(operation={'sync': {'manifests': ['evil'], 'syncStrategy': {'hook': {}}}}), False)
+        case('force hook sync', lambda o: o.update(operation={'sync': {'syncStrategy': {'hook': {'force': True}}}}), False)
+        case('apply sync', lambda o: o.update(operation={'sync': {'syncStrategy': {'apply': {}}}}), False)
+        case('override sync source', lambda o: o.update(operation={'sync': {'source': {'repoURL': 'other'}, 'syncStrategy': {'hook': {}}}}), False)
+        case('multiple sources', lambda o: o['spec'].update(sources=[{'repoURL': 'other'}]), False)
+        case('ignore differences', lambda o: o['spec'].update(ignoreDifferences=[{'kind': '*', 'jsonPointers': ['/spec']}]), False)
+        # Every typed field outside the editable branches must be guarded. Update
+        # the schema fixture when upgrading Argo CD to catch newly added fields.
+        schema = json.loads((Path(__file__).parent / 'celcheck/application-schema.json').read_text())
+        expressions = ' '.join(v['expression'] for v in guard['spec']['validations'])
+        for path, editable in [('spec', {'source'}), ('spec.source', {'helm'}),
+                               ('spec.source.helm', {'parameters'}), ('operation', {'sync'}),
+                               ('operation.sync', {'prune', 'syncStrategy'})]:
+            node = schema
+            for part in path.split('.'):
+                node = node['properties'][part]
+            for field in node['properties'].keys() - editable:
+                cel_field = '__namespace__' if field == 'namespace' else field
+                self.assertIn(f'has(object.{path}.{cel_field})', expressions)
         case('duplicate parameter', lambda o: o['spec']['source']['helm']['parameters'].append({'name': 'username', 'value': 'user2'}), False)
         network = resource(children['tenant-policy'], 'NetworkPolicy', 'egress-baseline')
         guard = resource(bootstrap, 'ValidatingAdmissionPolicy', f'{ns}-policy-network')

@@ -5,6 +5,9 @@ Kubernetes RBAC cannot restrict Application updates to Helm policy parameters.
 Keep the participant's sync workflow, but deny source/destination/identity,
 inline manifests, alternate revisions and rollout-image overrides. Install
 this fail-closed guard before the platform chart grants Application updates.
+Application fields are typed CEL objects, not maps. Keep immutable field checks
+in sync with automation/tests/celcheck/application-schema.json on CRD upgrades.
+The namespace field uses Kubernetes CEL reserved-word escaping.
 See https://kubernetes.io/docs/reference/access-authn-authz/validating-admission-policy/
 */}}
 apiVersion: admissionregistration.k8s.io/v1
@@ -30,13 +33,44 @@ spec:
         request.namespace == {{ .Values.gitops.argocdNamespace | toJson }}
       message: Only your own policy Application may be updated.
     - expression: >-
-        object.spec.all(k, k == 'source' || (k in oldObject.spec && object.spec[k] == oldObject.spec[k])) && oldObject.spec.all(k, k in object.spec)
+        true
+        && (has(object.spec.destination) == has(oldObject.spec.destination) && (!has(object.spec.destination) || object.spec.destination == oldObject.spec.destination))
+        && (has(object.spec.ignoreDifferences) == has(oldObject.spec.ignoreDifferences) && (!has(object.spec.ignoreDifferences) || object.spec.ignoreDifferences == oldObject.spec.ignoreDifferences))
+        && (has(object.spec.info) == has(oldObject.spec.info) && (!has(object.spec.info) || object.spec.info == oldObject.spec.info))
+        && (has(object.spec.project) == has(oldObject.spec.project) && (!has(object.spec.project) || object.spec.project == oldObject.spec.project))
+        && (has(object.spec.revisionHistoryLimit) == has(oldObject.spec.revisionHistoryLimit) && (!has(object.spec.revisionHistoryLimit) || object.spec.revisionHistoryLimit == oldObject.spec.revisionHistoryLimit))
+        && (has(object.spec.sourceHydrator) == has(oldObject.spec.sourceHydrator) && (!has(object.spec.sourceHydrator) || object.spec.sourceHydrator == oldObject.spec.sourceHydrator))
+        && (has(object.spec.sources) == has(oldObject.spec.sources) && (!has(object.spec.sources) || object.spec.sources == oldObject.spec.sources))
+        && (has(object.spec.syncPolicy) == has(oldObject.spec.syncPolicy) && (!has(object.spec.syncPolicy) || object.spec.syncPolicy == oldObject.spec.syncPolicy))
       message: Only policy Helm parameters and a normal hook sync may be changed; infrastructure settings are protected.
     - expression: >-
-        object.spec.source.all(k, k == 'helm' || (k in oldObject.spec.source && object.spec.source[k] == oldObject.spec.source[k])) && oldObject.spec.source.all(k, k in object.spec.source)
+        true
+        && (has(object.spec.source.chart) == has(oldObject.spec.source.chart) && (!has(object.spec.source.chart) || object.spec.source.chart == oldObject.spec.source.chart))
+        && (has(object.spec.source.directory) == has(oldObject.spec.source.directory) && (!has(object.spec.source.directory) || object.spec.source.directory == oldObject.spec.source.directory))
+        && (has(object.spec.source.kustomize) == has(oldObject.spec.source.kustomize) && (!has(object.spec.source.kustomize) || object.spec.source.kustomize == oldObject.spec.source.kustomize))
+        && (has(object.spec.source.name) == has(oldObject.spec.source.name) && (!has(object.spec.source.name) || object.spec.source.name == oldObject.spec.source.name))
+        && (has(object.spec.source.path) == has(oldObject.spec.source.path) && (!has(object.spec.source.path) || object.spec.source.path == oldObject.spec.source.path))
+        && (has(object.spec.source.plugin) == has(oldObject.spec.source.plugin) && (!has(object.spec.source.plugin) || object.spec.source.plugin == oldObject.spec.source.plugin))
+        && (has(object.spec.source.ref) == has(oldObject.spec.source.ref) && (!has(object.spec.source.ref) || object.spec.source.ref == oldObject.spec.source.ref))
+        && (has(object.spec.source.repoURL) == has(oldObject.spec.source.repoURL) && (!has(object.spec.source.repoURL) || object.spec.source.repoURL == oldObject.spec.source.repoURL))
+        && (has(object.spec.source.targetRevision) == has(oldObject.spec.source.targetRevision) && (!has(object.spec.source.targetRevision) || object.spec.source.targetRevision == oldObject.spec.source.targetRevision))
       message: Only policy Helm parameters and a normal hook sync may be changed; infrastructure settings are protected.
     - expression: >-
-        object.spec.source.helm.all(k, k == 'parameters' || (k in oldObject.spec.source.helm && object.spec.source.helm[k] == oldObject.spec.source.helm[k])) && oldObject.spec.source.helm.all(k, k in object.spec.source.helm)
+        true
+        && (has(object.spec.source.helm.apiVersions) == has(oldObject.spec.source.helm.apiVersions) && (!has(object.spec.source.helm.apiVersions) || object.spec.source.helm.apiVersions == oldObject.spec.source.helm.apiVersions))
+        && (has(object.spec.source.helm.fileParameters) == has(oldObject.spec.source.helm.fileParameters) && (!has(object.spec.source.helm.fileParameters) || object.spec.source.helm.fileParameters == oldObject.spec.source.helm.fileParameters))
+        && (has(object.spec.source.helm.ignoreMissingValueFiles) == has(oldObject.spec.source.helm.ignoreMissingValueFiles) && (!has(object.spec.source.helm.ignoreMissingValueFiles) || object.spec.source.helm.ignoreMissingValueFiles == oldObject.spec.source.helm.ignoreMissingValueFiles))
+        && (has(object.spec.source.helm.kubeVersion) == has(oldObject.spec.source.helm.kubeVersion) && (!has(object.spec.source.helm.kubeVersion) || object.spec.source.helm.kubeVersion == oldObject.spec.source.helm.kubeVersion))
+        && (has(object.spec.source.helm.__namespace__) == has(oldObject.spec.source.helm.__namespace__) && (!has(object.spec.source.helm.__namespace__) || object.spec.source.helm.__namespace__ == oldObject.spec.source.helm.__namespace__))
+        && (has(object.spec.source.helm.passCredentials) == has(oldObject.spec.source.helm.passCredentials) && (!has(object.spec.source.helm.passCredentials) || object.spec.source.helm.passCredentials == oldObject.spec.source.helm.passCredentials))
+        && (has(object.spec.source.helm.releaseName) == has(oldObject.spec.source.helm.releaseName) && (!has(object.spec.source.helm.releaseName) || object.spec.source.helm.releaseName == oldObject.spec.source.helm.releaseName))
+        && (has(object.spec.source.helm.skipCrds) == has(oldObject.spec.source.helm.skipCrds) && (!has(object.spec.source.helm.skipCrds) || object.spec.source.helm.skipCrds == oldObject.spec.source.helm.skipCrds))
+        && (has(object.spec.source.helm.skipSchemaValidation) == has(oldObject.spec.source.helm.skipSchemaValidation) && (!has(object.spec.source.helm.skipSchemaValidation) || object.spec.source.helm.skipSchemaValidation == oldObject.spec.source.helm.skipSchemaValidation))
+        && (has(object.spec.source.helm.skipTests) == has(oldObject.spec.source.helm.skipTests) && (!has(object.spec.source.helm.skipTests) || object.spec.source.helm.skipTests == oldObject.spec.source.helm.skipTests))
+        && (has(object.spec.source.helm.valueFiles) == has(oldObject.spec.source.helm.valueFiles) && (!has(object.spec.source.helm.valueFiles) || object.spec.source.helm.valueFiles == oldObject.spec.source.helm.valueFiles))
+        && (has(object.spec.source.helm.values) == has(oldObject.spec.source.helm.values) && (!has(object.spec.source.helm.values) || object.spec.source.helm.values == oldObject.spec.source.helm.values))
+        && (has(object.spec.source.helm.valuesObject) == has(oldObject.spec.source.helm.valuesObject) && (!has(object.spec.source.helm.valuesObject) || object.spec.source.helm.valuesObject == oldObject.spec.source.helm.valuesObject))
+        && (has(object.spec.source.helm.version) == has(oldObject.spec.source.helm.version) && (!has(object.spec.source.helm.version) || object.spec.source.helm.version == oldObject.spec.source.helm.version))
       message: Only policy Helm parameters and a normal hook sync may be changed; infrastructure settings are protected.
     - expression: >-
         object.spec.source.helm.parameters.all(p, size(object.spec.source.helm.parameters.filter(q, q.name == p.name)) == 1)
@@ -48,7 +82,10 @@ spec:
         object.spec.source.helm.parameters.filter(p, p.name in ['mcpGateway.enforced', 'networkPolicy.permissiveEgress', 'openshell.permissiveEgress']).all(p, p.value in ['true', 'false'] && (!has(p.forceString) || !p.forceString))
       message: Policy toggles must be boolean true or false, without forceString.
     - expression: >-
-        !has(object.operation) || (has(oldObject.operation) && object.operation == oldObject.operation) || (object.operation.all(k, k == 'sync') && has(object.operation.sync) && object.operation.sync.all(k, k in ['prune', 'syncStrategy']) && has(object.operation.sync.syncStrategy) && object.operation.sync.syncStrategy == {'hook': {}})
+        !has(object.operation) || (has(oldObject.operation) && object.operation == oldObject.operation) || (
+        has(object.operation.sync) && !has(object.operation.info) && !has(object.operation.initiatedBy) && !has(object.operation.retry) && !has(object.operation.sync.autoHealAttemptsCount) && !has(object.operation.sync.dryRun) && !has(object.operation.sync.manifests) && !has(object.operation.sync.resources) && !has(object.operation.sync.revision) && !has(object.operation.sync.revisions) && !has(object.operation.sync.source) && !has(object.operation.sync.sources) && !has(object.operation.sync.syncOptions) &&
+        has(object.operation.sync.syncStrategy) && !has(object.operation.sync.syncStrategy.apply) &&
+        has(object.operation.sync.syncStrategy.hook) && !has(object.operation.sync.syncStrategy.hook.force))
       message: Only policy Helm parameters and a normal hook sync may be changed; infrastructure settings are protected.
     - expression: >-
         has(object.metadata.labels) == has(oldObject.metadata.labels) && (!has(object.metadata.labels) || object.metadata.labels == oldObject.metadata.labels)

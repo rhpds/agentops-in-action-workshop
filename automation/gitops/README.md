@@ -118,7 +118,9 @@ The regression suite renders complete parent/child Application trees for two
 participants, a custom suffix and all three agent runtime variants. It checks
 resource ownership, namespace references, environment variables, permissions and
 network selectors. A small Go helper compiles and evaluates the rendered admission
-CEL against permitted edits and attempted infrastructure changes.
+CEL against permitted edits and attempted infrastructure changes. Application
+expressions are also compiled against the recorded Kubernetes CRD schema; see
+[the schema fixture notes](../tests/celcheck/README.md) when upgrading Argo CD.
 
 Requires Helm, Python with PyYAML, and Go:
 
