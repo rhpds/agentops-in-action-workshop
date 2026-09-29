@@ -1,0 +1,111 @@
+{{- $user := include "tenant.username" . -}}
+{{- $ns := include "tenant.namespace" . -}}
+{{/*
+Kubernetes RBAC cannot restrict Application updates to Helm policy parameters.
+Keep the participant's sync workflow, but deny source/destination/identity,
+inline manifests, alternate revisions and rollout-image overrides. Install
+this fail-closed guard before the platform chart grants Application updates.
+See https://kubernetes.io/docs/reference/access-authn-authz/validating-admission-policy/
+*/}}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $ns }}-policy-application
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [argoproj.io]
+        apiVersions: [v1alpha1]
+        operations: [UPDATE]
+        resources: [applications]
+  matchConditions:
+    - name: participant
+      expression: request.userInfo.username == {{ $user | toJson }}
+  validations:
+    - expression: >-
+        object.metadata.name == {{ printf "%s-policy" $user | toJson }} &&
+        request.namespace == {{ .Values.gitops.argocdNamespace | toJson }}
+      message: Only your own policy Application may be updated.
+    - expression: >-
+        object.spec.all(k, k == 'source' || (k in oldObject.spec && object.spec[k] == oldObject.spec[k])) && oldObject.spec.all(k, k in object.spec)
+      message: Only policy Helm parameters and a normal hook sync may be changed; infrastructure settings are protected.
+    - expression: >-
+        object.spec.source.all(k, k == 'helm' || (k in oldObject.spec.source && object.spec.source[k] == oldObject.spec.source[k])) && oldObject.spec.source.all(k, k in object.spec.source)
+      message: Only policy Helm parameters and a normal hook sync may be changed; infrastructure settings are protected.
+    - expression: >-
+        object.spec.source.helm.all(k, k == 'parameters' || (k in oldObject.spec.source.helm && object.spec.source.helm[k] == oldObject.spec.source.helm[k])) && oldObject.spec.source.helm.all(k, k in object.spec.source.helm)
+      message: Only policy Helm parameters and a normal hook sync may be changed; infrastructure settings are protected.
+    - expression: >-
+        object.spec.source.helm.parameters.all(p, size(object.spec.source.helm.parameters.filter(q, q.name == p.name)) == 1)
+      message: Only policy Helm parameters and a normal hook sync may be changed; infrastructure settings are protected.
+    - expression: >-
+        object.spec.source.helm.parameters.filter(p, !p.name.matches('^(mcpGateway[.]enforced|networkPolicy[.]permissiveEgress|openshell[.]permissiveEgress|openshell[.]filesystem[.](readOnly|readWrite)(\\[[0-9]+\\])?|openshell[.]broadOutbound[.](hosts|ports|binaries)(\\[[0-9]+\\])?)$')) == oldObject.spec.source.helm.parameters.filter(p, !p.name.matches('^(mcpGateway[.]enforced|networkPolicy[.]permissiveEgress|openshell[.]permissiveEgress|openshell[.]filesystem[.](readOnly|readWrite)(\\[[0-9]+\\])?|openshell[.]broadOutbound[.](hosts|ports|binaries)(\\[[0-9]+\\])?)$'))
+      message: Only policy Helm parameters and a normal hook sync may be changed; infrastructure settings are protected.
+    - expression: >-
+        object.spec.source.helm.parameters.filter(p, p.name in ['mcpGateway.enforced', 'networkPolicy.permissiveEgress', 'openshell.permissiveEgress']).all(p, p.value in ['true', 'false'] && (!has(p.forceString) || !p.forceString))
+      message: Policy toggles must be boolean true or false, without forceString.
+    - expression: >-
+        !has(object.operation) || (has(oldObject.operation) && object.operation == oldObject.operation) || (object.operation.all(k, k == 'sync') && has(object.operation.sync) && object.operation.sync.all(k, k in ['prune', 'syncStrategy']) && has(object.operation.sync.syncStrategy) && object.operation.sync.syncStrategy == {'hook': {}})
+      message: Only policy Helm parameters and a normal hook sync may be changed; infrastructure settings are protected.
+    - expression: >-
+        has(object.metadata.labels) == has(oldObject.metadata.labels) && (!has(object.metadata.labels) || object.metadata.labels == oldObject.metadata.labels)
+      message: Only policy Helm parameters and a normal hook sync may be changed; infrastructure settings are protected.
+    - expression: >-
+        has(object.metadata.annotations) == has(oldObject.metadata.annotations) && (!has(object.metadata.annotations) || object.metadata.annotations == oldObject.metadata.annotations)
+      message: Only policy Helm parameters and a normal hook sync may be changed; infrastructure settings are protected.
+    - expression: >-
+        has(object.metadata.finalizers) == has(oldObject.metadata.finalizers) && (!has(object.metadata.finalizers) || object.metadata.finalizers == oldObject.metadata.finalizers)
+      message: Only policy Helm parameters and a normal hook sync may be changed; infrastructure settings are protected.
+    - expression: >-
+        has(object.metadata.ownerReferences) == has(oldObject.metadata.ownerReferences) && (!has(object.metadata.ownerReferences) || object.metadata.ownerReferences == oldObject.metadata.ownerReferences)
+      message: Only policy Helm parameters and a normal hook sync may be changed; infrastructure settings are protected.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $ns }}-policy-application
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  policyName: {{ $ns }}-policy-application
+  validationActions: [Deny]
+---
+# An editable NetworkPolicy cannot be retargeted to the gateway, bridge or
+# privileged sandbox. Kubernetes NetworkPolicies are additive.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $ns }}-policy-network
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [networking.k8s.io]
+        apiVersions: [v1]
+        operations: [UPDATE]
+        resources: [networkpolicies]
+  matchConditions:
+    - name: participant
+      expression: request.userInfo.username == {{ $user | toJson }}
+  validations:
+    - expression: >-
+        request.namespace == {{ $ns | toJson }} &&
+        object.metadata.name in ['allow-ingress-within-namespace', 'egress-baseline'] &&
+        object.spec.podSelector == oldObject.spec.podSelector &&
+        object.spec.policyTypes == oldObject.spec.policyTypes
+      message: Edit the traffic rules of your exercise policies; their workload selectors and policy types are fixed.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $ns }}-policy-network
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  policyName: {{ $ns }}-policy-network
+  validationActions: [Deny]

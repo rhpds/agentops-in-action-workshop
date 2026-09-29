@@ -2,7 +2,7 @@
 {{- if not .Values.keycloak.host }}
 {{- fail "openshell.enabled needs keycloak.host (forwarded by bootstrap-tenant): the sandbox must be allowed to fetch Hermes' MCP token" }}
 {{- end }}
-{{- $ns := printf "%s-%s" .Values.username .Values.openshell.namespaceSuffix -}}
+{{- $ns := printf "%s-%s" .Values.username .Values.namespaceSuffix -}}
 {{/*
 The OpenShell policy around Hermes' sandbox: which hosts which binaries may
 reach, and which paths Hermes can read and write.
@@ -13,10 +13,9 @@ participants tighten it until the poisoned maintenance record (MR-2291) can no
 longer send anything to diagnostics.example.com, while the golden workflow
 still passes.
 
-It lives in the participant's OpenShell namespace, beside the bridge that
-applies it, but belongs to this Application: participants edit it here, like
-every other policy. Participants can read ConfigMaps cluster-wide, so they can
-see what is loaded.
+It lives in the combined participant namespace, beside the bridge that applies
+it, but belongs to this manual-sync Application. Participants can update this
+specific ConfigMap directly or change policy Helm parameters and sync.
 
 What happens on sync:
 

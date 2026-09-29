@@ -1,30 +1,12 @@
 {{- if and (eq .Values.platform.agentHarness "hermes") (eq .Values.platform.hermesRuntime "openshell") }}
 {{- $keycloakHost := .Values.keycloak.host | default (printf "sso.%s" .Values.deployer.domain) -}}
 {{- $user := include "tenant.username" . -}}
-{{- $ns := printf "%s-%s" $user .Values.openshellNamespaceSuffix -}}
+{{- $ns := printf "%s-%s" $user .Values.namespaceSuffix -}}
 {{/*
-The participant's OpenShell namespace and the Application that fills it: their
-own OpenShell gateway, the sandbox Hermes runs in, and the bridge the console
-talks to. See tenant-openshell.
-
-Its own namespace, and the participant gets no RoleBinding in it, unlike
-<username>-agentops where they have edit. Sandbox pods run privileged, and the
-gateway's client certificate opens every sandbox behind it; neither belongs
-where a participant can start pods or read Secrets.
-
-Platform-owned, so auto-sync with self-heal like the platform Application.
+OpenShell shares the participant namespace with the application workloads.
+Keep a separate, self-healing Application and a unique release name: the
+vendored chart also names cluster-scoped RBAC after that release.
 */}}
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: {{ $ns }}
-  labels:
-    app.kubernetes.io/managed-by: argocd
-    rhdp.redhat.com/lab: agentops-in-action
-    rhdp.redhat.com/participant: {{ $user }}
-  annotations:
-    argocd.argoproj.io/sync-wave: "-2"
----
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -51,8 +33,6 @@ spec:
           value: {{ $user | quote }}
         - name: namespaceSuffix
           value: {{ .Values.namespaceSuffix | quote }}
-        - name: openshellNamespaceSuffix
-          value: {{ .Values.openshellNamespaceSuffix | quote }}
         - name: keycloak.host
           value: {{ $keycloakHost | quote }}
         # Whether this participant's Hermes traces to MLflow. The bridge
@@ -68,7 +48,7 @@ spec:
       selfHeal: true
       prune: true
     syncOptions:
-      # Created above, at an earlier sync wave.
+      # Created by namespace.yaml, at an earlier sync wave.
       - CreateNamespace=false
     retry:
       limit: 5

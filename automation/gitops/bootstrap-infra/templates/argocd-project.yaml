@@ -30,11 +30,7 @@ spec:
     # Per-participant namespaces, one per attendee.
     - namespace: '*-{{ .Values.lab.namespaceSuffix }}'
       server: https://kubernetes.default.svc
-    # Per-participant OpenShell namespaces: the gateway, the Hermes sandbox and
-    # its bridge (tenant-openshell).
-    - namespace: '*-{{ .Values.lab.openshellNamespaceSuffix }}'
-      server: https://kubernetes.default.svc
-    # bootstrap-tenant creates the two per-participant Applications here.
+    # bootstrap-tenant creates the per-participant Applications here.
     - namespace: {{ .Values.lab.argocdNamespace }}
       server: https://kubernetes.default.svc
     # Each participant's Keycloak realm. A KeycloakRealmImport must sit beside
@@ -45,13 +41,15 @@ spec:
   clusterResourceWhitelist:
     - group: ''
       kind: Namespace
-    # Bound per attendee by bootstrap-tenant. Without it every tenant
-    # ClusterRoleBinding points at a role that does not exist and attendees
-    # cannot read their own Sandbox — the first hands-on step of module 4.
+    # OpenShell's vendored chart creates release-specific cluster RBAC.
     - group: rbac.authorization.k8s.io
       kind: ClusterRole
     - group: rbac.authorization.k8s.io
       kind: ClusterRoleBinding
+    - group: admissionregistration.k8s.io
+      kind: ValidatingAdmissionPolicy
+    - group: admissionregistration.k8s.io
+      kind: ValidatingAdmissionPolicyBinding
   namespaceResourceWhitelist:
     - group: '*'
       kind: '*'

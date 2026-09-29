@@ -23,7 +23,13 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "0"
 spec:
-  podSelector: {}
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: NotIn
+        values: [openshell, hermes-openshell-bridge]
+      - key: agents.x-k8s.io/sandbox-name-hash
+        operator: DoesNotExist
   policyTypes: [Ingress]
   ingress:
     # The workloads talk to each other: UI -> agent -> MCP servers -> plant-api.
@@ -49,7 +55,13 @@ metadata:
       Baseline is unrestricted egress. This is what the agent uses to reach
       diagnostics.example.com when it follows the poisoned maintenance record.
 spec:
-  podSelector: {}
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: NotIn
+        values: [openshell, hermes-openshell-bridge]
+      - key: agents.x-k8s.io/sandbox-name-hash
+        operator: DoesNotExist
   policyTypes: [Egress]
   egress:
 {{- if .Values.networkPolicy.permissiveEgress }}

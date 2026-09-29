@@ -7,8 +7,8 @@ this participant's gateway and agent after a policy sync. See that template
 for why it has to.
 
 Kept here rather than in tenant-policy. The policy Application is the one
-participants edit; this one self-heals. So the Job can be edited, but what it
-is allowed to do cannot be widened from there.
+participants edit; this one self-heals. Participant admission guards exclude Job configuration
+parameters, and the participant Role does not grant Job or workload writes.
 
 The Job's permissions stop at this namespace: read the policies and Kuadrant's
 EnvoyFilters, delete the gateway pod, restart Deployments.
@@ -42,7 +42,11 @@ rules:
     verbs: ["get", "list", "watch", "delete"]
   - apiGroups: ["apps"]
     resources: ["deployments"]
-    verbs: ["get", "list", "watch", "patch"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["hermes-agent", "waterplant-agent", "hermes-openshell-bridge"]
+    verbs: ["patch"]
   - apiGroups: ["apps"]
     resources: ["replicasets"]
     verbs: ["get", "list", "watch"]

@@ -44,7 +44,7 @@ mcpGateway:
       - hermes-agent
       - waterplant-agent
       # Hermes in an OpenShell sandbox: restarting its bridge restarts Hermes.
-      - "{username}-openshell/hermes-openshell-bridge"
+      - hermes-openshell-bridge
     # Covers up to three gateway restarts plus the agent's rollout.
     timeoutSeconds: 1200
 
@@ -59,7 +59,6 @@ openshell:
   # Whether this participant's Hermes runs in an OpenShell sandbox (forwarded
   # by bootstrap-tenant). Without one there is nothing to apply this to.
   enabled: false
-  namespaceSuffix: openshell
 
   # true  -> the lab's starting condition: the binaries below may reach every
   #          host below, including *.example.com, where the poisoned

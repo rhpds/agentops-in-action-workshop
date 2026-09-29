@@ -32,8 +32,8 @@ So, in order:
      running. If it doesn't settle, restart it again (up to three times).
   4. Restart the MCP clients, which reconnect and list tools again. An entry
      is a Deployment in this namespace, or <namespace>/<name>: Hermes in an
-     OpenShell sandbox is restarted by restarting its bridge in
-     <username>-openshell, which grants this Job that (tenant-openshell).
+     OpenShell sandbox is restarted by restarting hermes-openshell-bridge
+     in this same namespace. tenant-platform owns the rollout RBAC.
      Entries whose Deployment does not exist are skipped.
 
 The sync stays in progress until all of that finishes. So "Synced" on this

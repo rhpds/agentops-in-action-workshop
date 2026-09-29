@@ -1,25 +1,15 @@
 # Participant username. bootstrap-tenant forwards it, and names the Helm release
 # <username>-openshell (see templates/_helpers.tpl for why the name matters).
 username: user1
-# The participant's lab namespace is <username>-<namespaceSuffix>; this chart
-# deploys into <username>-<openshellNamespaceSuffix>.
+# All participant workloads deploy into <username>-<namespaceSuffix>.
 namespaceSuffix: agentops
-openshellNamespaceSuffix: openshell
 
 # ---------------------------------------------------------------------------
 # The vendored OpenShell gateway chart (charts/helm-chart-0.0.92.tgz).
 #
-# Its own namespace per participant, which participants have no rights in, for
-# two reasons found on cluster-tpss7:
-#
-#   * Sandbox pods run under the privileged SCC as root with SYS_ADMIN,
-#     NET_ADMIN and SYS_PTRACE: that is how the supervisor enforces Landlock and
-#     network namespaces. Participants have `edit` in <username>-agentops, which
-#     lets them start a pod as any ServiceAccount there, so the sandbox
-#     ServiceAccount must not live there.
-#   * The gateway's client certificate opens every sandbox behind it, and the
-#     relay strips Authorization before Hermes sees it. One gateway per
-#     participant means one certificate can only ever reach its owner's agent.
+# OpenShell shares the lab namespace. bootstrap-tenant grants participants
+# policy editing and read access, without workload creation or Secret access.
+# One gateway and client certificate per participant are retained.
 # ---------------------------------------------------------------------------
 helm-chart:
   # OpenShift assigns UIDs from the namespace range; the chart's fixed 1000 and
@@ -43,7 +33,7 @@ helm-chart:
 sandbox:
   name: hermes
   image: quay.io/rh-aiservices-bu/waterplant-hermes:latest
-  # Limits on the sandbox pod. This namespace has no quota of its own.
+  # Limits on the sandbox pod, included in the combined participant quota.
   cpu: "2"
   memory: 4Gi
   # Hermes' API server, on the sandbox's loopback. The relay reaches it there.
@@ -228,12 +218,6 @@ keycloak:
   agentUser: operator
   agentPassword: operator
 
-# Lets tenant-policy's mcp-gateway-rollout Job restart the bridge after a policy
-# sync, which restarts Hermes in the sandbox.
-policyRollout:
-  enabled: true
-  serviceAccount: mcp-policy-rollout
-
 # ---------------------------------------------------------------------------
 # Prototype: watches Keycloak for tool: role changes on the operator user and
 # re-provisions Hermes as soon as it sees one, instead of waiting on
@@ -254,14 +238,4 @@ roleWatch:
   # a secret — see the comment there.
   adminPassword: redhat
 
-# Read-only access for the participant in this namespace: pods and their logs,
-# ConfigMaps, Services, events, and the workloads above them. No Secrets, no
-# exec, no creating anything — see templates/participant-rbac.yaml for why that
-# line is where it is.
-#
-# Without this a participant cannot read the bridge's supervisor log, which is
-# the only place an OpenShell policy rejection is reported, and module 4 becomes
-# guesswork. Found on cluster-9c6nx, where the tenant could see the bridge pod
-# but not its log.
-participantAccess:
-  enabled: true
+# Participant permissions are owned by bootstrap-tenant/templates/rbac.yaml.
