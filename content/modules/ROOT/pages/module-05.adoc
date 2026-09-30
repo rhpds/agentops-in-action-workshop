@@ -1,16 +1,23 @@
-= Module 5: Add Identity-Aware Access Controls
-:page-duration: 20 minutes
+= Module 5: Let the Agent Write Files
+:page-duration: TBD
 
-// Overview: Participants establish caller identity through OpenShell inbound authentication, inspect the agent's
-// SPIFFE/SPIRE workload identity, then run the same prompt as Analyst and Incident Manager personas and watch
-// MCP Gateway enforce tool authorization based on trusted token claims.
+// Overview: Participants find the agent can't create a report because it can't write to the filesystem
+// at all. They're introduced to OpenShell filesystem policy with a first, overly broad example that
+// allows every filesystem action, then find exactly where the agent needs to write and narrow the
+// policy to just that. Two attacks -- deleted reports and a tampered configuration -- show why
+// narrowing down to specific file-creation actions matters.
 
 == Objectives
 
-* Establish caller identity through OpenShell inbound authentication
-* Inspect the agent's SPIFFE/SPIRE workload identity certificate
-* Observe MCP Gateway permit a privileged tool call for the Incident Manager persona and deny it for the Analyst
-* Confirm that prompt injection as the Analyst still fails, proving authorization derives from token claims not model output
+* Diagnose why the agent can no longer create a report
+* Get introduced to OpenShell filesystem policy, starting from an example that allows every filesystem
+  action
+* Find exactly where in the filesystem the agent needs to write its report
+* Update the policy to allow that, and confirm the agent can create reports again
+* See two attacks an overly broad filesystem policy allows: reports being deleted, and the agent's
+  configuration being tampered with
+* Narrow the policy down to just the specific file-creation actions the agent needs (touch, mkdir, and
+  similar)
 
 == Content
 

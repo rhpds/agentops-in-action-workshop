@@ -1,15 +1,16 @@
 = Module 1: Introduction to AgentOps
-:page-duration: 10 minutes
+:page-duration: TBD
 
-// Overview: Establishes why operating a tool-enabled agent differs from operating a traditional application.
-// Participants ask the running agent one business question, walk the request path from user through model,
-// MCP tools, and enterprise services, then locate that interaction in MLflow.
+// Overview: Orients participants to the lab -- why runtime AgentOps controls matter, what they'll do
+// over the course of the lab, the attack-driven approach used to teach each control, and how to read
+// the dashboards they'll rely on throughout.
 
 == Objectives
 
-* Explain why a tool-enabled AI agent requires operational controls beyond those applied to traditional applications
-* Trace a single agent request from user prompt through model inference, MCP tool invocation, and enterprise service call
-* Locate an agent interaction in MLflow and identify the key spans
+* Explain why this lab exists and the problem it's solving
+* Preview what you'll actually do over the course of the lab
+* Preview how you'll attack the agent to learn each control
+* Learn what the dashboards you'll use (MLflow, EvalHub) are showing you
 
 == Content
 

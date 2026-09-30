@@ -1,18 +1,21 @@
-= Module 4: Apply Runtime Isolation and Policy Controls
-:page-duration: 30 minutes
+= Module 4: Let the Agent Use Its Tools
+:page-duration: TBD
 
-// Overview: The lab's central module. Participants apply five control layers without rebuilding or redeploying the agent:
-// Kata-backed Agent Sandbox, OpenShell filesystem, process, per-binary network, and credential policy.
-// Each module-03 attack is re-run and now receives an infrastructure-level denial.
+// Overview: Participants diagnose why the agent's tools stopped working and enable MCP Gateway in
+// OpenShell policy to restore them. With tools working again, three new attacks get through: a
+// sensitive-information leak, an unauthorized control action, and a compromised external tool.
+// Participants scope tool access down to what each persona actually needs, updating MCPVirtualServers
+// and removing unneeded access at the OIDC provider.
 
 == Objectives
 
-* Inspect the Kata-backed Agent Sandbox boundary and confirm workload isolation
-* Apply OpenShell filesystem path restrictions to block credential reads
-* Deny the attack process with an OpenShell process execution policy
-* Apply per-binary outbound network rules alongside coarse NetworkPolicy
-* Migrate an over-broad credential into governed storage
-* Confirm each module-03 attack now receives an infrastructure-level denial
+* Diagnose why the agent's tools stopped working once it was sandboxed
+* Understand why MCP Gateway is used to broker and control tool access
+* Enable MCP Gateway in OpenShell policy and confirm the agent's tools work again
+* See three of the attacks this reopens: a sensitive-information leak, an unauthorized control action, and
+  a compromised external tool
+* Scope the agent down to only the tools each persona actually needs by updating MCPVirtualServers (and Keycloak so that authz properly blocks them)
+* Bonus: We have one eval still failing for tool usage, it's a tool (birthday calendar for example) that was disabled by default, users need to identify this and enable it to earn bonus points
 
 == Content
 
