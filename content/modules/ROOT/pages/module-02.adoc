@@ -1,14 +1,20 @@
-= Module 2: Explore the Agent and Establish a Baseline
-:page-duration: 15 minutes
+= Module 2: Meet the Agent
+:page-duration: TBD
 
-// Overview: Participants inspect tools and resources the agent can reach under a permissive OpenShell policy,
-// run three normal tasks, walk one complete execution trace, then run a prebuilt EvalHub suite and save the baseline scorecard.
+// Overview: Participants get introduced to the agent already deployed in their environment -- what it
+// is, its purpose, its architecture, and its capabilities -- try some example prompts, and get
+// introduced to MLflow. Then several different attacks succeed against the agent while every normal
+// use case also succeeds, showing the value Red Hat AI provides and introducing evaluations.
 
 == Objectives
 
-* Enumerate the MCP tools and enterprise resources accessible to the agent under its current policy
-* Interpret a complete MLflow execution trace, identifying model, tool, and service spans
-* Run the EvalHub evaluation suite and save the baseline scorecard for later comparison
+* Learn what's already deployed for you: the model, its tools, the MCP gateway, and what the agent is for
+* Try out the agent with a few example prompts to see what it can do
+* Get introduced to MLflow, where you'll watch everything the agent does
+* Watch several different types of attacks succeed against the agent, unprotected as it is today
+* Get introduced to evaluations, the systematic way you'll measure the agent's behavior for the rest of
+  the lab
+** Confirm that every normal, legitimate use case also succeeds right now
 
 == Content
 

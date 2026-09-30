@@ -4,12 +4,13 @@ Welcome to this hands-on AgentOps lab. Over approximately two hours you will tak
 
 == What you will do
 
-* Observe an agent's real-time execution in MLflow traces
-* Baseline the agent's behavior with an EvalHub evaluation suite
-* Manually attack the agent and confirm failures in the trace
-* Apply runtime containment with Agent Sandbox, Kata isolation, and OpenShell policies
-* Add identity-aware MCP tool authorization via MCP Gateway
-* Re-run the evaluation suite and tune a deliberately over-restrictive policy
+* Meet the agent already deployed in your environment, try it out, and watch several attacks succeed
+  against it while every legitimate use case also succeeds
+* Put the agent in an OpenShell sandbox and discover it's now shielded but useless
+* Make the agent useful again, one control at a time -- tools, file writes, and doc access -- opening
+  each back up only as far as it actually needs
+* Guard against a compromised account with NeMo Guardrails
+* Rely on MLflow Evals throughout to see what's working and what isn't, instead of checking manually
 
 == Environment
 
@@ -21,11 +22,11 @@ Your environment is a shared Red Hat OpenShift 4.22 cluster running Red Hat Open
 |===
 |Module |Title |Duration
 
-|1 |Introduction to AgentOps |10 min
-|2 |Explore the Agent and Establish a Baseline |15 min
-|3 |Identify Unsafe and Unintended Behavior |20 min
-|4 |Apply Runtime Isolation and Policy Controls |30 min
-|5 |Add Identity-Aware Access Controls |20 min
-|6 |Re-evaluate and Tune the Agent |15 min
-|7 |AgentOps Lifecycle and Wrap-up |10 min
+|1 |Introduction to AgentOps |TBD
+|2 |Meet the Agent |TBD
+|3 |Sandbox the Agent |TBD
+|4 |Let the Agent Use Its Tools |TBD
+|5 |Let the Agent Write Files |TBD
+|6 |Let the Agent Reach the Docs Website |TBD
+|7 |Guard Against a Compromised Account |TBD
 |===

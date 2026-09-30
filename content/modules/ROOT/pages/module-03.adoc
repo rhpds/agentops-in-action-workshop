@@ -1,15 +1,21 @@
-= Module 3: Identify Unsafe and Unintended Behavior
-:page-duration: 20 minutes
+= Module 3: Sandbox the Agent
+:page-duration: TBD
 
-// Overview: Participants deliberately break the agent with three manual attacks (prompt injection, credential read,
-// unauthorized network call) plus an automated Garak adversarial profile, confirming each failure in the MLflow trace.
+// Overview: Participants learn the agent isn't sandboxed today, then place it in one, covering what
+// OpenShell is (architecture and background). Once sandboxed, they confirm they're shielded from the
+// earlier attacks -- but find the agent is now unable to do anything useful. Their job for the rest of
+// the lab is to restore the agent's usefulness without losing that protection, using MLflow Evals
+// instead of manual checks to see what's actually broken.
 
 == Objectives
 
-* Execute a prompt injection attack that causes the agent to invoke a privileged tool it should not call
-* Confirm that generated code can read a planted test credential and reach an unauthorized network endpoint
-* Run a Garak adversarial profile and locate failures in MLflow traces
-* Distinguish inference guardrail failures from authorization failures
+* Learn what OpenShell is: its architecture, background, and role in the lab
+* Find out whether the agent is running in a sandbox today (it isn't), and put it in one
+* Re-run the earlier attacks and confirm the sandbox now shields the agent against all of them
+* Discover that the sandboxed agent can no longer do anything useful, and understand why
+* Understand your job for the rest of the lab: make the agent useful again without losing that
+  protection
+* Show how to manually trigger evals, to see exactly what's working and what isn't
 
 == Content
 

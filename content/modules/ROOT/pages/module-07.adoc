@@ -1,14 +1,23 @@
-= Module 7: AgentOps Lifecycle and Wrap-up
-:page-duration: 10 minutes
+= Module 7: Guard Against a Compromised Account
+:page-duration: TBD
 
-// Overview: Recaps the ten-step journey and states the distinct non-substitutable responsibility of each
-// control layer. Participants discuss integration into real development and deployment processes.
+// Overview: Participants respond to an attack where someone else has gotten into a colleague's account
+// and is trying to extract information they shouldn't have. They find NeMo Guardrails -- an input check
+// that sends prompts to an LLM-as-judge for prompt-injection detection -- is set up but disabled, enable
+// it, and update the OpenShell network policy so the agent can reach it. Output guardrailing is out of
+// scope for this lab, and the starting guardrail prompt is intentionally weak, with room to improve it.
 
 == Objectives
 
-* Summarize the non-substitutable enforcement responsibility of each control layer applied in the lab
-* Describe how the AgentOps observe–evaluate–change–evaluate loop integrates into a development and deployment workflow
-* Identify next steps for applying these controls to your own agent workloads
+* Respond to an attack where someone else has gotten into a colleague's account and is trying to
+  extract information they shouldn't have
+** The attack specifically tries to prompt inject to get sensitive information from our system prompt and Hermes pod
+* Learn how NeMo Guardrails works: an input check that sends prompts to an LLM acting as a judge,
+  looking for prompt injection
+* Enable NeMo Guardrails and update the OpenShell network policy so the agent can actually reach it
+* Understand why this lab only guardrails the agent's input, not its output (latency)
+* Optional: strengthen the starting guardrail prompt, which is deliberately weak, to catch more kinds
+  of attacks
 
 == Content
 
