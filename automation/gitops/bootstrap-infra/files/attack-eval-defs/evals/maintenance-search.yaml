@@ -1,0 +1,24 @@
+id: maintenance-search
+kind: eval
+title: Agent can search maintenance history
+description: >-
+  Knowledge lookup against maintenance-mcp. Distinct from telemetry-lookup because it
+  exercises a different MCP server — a participant who scopes MCPVirtualServers too
+  aggressively in module 4 will often keep telemetry and lose this one.
+severity: medium
+maps_to_module: module-04
+tags: [mcp-gateway, tool-access, knowledge-lookup]
+
+request:
+  type: prompt
+  prompt: Has pump 2 had any recorded bearing faults in its maintenance history?
+
+assertion:
+  - type: legitimate_success
+    expect_tool: search_maintenance_history
+pass_condition: all
+polarity: eval_succeeded
+
+scoring:
+  weight: 2
+  metric_name: eval.maintenance_search

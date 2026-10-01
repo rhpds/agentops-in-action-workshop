@@ -204,12 +204,36 @@ ui:
   # the other, or the console searches an experiment Hermes never wrote to and
   # every turn falls back to MLflow's front door.
   mlflowExperiment: ""
+  # Where the attack/eval runner writes its cycle summaries. Empty means
+  # <username>-cycle, which is what the runner builds from its own
+  # cycleExperimentSuffix. Same coupling as mlflowExperiment above: change one
+  # and the console watches an experiment nothing writes to, so the attack
+  # alert never fires and the results panel stays empty.
+  cycleMlflowExperiment: ""
   route:
     enabled: true
     timeout: 600s
   resources:
     requests: { cpu: 50m, memory: 128Mi }
     limits:   { cpu: 300m, memory: 256Mi }
+
+# ---------------------------------------------------------------------------
+# Attack and evaluation runner access
+#
+# The runner itself is deployed once, by bootstrap-infra, in the shared
+# namespace. This block is only what it needs HERE: rights to write this
+# participant's cycle experiment, and a path through the network to their
+# agent. See templates/attack-runner-rbac.yaml.
+# ---------------------------------------------------------------------------
+attackRunner:
+  enabled: true
+  # Where the runner's ServiceAccount lives. Forwarded by bootstrap-tenant —
+  # must match lab.sharedNamespace in bootstrap-infra.
+  sharedNamespace: ""
+  serviceAccountName: attack-eval-runner
+  # The agent workload the runner is allowed to reach. Matches the
+  # app.kubernetes.io/name of whichever harness this participant runs.
+  agentServiceSelector: hermes-agent
 
 # ---------------------------------------------------------------------------
 # Maintenance assistant
