@@ -100,6 +100,20 @@ platform:
   # false has an agent that cannot reach its MCP servers at all.
   mcpGateway: true
 
+  # Let the shared attack/eval runner probe this participant and score them.
+  #
+  # Per participant, so one attendee can sit out the leaderboard — a presenter
+  # driving a demo from a real tenant does not want an attack landing mid-slide.
+  # Turning it off costs them their cycle results and their standing; it does not
+  # change anything about their agent.
+  attackRunner: true
+  # Where the runner's ServiceAccount lives. Must match lab.sharedNamespace in
+  # bootstrap-infra, the same way namespaceSuffix must match across charts: a
+  # RoleBinding naming the wrong namespace binds a subject that does not exist,
+  # which Kubernetes accepts silently and which then shows up as the runner
+  # getting 403s from MLflow for one participant and no one else.
+  attackRunnerNamespace: agentops-shared
+
 # Values forwarded to tenant-policy.
 policy:
   # Tool authorization at baseline. false is deliberate — see

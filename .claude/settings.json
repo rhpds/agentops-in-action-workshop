@@ -13,7 +13,6 @@
       "Bash(cd *)",
       "Read(*)",
       "Edit(publishing-house/*)",
-      "Write(publishing-house/*)",
       "Edit(catalog-info.yaml)"
     ]
   }

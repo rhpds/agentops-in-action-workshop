@@ -1,0 +1,92 @@
+{{- if .Values.attackRunner.enabled }}
+{{- if not .Values.attackRunner.sharedNamespace }}
+{{- fail "attackRunner.enabled needs attackRunner.sharedNamespace (forwarded by bootstrap-tenant): the runner's ServiceAccount lives there, and a RoleBinding has to name the namespace its subject comes from" }}
+{{- end }}
+{{- $ns := printf "%s-%s" .Values.username .Values.namespaceSuffix -}}
+{{/*
+Lets the shared attack/eval runner write this participant's cycle results.
+
+The runner's ServiceAccount lives in the shared namespace; this grants it rights HERE,
+in the participant's namespace, so the grant is per-participant and revocable per
+participant. Cross-namespace subjects are ordinary Kubernetes RBAC — the subject names
+its own namespace, the Role applies where it is bound.
+
+Scope is the same experiments resource the console's own -mlflow-read Role uses
+(see ui.yaml), plus create and update, because the runner has to make the
+<username>-cycle experiment the first time it writes to it. It gets nothing else in this
+namespace: it reaches the agent over HTTP like any other client, not through the API.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: attack-runner-mlflow
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/part-of: water-plant
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+rules:
+  - apiGroups: [mlflow.kubeflow.org]
+    resources: [experiments]
+    verbs: [get, list, create, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: attack-runner-mlflow
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/part-of: water-plant
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: attack-runner-mlflow
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.attackRunner.serviceAccountName }}
+    namespace: {{ .Values.attackRunner.sharedNamespace }}
+---
+{{/*
+Ingress for the runner to reach this participant's agent.
+
+This lives in tenant-platform, NOT tenant-policy, and that placement is the point.
+tenant-policy's NetworkPolicies are labelled rhdp.redhat.com/editable: "true" and
+participants tighten them in module 4. If the path the runner scores them over lived
+there, a participant doing the exercise correctly could lock out their own scoring and
+watch their leaderboard position freeze for reasons no trace would explain.
+
+So: participants can harden every part of their network posture except the one rule that
+lets them be graded. tenant-platform auto-syncs and self-heals, so deleting it just
+brings it back.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-attack-runner-ingress
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/part-of: water-plant
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+    rhdp.redhat.com/lab-note: >-
+      Grading path. Not participant-editable by design — see the note in
+      tenant-platform/templates/attack-runner-rbac.yaml.
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Values.attackRunner.agentServiceSelector }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.attackRunner.sharedNamespace }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: attack-eval-runner
+{{- end }}

@@ -79,6 +79,19 @@ spec:
         # sandbox and its bridge, and the console is pointed at the bridge.
         - name: agent.hermes.runtime
           value: {{ .Values.platform.hermesRuntime | quote }}
+        # Where the shared attack/eval runner lives. tenant-platform needs the name
+        # to bind its ServiceAccount into this namespace and to let it through the
+        # NetworkPolicy — a RoleBinding has to name the namespace its subject comes
+        # from, and nothing in a tenant namespace knows it otherwise.
+        - name: attackRunner.sharedNamespace
+          value: {{ .Values.platform.attackRunnerNamespace | quote }}
+        - name: attackRunner.enabled
+          value: {{ .Values.platform.attackRunner | quote }}
+        # The agent workload the runner may reach, which differs by harness: the
+        # openshell runtime fronts Hermes with its bridge, so that is what has to
+        # accept the ingress.
+        - name: attackRunner.agentServiceSelector
+          value: {{ if eq .Values.platform.hermesRuntime "openshell" }}hermes-openshell-bridge{{ else }}hermes-agent{{ end }}
   destination:
     server: https://kubernetes.default.svc
     namespace: {{ include "tenant.namespace" . }}
