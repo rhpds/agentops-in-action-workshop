@@ -194,6 +194,20 @@ spec:
             # console directly and never reaches this code path.
             - name: MLFLOW_EXPERIMENT
               value: {{ .Values.ui.mlflowExperiment | default .Values.username | quote }}
+            # Where the attack/eval runner writes its cycle summaries — one run every
+            # five minutes, separate from the traces above so the rollups do not bury
+            # the participant's own turns. The console reads the latest run here to
+            # show "you were just attacked" and the results panel behind it.
+            #
+            # The run id doubles as the freshness cursor: the console compares it
+            # against the last one it showed and only raises the alert when it changes,
+            # which is why no push channel is needed for any of this.
+            #
+            # Must resolve to the same name the runner builds from
+            # attackEvalRunner.cycleExperimentSuffix in bootstrap-infra. Change one and
+            # you must change the other, the same coupling MLFLOW_EXPERIMENT has above.
+            - name: MLFLOW_CYCLE_EXPERIMENT
+              value: {{ .Values.ui.cycleMlflowExperiment | default (printf "%s-cycle" .Values.username) | quote }}
             {{- end }}
             - name: NAMESPACE
               value: {{ $ns }}
