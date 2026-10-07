@@ -7,11 +7,11 @@
 {{/*
 Tool-level authorization on this participant's own MCP Gateway.
 
-Off at baseline, deliberately — the same shape as networkPolicy.permissiveEgress.
-The lab starts "works, but dangerously": the gateway federates the tools and
-enforces nothing, so the agent can call emergency_shutdown. Setting
-mcpGateway.enforced to true is the one-line change module 5 asks for, and
-`argocd app diff` on this Application shows it.
+On by default: every tool call must carry the matching role from the
+participant's Keycloak realm. Setting mcpGateway.enforced to false turns this
+off, so the gateway federates the tools and enforces nothing and the agent can
+call emergency_shutdown. `argocd app diff` on this Application shows the
+change.
 
 Two policies, one per Gateway listener, because the gateway handles a tool call
 in two hops:

@@ -102,9 +102,10 @@ platform:
 
 # Values forwarded to tenant-policy.
 policy:
-  # Tool authorization at baseline. false is deliberate — see
+  # Tool authorization at baseline: on, so every tool call needs the matching
+  # role in the participant's Keycloak realm. See
   # tenant-policy/templates/mcp-gateway-policy.yaml.
-  mcpGatewayEnforced: false
+  mcpGatewayEnforced: true
 
 # ---------------------------------------------------------------------------
 # Per-tenant resource limits

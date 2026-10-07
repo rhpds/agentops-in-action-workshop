@@ -21,10 +21,11 @@ networkPolicy:
 # Tool-level authorization on this participant's own MCP Gateway.
 # See templates/mcp-gateway-policy.yaml.
 mcpGateway:
-  # false -> the gateway federates tools and enforces nothing: the lab's
-  #          starting condition, where the agent can call emergency_shutdown
-  # true  -> every tool call needs tool:<name> in the caller's Keycloak token
-  enforced: false
+  # true  -> every tool call needs tool:<name> in the caller's Keycloak token:
+  #          the lab's starting condition
+  # false -> the gateway federates tools and enforces nothing, so the agent
+  #          can call emergency_shutdown
+  enforced: true
   # Must match tenant-platform's mcpGateway.gatewayName.
   gatewayName: mcp-gateway
   # Whether this participant has a gateway at all (tenant-platform's

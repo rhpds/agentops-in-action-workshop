@@ -79,7 +79,7 @@ spec:
           mcpGateway: true
           mlflowTracing: true
         policy:
-          mcpGatewayEnforced: false
+          mcpGatewayEnforced: true
   destination:
     server: https://kubernetes.default.svc
     namespace: openshift-gitops
