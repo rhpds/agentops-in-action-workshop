@@ -132,9 +132,17 @@ spec:
             longer existed — the swap looked like a broken console. Derived
             here so there is one switch, not two that must agree.
             */}}
+            {{- /*
+            On the hermes harness the console defaults to the plain Hermes
+            (agent.hermes.plain) whenever it is deployed, and to hermes-agent
+            (the pod, or the OpenShell bridge) otherwise. AGENT_URL can be
+            flipped by hand between the two; the platform Application ignores
+            this one field so self-heal keeps the override.
+            */}}
             {{- if eq .Values.agent.harness "hermes" }}
+            {{- $hermesSvc := ternary "hermes-plain" "hermes-agent" (and .Values.agent.hermes.plain.enabled .Values.mcpGateway.enabled) }}
             - name: AGENT_URL
-              value: {{ .Values.ui.agentUrl | default (printf "http://hermes-agent.%s.svc:%v" $ns .Values.agent.hermes.port) | quote }}
+              value: {{ .Values.ui.agentUrl | default (printf "http://%s.%s.svc:%v" $hermesSvc $ns .Values.agent.hermes.port) | quote }}
             - name: AGENT_PROTOCOL
               value: openai
             - name: AGENT_MODEL

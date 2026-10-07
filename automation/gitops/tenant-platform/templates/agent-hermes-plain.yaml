@@ -1,0 +1,244 @@
+{{- /* Gateway only: the AdminNetworkPolicy leaves no other route to the tools. */}}
+{{- if and (eq .Values.agent.harness "hermes") .Values.agent.hermes.plain.enabled .Values.mcpGateway.enabled }}
+{{- $ns := printf "%s-%s" .Values.username .Values.namespaceSuffix -}}
+{{- $h := .Values.agent.hermes -}}
+{{- $image := printf "%s:%s" $h.plain.image $h.plain.tag -}}
+{{- $gwUrl := printf "http://%s-%s.%s.svc.cluster.local:8080/mcp" .Values.mcpGateway.gatewayName .Values.mcpGateway.gatewayClassName $ns -}}
+{{/*
+A second, unsandboxed Hermes beside whichever runtime agent.hermes.runtime
+selected, so the console can be pointed at either and the two compared on the
+same plant, gateway and policies.
+
+Same agent, same gateway, same token flow as the OpenShell sandbox — only the
+sandbox is missing. Its config is kept as small as the bridge's for the same
+reason: any difference between the two should be the runtime, not the config.
+
+The console targets this one by default (ui.yaml). To use the sandboxed one:
+  oc set env deploy/water-plant-ui AGENT_URL=http://hermes-agent.<ns>.svc:8787
+bootstrap-tenant's platform Application ignores AGENT_URL, so self-heal keeps
+the override.
+
+No MLflow traces: hermes_otel is installed only by the OpenShell bridge.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hermes-plain
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: hermes-plain
+    app.kubernetes.io/part-of: water-plant
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+data:
+  mcp-token-refresh.py: |
+{{ .Files.Get "files/mcp-token-refresh.py" | indent 4 }}
+  wait-for-gateway.py: |
+{{ .Files.Get "files/wait-for-gateway.py" | indent 4 }}
+  # Hermes' config. seed-config appends the model block, which carries the
+  # key, so the key never reaches a manifest.
+  hermes-config.yaml: |
+    mcp_servers:
+      # One endpoint: this participant's MCP Gateway. `auth: oauth` makes Hermes
+      # send the token mcp-token-refresh.py keeps at
+      # $HERMES_HOME/mcp-tokens/gateway.json.
+      gateway:
+        url: {{ $gwUrl | quote }}
+        transport: streamable-http
+        auth: oauth
+        ssl_verify: false
+        enabled: true
+        timeout: {{ $h.mcpTimeoutSeconds }}
+        connect_timeout: 30
+
+    # Unlike the sandbox, no skip_auth: nothing in front of this pod
+    # authenticates callers, so the API_SERVER_KEY bearer is required.
+    platforms:
+      api_server:
+        enabled: true
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hermes-plain-data
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: hermes-plain
+    app.kubernetes.io/part-of: water-plant
+  annotations:
+    # Same wave as the Deployment: on WaitForFirstConsumer storage an earlier
+    # wave deadlocks the sync. See agent-hermes.yaml.
+    argocd.argoproj.io/sync-wave: "4"
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ $h.plain.storageSize }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hermes-plain
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: hermes-plain
+    app.kubernetes.io/part-of: water-plant
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    # After the gateway resources (1-3), so wait-for-gateway has something to poll.
+    argocd.argoproj.io/sync-wave: "4"
+spec:
+  replicas: 1
+  # ReadWriteOnce volume: a second pod cannot roll alongside the first.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: hermes-plain
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: hermes-plain
+        app.kubernetes.io/part-of: water-plant
+      annotations:
+        # Roll when the scripts or any Hermes value change.
+        checksum/config: {{ printf "%s%s%s%s" (.Files.Get "files/mcp-token-refresh.py") (.Files.Get "files/wait-for-gateway.py") (toJson $h) $gwUrl | sha256sum }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # Regenerated every start so the config always matches the chart.
+        - name: seed-config
+          image: {{ $image }}
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              {
+                cat /config/hermes-config.yaml
+                printf '\nmodel:\n  default: %s\n  provider: custom\n  base_url: %s\n  api_key: %s\n' \
+                  "$MODEL_DEFAULT" "$MODEL_BASE_URL" "$MODEL_API_KEY"
+                printf '\ncustom_providers:\n  - name: %s\n    base_url: %s\n    api_key: %s\n    model: %s\n' \
+                  "$MODEL_DEFAULT" "$MODEL_BASE_URL" "$MODEL_API_KEY" "$MODEL_DEFAULT"
+              } > "$HERMES_HOME/config.yaml"
+              chmod 600 "$HERMES_HOME/config.yaml"
+          envFrom:
+            - secretRef:
+                name: {{ $h.envSecret }}
+          env:
+            - { name: HERMES_HOME,    value: {{ $h.home | quote }} }
+            - { name: MODEL_BASE_URL, value: {{ .Values.agent.litellm.baseUrl | quote }} }
+            - { name: MODEL_DEFAULT,  value: {{ .Values.agent.litellm.model | quote }} }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: data, mountPath: {{ $h.home | quote }} }
+            - { name: config, mountPath: /config, readOnly: true }
+        # The first token, before Hermes' first MCP handshake.
+        - name: seed-token
+          image: {{ $image }}
+          command: ["python3", "/config/mcp-token-refresh.py"]
+          env: &tokenEnv
+            - { name: HERMES_HOME,     value: {{ $h.home | quote }} }
+            - { name: MCP_SERVER_NAME, value: gateway }
+            - { name: MCP_CLIENT_ID,   value: {{ .Values.keycloak.agentClientId | quote }} }
+            - { name: MCP_USERNAME,    value: {{ .Values.keycloak.agentUser | quote }} }
+            - { name: MCP_PASSWORD,    value: {{ .Values.keycloak.agentPassword | quote }} }
+            - name: MCP_TOKEN_URL
+              value: {{ printf "https://%s/realms/waterplant-%s/protocol/openid-connect/token" .Values.keycloak.host .Values.username | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: data, mountPath: {{ $h.home | quote }} }
+            - { name: config, mountPath: /config, readOnly: true }
+        # Hermes lists tools once at start-up and never refreshes.
+        - name: wait-for-gateway
+          image: {{ $image }}
+          command: ["python3", "/config/wait-for-gateway.py"]
+          env:
+            - { name: HERMES_HOME,      value: {{ $h.home | quote }} }
+            - { name: MCP_GATEWAY_URL,  value: {{ $gwUrl | quote }} }
+            - { name: MCP_WAIT_SECONDS, value: {{ $h.mcpWaitSeconds | quote }} }
+            - name: MCP_PREFIXES
+              value: "{{ range $i, $s := .Values.mcp.servers }}{{ if $i }},{{ end }}{{ trimSuffix "-mcp" $s.name }}_{{ end }}"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: data, mountPath: {{ $h.home | quote }} }
+            - { name: config, mountPath: /config, readOnly: true }
+      containers:
+        - name: hermes
+          image: {{ $image }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["hermes", "gateway", "run", "--verbose"]
+          ports:
+            - name: http
+              containerPort: {{ $h.port }}
+          envFrom:
+            # MODEL_API_KEY and API_SERVER_KEY.
+            - secretRef:
+                name: {{ $h.envSecret }}
+          env:
+            - { name: HERMES_HOME,        value: {{ $h.home | quote }} }
+            - { name: HERMES_PROFILE,     value: default }
+            - { name: XDG_STATE_HOME,     value: "{{ $h.home }}/state" }
+            - { name: API_SERVER_ENABLED, value: "true" }
+            - { name: API_SERVER_HOST,    value: 0.0.0.0 }
+            - { name: API_SERVER_PORT,    value: {{ $h.port | quote }} }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: data, mountPath: {{ $h.home | quote }} }
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 12
+          resources:
+            {{- toYaml $h.resources | nindent 12 }}
+        - name: mcp-token-refresh
+          image: {{ $image }}
+          command: ["python3", "/config/mcp-token-refresh.py", "--loop", {{ .Values.mcpGateway.tokenRefreshSeconds | quote }}]
+          env: *tokenEnv
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - { name: data, mountPath: {{ $h.home | quote }} }
+            - { name: config, mountPath: /config, readOnly: true }
+          resources:
+            {{- toYaml $h.tokenRefreshResources | nindent 12 }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: hermes-plain-data
+        - name: config
+          configMap:
+            name: hermes-plain
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hermes-plain
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: hermes-plain
+    app.kubernetes.io/part-of: water-plant
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+spec:
+  selector:
+    app.kubernetes.io/name: hermes-plain
+  ports:
+    - name: http
+      port: {{ $h.port }}
+      targetPort: http
+{{- end }}

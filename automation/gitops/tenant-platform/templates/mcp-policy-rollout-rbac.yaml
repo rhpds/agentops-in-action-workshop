@@ -45,7 +45,7 @@ rules:
     verbs: ["get", "list", "watch"]
   - apiGroups: ["apps"]
     resources: ["deployments"]
-    resourceNames: ["hermes-agent", "waterplant-agent", "hermes-openshell-bridge"]
+    resourceNames: ["hermes-agent", "waterplant-agent", "hermes-openshell-bridge", "hermes-plain"]
     verbs: ["patch"]
   - apiGroups: ["apps"]
     resources: ["replicasets"]

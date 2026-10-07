@@ -82,6 +82,16 @@ spec:
   destination:
     server: https://kubernetes.default.svc
     namespace: {{ include "tenant.namespace" . }}
+  # The one exception to self-heal: the console's AGENT_URL, so it can be
+  # flipped by hand between the sandboxed Hermes (hermes-agent) and the plain
+  # one (hermes-plain) — see tenant-platform agent.hermes.plain. Without
+  # RespectIgnoreDifferences an automated sync would still write it back.
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      name: water-plant-ui
+      jqPathExpressions:
+        - '.spec.template.spec.containers[] | select(.name == "ui") | .env[] | select(.name == "AGENT_URL")'
   syncPolicy:
     # Nothing here is something an attendee is told to touch, so restoring it
     # can only help them.
@@ -91,6 +101,7 @@ spec:
     syncOptions:
       # bootstrap-tenant creates the namespace, at an earlier sync wave.
       - CreateNamespace=false
+      - RespectIgnoreDifferences=true
     retry:
       limit: 5
       backoff: { duration: 15s, factor: 2, maxDuration: 3m }

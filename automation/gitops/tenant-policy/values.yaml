@@ -45,6 +45,8 @@ mcpGateway:
       - waterplant-agent
       # Hermes in an OpenShell sandbox: restarting its bridge restarts Hermes.
       - hermes-openshell-bridge
+      # The unsandboxed Hermes beside it (tenant-platform agent.hermes.plain).
+      - hermes-plain
     # Covers up to three gateway restarts plus the agent's rollout.
     timeoutSeconds: 1200
 

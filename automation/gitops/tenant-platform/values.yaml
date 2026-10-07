@@ -326,3 +326,22 @@ agent:
     tokenRefreshResources:
       requests: { cpu: 10m, memory: 32Mi }
       limits:   { cpu: 100m, memory: 64Mi }
+    # A second, unsandboxed Hermes beside whichever runtime is selected above,
+    # for comparing the two from the console (templates/agent-hermes-plain.yaml,
+    # Service hermes-plain). Reuses port, home, envSecret, resources and the
+    # timeouts above. Gateway mode only. When deployed, the console targets
+    # this one by default; swap it by hand:
+    #
+    #   oc set env deploy/water-plant-ui -n <user>-agentops \
+    #     AGENT_URL=http://hermes-agent.<user>-agentops.svc:8787   # sandboxed
+    #   oc set env deploy/water-plant-ui -n <user>-agentops \
+    #     AGENT_URL=http://hermes-plain.<user>-agentops.svc:8787   # plain (default)
+    #
+    # bootstrap-tenant's platform Application ignores AGENT_URL, so self-heal
+    # keeps the override. No MLflow traces from this one: only the OpenShell
+    # bridge installs hermes_otel.
+    plain:
+      enabled: true
+      image: quay.io/rh-aiservices-bu/plain-hermes
+      tag: "0.1"
+      storageSize: 2Gi
