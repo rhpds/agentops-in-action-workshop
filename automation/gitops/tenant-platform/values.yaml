@@ -142,11 +142,14 @@ keycloak:
       - close_valve
       - dump_plant_configuration
       - emergency_shutdown
-  # Declared but not granted to the operator: the roles the exercises grant.
-  withheldFromOperator:
-    control-mcp:
-      - dump_plant_configuration   # Scenario 3
-      - emergency_shutdown         # Scenario 4
+  # Declared but not granted to the operator. Empty: the realm starts fully
+  # permissive, with the operator holding every tool role, and participants
+  # revoke roles to scope the agent down. To withhold some instead, list them
+  # per server, e.g.
+  #   control-mcp:
+  #     - dump_plant_configuration   # Scenario 3
+  #     - emergency_shutdown         # Scenario 4
+  withheldFromOperator: {}
 
 # Coarse egress restriction as defence in depth. Deliberately permissive at
 # baseline — the interesting per-binary policy is OpenShell's job in module 4,
