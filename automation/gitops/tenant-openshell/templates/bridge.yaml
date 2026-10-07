@@ -10,13 +10,19 @@ The bridge between the console and Hermes in the sandbox.
 The participant starts Hermes themselves, from the `cli` container:
 
   oc exec -it deploy/hermes-openshell-bridge -c cli -- bash
-  openshell gateway add https://$OPENSHELL_GATEWAY:8080 --local --name lab
+  openshell gateway add $GATEWAY_URL --local --name lab
   openshell gateway select lab
   openshell sandbox create --name hermes --from $HERMES_IMAGE --policy /hermes/policy.yaml \
     --cpu $SANDBOX_CPU --memory $SANDBOX_MEMORY --no-tty -- true
-  openshell sandbox upload hermes /hermes /sandbox/setup
+  tar -C /hermes -cz . | openshell sandbox exec --name hermes -- \
+    sh -c 'mkdir -p /sandbox/setup && tar -xz -C /sandbox/setup'
   openshell sandbox exec --name hermes -- sh /sandbox/setup/start-hermes.sh
   openshell service expose hermes 8080 openai
+
+`sandbox create` ends with a harmless "No such file or directory": its initial
+command, like `sandbox upload`, goes over ssh, and this image has no ssh client.
+That is why the upload is a tar stream through `sandbox exec`, which uses the
+gateway's own API (verified on cluster-z5jhc).
 
 Three containers:
 
@@ -478,14 +484,16 @@ spec:
               cp /mtls/ca.crt /mtls/tls.crt /mtls/tls.key "$XDG_CONFIG_HOME/openshell/gateways/lab/mtls/"
               cat > "$HOME/.bashrc" <<'EOF'
               PS1='[openshell \W]\$ '
-              echo "OpenShell CLI for sandbox '$SANDBOX_NAME'. Gateway: $OPENSHELL_GATEWAY. Prepared files: /hermes"
+              echo "OpenShell CLI for sandbox '$SANDBOX_NAME'. Gateway: $GATEWAY_URL. Prepared files: /hermes"
               EOF
               exec sleep infinity
           env:
             - { name: PATH, value: "/tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" }
             - { name: HOME, value: /home/cli }
             - { name: XDG_CONFIG_HOME, value: /home/cli/.config }
-            - { name: OPENSHELL_GATEWAY, value: {{ $gwHost | quote }} }
+            # Not OPENSHELL_GATEWAY: the CLI reads that as the name of the
+            # gateway to use, and every command then fails "Unknown gateway".
+            - { name: GATEWAY_URL, value: {{ printf "https://%s:8080" $gwHost | quote }} }
             - { name: HERMES_IMAGE, value: {{ .Values.sandbox.image | quote }} }
             - { name: SANDBOX_NAME, value: {{ .Values.sandbox.name | quote }} }
             - { name: SANDBOX_CPU, value: {{ .Values.sandbox.cpu | quote }} }

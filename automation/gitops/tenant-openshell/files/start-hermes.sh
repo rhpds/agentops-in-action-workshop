@@ -1,7 +1,8 @@
 #!/bin/sh
 # Starts, or restarts, Hermes inside the OpenShell sandbox.
 #
-# Uploaded with the rest of /hermes by the participant and run with
+# Uploaded with the rest of /hermes by the participant (a tar stream through
+# `openshell sandbox exec`, unpacked at /sandbox/setup) and run with
 #   openshell sandbox exec --name hermes -- sh /sandbox/setup/start-hermes.sh
 # The bridge runs the same script when the operator's Keycloak roles change.
 # Idempotent: it reinstalls the uploaded files and replaces any running Hermes.
