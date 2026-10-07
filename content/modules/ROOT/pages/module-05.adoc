@@ -1,23 +1,22 @@
-= Module 5: Let the Agent Write Files
+= Module 5: Let the Agent Reach the Docs Website
 :page-duration: TBD
 
-// Overview: Participants find the agent can't create a report because it can't write to the filesystem
-// at all. They're introduced to OpenShell filesystem policy with a first, overly broad example that
-// allows every filesystem action, then find exactly where the agent needs to write and narrow the
-// policy to just that. Two attacks -- deleted reports and a tampered configuration -- show why
-// narrowing down to specific file-creation actions matters.
+// Overview: Participants find that the agent's documentation-reading skill can no longer reach the
+// external site it depends on. They open network access in OpenShell policy, then see the risk of
+// opening it too broadly: the agent can now browse the entire internet, including a compromised
+// look-alike site. An attack where the real documentation site redirects to a malicious page shows why
+// the policy needs to name specific endpoints, not just a whole domain.
 
 == Objectives
 
-* Diagnose why the agent can no longer create a report
-* Get introduced to OpenShell filesystem policy, starting from an example that allows every filesystem
-  action
-* Find exactly where in the filesystem the agent needs to write its report
-* Update the policy to allow that, and confirm the agent can create reports again
-* See two attacks an overly broad filesystem policy allows: reports being deleted, and the agent's
-  configuration being tampered with
-* Narrow the policy down to just the specific file-creation actions the agent needs (touch, mkdir, and
-  similar)
+* Diagnose why the agent's documentation-reading skill can no longer reach the external site it depends
+  on
+* Update the OpenShell network policy to allow external traffic (all to start with)
+* See an attack where the real documentation site accidentally redirects to a malicious page in one of its instructions
+** Understand the risk of opening network access too broadly: the agent could suddenly reach the entire
+  internet, including a look-alike, compromised site
+* Scope the policy down to the specific endpoints the agent needs, not an entire domain
+* Bonus: Eval uses a skill that requires another website, which you need to give access to as well
 
 == Content
 

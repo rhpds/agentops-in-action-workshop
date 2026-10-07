@@ -1,22 +1,23 @@
-= Module 6: Let the Agent Reach the Docs Website
+= Module 6: Guard Against a Compromised Account
 :page-duration: TBD
 
-// Overview: Participants find that the agent's documentation-reading skill can no longer reach the
-// external site it depends on. They open network access in OpenShell policy, then see the risk of
-// opening it too broadly: the agent can now browse the entire internet, including a compromised
-// look-alike site. An attack where the real documentation site redirects to a malicious page shows why
-// the policy needs to name specific endpoints, not just a whole domain.
+// Overview: Participants respond to an attack where someone else has gotten into a colleague's account
+// and is trying to extract information they shouldn't have. They find NeMo Guardrails -- an input check
+// that sends prompts to an LLM-as-judge for prompt-injection detection -- is set up but disabled, enable
+// it, and update the OpenShell network policy so the agent can reach it. Output guardrailing is out of
+// scope for this lab, and the starting guardrail prompt is intentionally weak, with room to improve it.
 
 == Objectives
 
-* Diagnose why the agent's documentation-reading skill can no longer reach the external site it depends
-  on
-* Update the OpenShell network policy to allow external traffic (all to start with)
-* See an attack where the real documentation site accidentally redirects to a malicious page in one of its instructions
-** Understand the risk of opening network access too broadly: the agent could suddenly reach the entire
-  internet, including a look-alike, compromised site
-* Scope the policy down to the specific endpoints the agent needs, not an entire domain
-* Bonus: Eval uses a skill that requires another website, which you need to give access to as well
+* Respond to an attack where someone else has gotten into a colleague's account and is trying to
+  extract information they shouldn't have
+** The attack specifically tries to prompt inject to get sensitive information from our system prompt and Hermes pod
+* Learn how NeMo Guardrails works: an input check that sends prompts to an LLM acting as a judge,
+  looking for prompt injection
+* Enable NeMo Guardrails and update the OpenShell network policy so the agent can actually reach it
+* Understand why this lab only guardrails the agent's input, not its output (latency)
+* Optional: strengthen the starting guardrail prompt, which is deliberately weak, to catch more kinds
+  of attacks
 
 == Content
 

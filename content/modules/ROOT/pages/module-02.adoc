@@ -1,21 +1,64 @@
-= Module 2: Meet the Agent
+= Module 2: Sandbox the Agent
 :page-duration: TBD
 
-// Overview: Participants get introduced to the agent already deployed in their environment -- what it
-// is, its purpose, its architecture, and its capabilities -- try some example prompts, and get
-// introduced to MLflow. Then several different attacks succeed against the agent while every normal
-// use case also succeeds, showing the value Red Hat AI provides and introducing evaluations.
+// Overview: Participants learn the agent isn't sandboxed today, then place it in one, covering what
+// OpenShell is (architecture and background). Once sandboxed, they confirm they're shielded from the
+// earlier attacks -- but find the agent is now unable to do anything useful. Their job for the rest of
+// the lab is to restore the agent's usefulness without losing that protection, using MLflow Evals
+// instead of manual checks to see what's actually broken.
 
 == Objectives
 
-* Learn what's already deployed for you: the model, its tools, the MCP gateway, and what the agent is for
-* Try out the agent with a few example prompts to see what it can do
-* Get introduced to MLflow, where you'll watch everything the agent does
-* Watch several different types of attacks succeed against the agent, unprotected as it is today
-* Get introduced to evaluations, the systematic way you'll measure the agent's behavior for the rest of
-  the lab
-** Confirm that every normal, legitimate use case also succeeds right now
+* Learn what OpenShell is: its architecture, background, and role in the lab
+* Put Hermie in a box, re-run the earlier attacks and confirm the sandbox now shields the agent against all of them
+* Discover that the sandboxed agent can no longer do anything useful, and understand why
+* Understand your job for the rest of the lab: make the agent useful again without losing that protection
+* Manually trigger evals to evaluate the agent's behavior in a sandbox
 
 == Content
 
-// TODO: Write module content here.
+1. Why Sandboxing Matters & How OpenShell Helps
+
+
+2. Put Hermie in a Box
+
+Switch to Terminal tab
+
+oc login 
+
+oc rsh because of the mTLS client cert, the gateway is only accessible from inside the cluster. The gateway's relay
+then exposes it to the outside world as hermie-agent:8787.
+. Point the CLI at the OpenShell gateway (needs the gateway's mTLS client cert)
++
+[source,bash]
+----
+openshell gateway add https://<openshell-gw>:8080 --local --name {user}-openshell-gw
+openshell gateway select {user}-openshell-gw
+----
+
+. Create the sandbox with its policy
++
+[source,bash]
+----
+openshell sandbox create --name hermie --from quay.io/rh-aiservices-bu/waterplant-hermes:latest \
+    --policy policy.yaml --cpu 2 --memory <mem> --no-tty -- echo ready
+openshell policy set --policy policy.yaml --wait hermie
+----
+
+. Copy in config.yaml (with the model key), an env file and the token script
+
+[source,bash]
+----
+  #    (base64 piped through `openshell sandbox exec`), then start Hermes inside the sandbox
+openshell sandbox exec --name hermie -- sh -c '. /sandbox/.hermes-env.sh && python3 /sandbox/mcp-token-refresh.py'
+openshell sandbox exec --name hermie -- sh -c '. /sandbox/.hermes-env.sh && setsid hermes gateway run &'
+----
++
+. Publish it through the gateway's relay; the bridge's nginx then serves it as hermie-agent:8787
++
+[source,bash]
+----
+openshell service expose hermie 8787 openai
+----
+
+3. Use Sandboxed Hermie instead of the original agent

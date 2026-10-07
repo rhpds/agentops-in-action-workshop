@@ -1,21 +1,21 @@
-= Module 3: Sandbox the Agent
+= Module 3: Let the Agent Use Its Tools
 :page-duration: TBD
 
-// Overview: Participants learn the agent isn't sandboxed today, then place it in one, covering what
-// OpenShell is (architecture and background). Once sandboxed, they confirm they're shielded from the
-// earlier attacks -- but find the agent is now unable to do anything useful. Their job for the rest of
-// the lab is to restore the agent's usefulness without losing that protection, using MLflow Evals
-// instead of manual checks to see what's actually broken.
+// Overview: Participants diagnose why the agent's tools stopped working and enable MCP Gateway in
+// OpenShell policy to restore them. With tools working again, three new attacks get through: a
+// sensitive-information leak, an unauthorized control action, and a compromised external tool.
+// Participants scope tool access down to what each persona actually needs, updating MCPVirtualServers
+// and removing unneeded access at the OIDC provider.
 
 == Objectives
 
-* Learn what OpenShell is: its architecture, background, and role in the lab
-* Find out whether the agent is running in a sandbox today (it isn't), and put it in one
-* Re-run the earlier attacks and confirm the sandbox now shields the agent against all of them
-* Discover that the sandboxed agent can no longer do anything useful, and understand why
-* Understand your job for the rest of the lab: make the agent useful again without losing that
-  protection
-* Show how to manually trigger evals, to see exactly what's working and what isn't
+* Diagnose why the agent's tools stopped working once it was sandboxed
+* Understand why MCP Gateway is used to broker and control tool access
+* Enable MCP Gateway in OpenShell policy and confirm the agent's tools work again
+* See three of the attacks this reopens: a sensitive-information leak, an unauthorized control action, and
+  a compromised external tool
+* Scope the agent down to only the tools each persona actually needs by updating MCPVirtualServers (and Keycloak so that authz properly blocks them)
+* Bonus: We have one eval still failing for tool usage, it's a tool (birthday calendar for example) that was disabled by default, users need to identify this and enable it to earn bonus points
 
 == Content
 
