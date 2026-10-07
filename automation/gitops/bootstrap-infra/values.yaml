@@ -238,7 +238,7 @@ datascience:
     # the lab's critical path.
     llamastackoperator: Removed    # D1 selected LangGraph as the agent framework
     ogx: Removed                   # Open Responses — revisit only if OGX earns a place
-    workbenches: Removed           # attendees get a browser and a toolbox pod, not notebooks
+    workbenches: Managed           # attendees get a browser and a toolbox pod, not notebooks
     modelregistry: Removed
     aipipelines: Removed
     kueue: Removed
