@@ -27,10 +27,9 @@ mkdir -p "$WORK/probe/mcp-tokens"
 GATEWAY_ENDPOINT="https://${GATEWAY_HOST}:8080"
 RELAY_HOST=""
 PUBLISHED_POLICY=""
-# Where the participant's upload (a tar of /hermes streamed through
-# `openshell sandbox exec`, unpacked at /sandbox/setup) puts start-hermes.sh.
-# Must match the lab instructions.
-START_SCRIPT=/sandbox/setup/start-hermes.sh
+# Where the participant's `openshell sandbox upload <name> /hermes /sandbox` puts
+# start-hermes.sh: upload nests the directory. Must match the lab instructions.
+START_SCRIPT=/sandbox/hermes/start-hermes.sh
 # Serializes restart_hermes(): role_watch_loop calls it from a background
 # process, and must never overlap the main loop's own calls to it.
 RESTART_LOCK=/tmp/work/restart.lock

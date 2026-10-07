@@ -110,10 +110,13 @@ baselinePolicy:
 bridge:
   # Also the console's agent port (tenant-platform agent.hermes.port).
   port: 8787
-  # The openshell CLI, downloaded from the GitHub release at start. v0.0.88 is
-  # the CLI verified against the 0.0.92 gateway on cluster-tpss7.
-  cliVersion: v0.0.88
-  # The RHEL 9 build: the supervisor runs the token refresher, which needs
+  # The participant's cli container: the openshell CLI plus an ssh client,
+  # which `sandbox create` and `sandbox upload` need. Built from
+  # hermes-openshell/Containerfile.cli in the agent repo. The supervisor copies
+  # openshell out of it too. CLI v0.0.88 is the one verified against the
+  # vendored 0.0.92 gateway on cluster-tpss7; keep the tag in step.
+  openshellCliImage: quay.io/rh-aiservices-bu/openshell-cli:0.1
+  # The supervisor's image. The RHEL 9 build: it runs the token refresher, which needs
   # Python 3.7+. The RHEL 8 ose-cli ships 3.6.8 and fails on
   # `from __future__ import annotations` (seen on cluster-tpss7).
   cliImage: registry.redhat.io/openshift4/ose-cli-rhel9:latest
