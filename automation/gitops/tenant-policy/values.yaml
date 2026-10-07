@@ -43,8 +43,8 @@ mcpGateway:
     clientDeployments:
       - hermes-agent
       - waterplant-agent
-      # Hermes in an OpenShell sandbox: restarting its bridge restarts Hermes.
-      - hermes-openshell-bridge
+      # Not hermes-openshell-bridge: Hermes in the OpenShell sandbox is
+      # restarted by the participant after a policy change, not by this Job.
       # The unsandboxed Hermes beside it (tenant-platform agent.hermes.plain).
       - hermes-plain
     # Covers up to three gateway restarts plus the agent's rollout.

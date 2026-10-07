@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
-# Sets up and supervises one participant's Hermes inside their OpenShell
-# sandbox. See templates/bridge.yaml for why this is a supervisor.
+# Prepares and supervises one participant's Hermes in their OpenShell sandbox.
+# See templates/bridge.yaml for the split between this and the participant.
+#
+# The participant creates the sandbox, uploads /hermes into it, starts Hermes
+# and exposes it, from the `cli` container beside this one. This script:
+#
+#   prepare   before any of that: waits for the MCP gateway, renders Hermes'
+#             config, fetches the MLflow plugin and token, and writes it all to
+#             /hermes for the participant to upload
+#   adopt     after it: finds the exposed service and points the console's
+#             relay at it
+#   restart   Hermes when the operator's Keycloak tool roles change, or when it
+#             stops answering. Never on a policy change: those are the
+#             participant's to apply, and restart, by hand.
 #
 # Never runs with -x: the model key and Hermes' server key pass through here.
 set -uo pipefail
@@ -10,14 +22,17 @@ export XDG_CONFIG_HOME=/tmp/.config
 umask 077
 
 WORK=/tmp/work
+OUT=/hermes
 mkdir -p "$WORK/probe/mcp-tokens"
 GATEWAY_ENDPOINT="https://${GATEWAY_HOST}:8080"
 RELAY_HOST=""
-APPLIED_POLICY=""
-# Serializes provision(): role_watch_loop below calls it from a background
-# process, and must never overlap the main loop's own calls to it — two
-# concurrent `openshell sandbox create` calls race.
-PROVISION_LOCK=/tmp/work/provision.lock
+PUBLISHED_POLICY=""
+# Where the participant's `openshell sandbox upload <name> /hermes /sandbox/setup`
+# puts start-hermes.sh. Must match the lab instructions.
+START_SCRIPT=/sandbox/setup/start-hermes.sh
+# Serializes restart_hermes(): role_watch_loop calls it from a background
+# process, and must never overlap the main loop's own calls to it.
+RESTART_LOCK=/tmp/work/restart.lock
 
 log()   { echo "[$(date -u +%H:%M:%S)] $*"; }
 strip() { sed 's/\x1b\[[0-9;]*m//g'; }
@@ -52,74 +67,24 @@ sandbox_phase() {
   openshell sandbox list 2>/dev/null | strip | awk -v n="$SANDBOX_NAME" '$1 == n {print $NF}'
 }
 
-# The policy is given at creation, because filesystem rules are fixed then: a
-# live sandbox accepts new paths but refuses to drop any.
-create_sandbox() {
-  log "creating sandbox $SANDBOX_NAME from $IMAGE_REF with $1"
-  # `-- echo ready` prints "No such file or directory" after the sandbox is up;
-  # harmless, and the phase check below is what counts.
-  openshell sandbox create --name "$SANDBOX_NAME" --from "$IMAGE_REF" --policy "$1" \
-    --cpu "$SANDBOX_CPU" --memory "$SANDBOX_MEMORY" --no-tty -- echo ready 2>&1 | strip | tail -3
+# The relay URL of the participant's exposed `openai` service, if there is one.
+service_url() {
+  openshell service list 2>/dev/null | strip | awk -v n="$SANDBOX_NAME" '$1 == n && $2 == "openai" {print $NF}'
 }
 
-wait_ready() {
-  local i phase
-  log "waiting for sandbox $SANDBOX_NAME to be Ready"
-  for i in $(seq 1 60); do
-    phase=$(sandbox_phase)
-    [ "$phase" = "Ready" ] && return 0
-    sleep 5
-  done
-  log "sandbox not Ready after 300s (phase: ${phase:-none})"
-  return 1
+# publish <local file> <name in /hermes>
+# Atomic, so the participant never uploads a half-written file.
+publish() {
+  cp "$1" "$OUT/.$2.tmp" && chmod 644 "$OUT/.$2.tmp" && mv "$OUT/.$2.tmp" "$OUT/$2"
 }
 
-# Applies the current policy. Network changes load into the running sandbox.
-# A policy that removes a filesystem path cannot be applied live, so the
-# sandbox is recreated with it; Hermes' files are rewritten afterwards anyway.
-apply_policy() {
-  local pf out i
-  pf=$(policy_file)
-  log "applying the sandbox policy from $pf (sha256 $(policy_hash))"
-  if out=$(openshell policy set --policy "$pf" --wait "$SANDBOX_NAME" 2>&1); then
-    APPLIED_POLICY=$(policy_hash)
-    return 0
-  fi
-  if printf '%s' "$out" | grep -q "cannot be removed on a live sandbox"; then
-    log "the policy removes filesystem paths, which a live sandbox cannot drop; recreating $SANDBOX_NAME"
-    openshell sandbox delete "$SANDBOX_NAME" 2>&1 | strip | tail -1
-    for i in $(seq 1 60); do [ -z "$(sandbox_phase)" ] && break; sleep 5; done
-    create_sandbox "$pf"
-    wait_ready || return 1
-    APPLIED_POLICY=$(policy_hash)
-    return 0
-  fi
-  # Most often a policy participants edited into something OpenShell refuses.
-  log "policy rejected: $(printf '%s' "$out" | strip | grep -vE '^\s*$' | tr -s ' ' | tr -d '│×' | tr '\n' ' ' | cut -c1-400)"
-  return 1
-}
-
-# Runs provision() under a lock, so the main loop and role_watch_loop (a
-# separate background process) never call it at the same time. No subshell:
-# provision() sets globals (APPLIED_POLICY, RELAY_HOST) the main loop reads
-# afterward, and a `( ... )` subshell would silently lose those.
-provision_locked() {
-  local lock_fd rc
-  exec {lock_fd}>"$PROVISION_LOCK"
-  if ! flock -w 60 "$lock_fd"; then
-    log "provision already running elsewhere; skipping this trigger"
-    exec {lock_fd}>&-
-    return 1
-  fi
-  provision
-  rc=$?
-  flock -u "$lock_fd"
-  exec {lock_fd}>&-
-  return $rc
+publish_policy() {
+  publish "$(policy_file)" policy.yaml
+  PUBLISHED_POLICY=$(policy_hash)
 }
 
 # ---------------------------------------------------------------------------
-# Watches Keycloak for changes to the operator's tool: roles and re-provisions
+# Watches Keycloak for changes to the operator's tool: roles and restarts
 # Hermes the moment they change. Without this, a grant or revoke only reaches
 # Hermes on mcp-token-refresh.py's next scheduled refresh at best, and was
 # measured to take up to 20 minutes in practice — Hermes' MCP client does not
@@ -133,13 +98,6 @@ provision_locked() {
 #
 # KC_HOST and KC_REALM come from MCP_TOKEN_URL rather than their own values,
 # since that URL already names both.
-#
-# role_watch_loop runs as its own backgrounded process (`&` forks), not just
-# a function call, so provision()'s globals (APPLIED_POLICY, RELAY_HOST) it
-# sets there live only in that process's own memory, not the main loop's.
-# Harmless here: RELAY_HOST is deterministic (SANDBOX_NAME/API_PORT never
-# change), and APPLIED_POLICY is re-derived from the same mounted policy file
-# either process reads, so both always agree once fully provisioned.
 # ---------------------------------------------------------------------------
 KC_ISSUER=${MCP_TOKEN_URL%/protocol/openid-connect/token}
 KC_HOST=$(printf '%s' "$KC_ISSUER" | sed -E 's#^https://([^/]+)/.*#\1#')
@@ -181,8 +139,8 @@ except Exception:
 " 2>/dev/null
 }
 
-# Runs for the life of the container, alongside the main loop. Started only
-# once the first provision() has already succeeded.
+# Runs for the life of the container, alongside the main loop, as its own
+# background process.
 role_watch_loop() {
   local token id hash last
   log "role watch: polling every ${ROLE_WATCH_SECONDS}s for tool: role changes on $MCP_USERNAME"
@@ -199,36 +157,16 @@ role_watch_loop() {
     hash=$(kc_role_hash "$token" "$id")
     [ -z "$hash" ] && continue
     if [ "$hash" != "$last" ]; then
-      log "role watch: $MCP_USERNAME's tool roles changed; re-provisioning Hermes"
+      log "role watch: $MCP_USERNAME's tool roles changed; restarting Hermes"
       last="$hash"
-      provision_locked || log "role watch: re-provisioning failed; the main loop will retry on its own schedule"
+      restart_hermes || log "role watch: restart failed; Hermes keeps its old roles until it is restarted"
     fi
   done
 }
 
-# put_file <local path> <sandbox path> <mode>
-put_file() {
-  local b64
-  b64=$(base64 -w0 "$1")
-  X "mkdir -p \"\$(dirname '$2')\" && printf '%s' '$b64' | base64 -d > '$2' && chmod $3 '$2'" >/dev/null
-}
-
-# put_blob <local path> <sandbox path>
-# put_file in chunks. The plugin tarball's base64 is far longer than one exec
-# command line holds.
-put_blob() {
-  local b64 i n
-  b64=$(base64 -w0 "$1")
-  n=${#b64}
-  X "rm -f '$2.b64'" >/dev/null || return 1
-  i=0
-  while [ "$i" -lt "$n" ]; do
-    X "printf '%s' '${b64:$i:16000}' >> '$2.b64'" >/dev/null || return 1
-    i=$((i + 16000))
-  done
-  X "base64 -d '$2.b64' > '$2' && rm -f '$2.b64'" >/dev/null
-}
-
+# ---------------------------------------------------------------------------
+# MLflow tracing, prepared here and uploaded by the participant.
+# ---------------------------------------------------------------------------
 otel_enabled() { [ "${MLFLOW_ENABLED:-false}" = "true" ] && [ -n "${MLFLOW_TRACKING_URI:-}" ]; }
 
 # MLflow identifies the caller by this token and authorizes it with a
@@ -260,11 +198,11 @@ mlflow_experiment_id() {
   printf '%s' "$id"
 }
 
-# hermes_otel is not in the sandbox image. It is fetched here, in the bridge,
-# where no sandbox policy applies, checked against the pinned digest and pushed
-# in. So a participant who tightens their policy stops the traces leaving, not
-# the install.
-install_otel_plugin() {
+# hermes_otel is not in the sandbox image. It is fetched here, where no sandbox
+# policy applies, checked against the pinned digest and repacked for upload. So
+# a participant who tightens their policy stops the traces leaving, not the
+# install.
+fetch_otel_plugin() {
   local dir="$WORK/otel"
   rm -rf "$dir"; mkdir -p "$dir/pkg"
   if ! curl -fsSL --max-time 120 "$MLFLOW_PLUGIN_URL" -o "$dir/src.tar.gz"; then
@@ -276,26 +214,15 @@ install_otel_plugin() {
     return 1
   fi
   tar -xzf "$dir/src.tar.gz" --strip-components=2 -C "$dir/pkg" "$MLFLOW_PLUGIN_SUBDIR" || return 1
-  tar -czf "$dir/pkg.tar.gz" -C "$dir/pkg" .
-  put_blob "$dir/pkg.tar.gz" /tmp/hermes-otel.tar.gz || return 1
-  X "mkdir -p /sandbox/.hermes/plugins/hermes_otel && tar -xzf /tmp/hermes-otel.tar.gz -C /sandbox/.hermes/plugins/hermes_otel && rm -f /tmp/hermes-otel.tar.gz" >/dev/null || return 1
+  tar -czf "$dir/pkg.tar.gz" -C "$dir/pkg" . || return 1
+  publish "$dir/pkg.tar.gz" hermes_otel.tar.gz
   rm -rf "$dir"
-}
-
-# configure_otel <token> <experiment id>
-configure_otel() {
-  local rc
-  sed -e "s|__MLFLOW_EXPERIMENT_ID__|$2|g" -e "s|__MLFLOW_TOKEN__|$1|g" \
-    /config/hermes-otel-config.yaml.template > "$WORK/hermes-otel-config.yaml"
-  put_file "$WORK/hermes-otel-config.yaml" /sandbox/.hermes/plugins/hermes_otel/config.yaml 600
-  rc=$?
-  rm -f "$WORK/hermes-otel-config.yaml"
-  return $rc
 }
 
 # Tracing is best-effort: a participant whose MLflow is unreachable should still
 # get a working agent, just an unobservable one. Says which it was.
-setup_otel() {
+prepare_otel() {
+  rm -f "$OUT/hermes_otel.tar.gz" "$OUT/hermes-otel-config.yaml"
   otel_enabled || return 0
   local token id
   token=$(mlflow_token)
@@ -303,37 +230,26 @@ setup_otel() {
   id=$(mlflow_experiment_id "$token")
   if [ -z "$id" ]; then log "no MLflow experiment $MLFLOW_EXPERIMENT; tracing is off"; return 0; fi
   log "MLflow experiment $MLFLOW_EXPERIMENT is id $id"
-  install_otel_plugin || { log "hermes_otel not installed; tracing is off"; return 0; }
-  configure_otel "$token" "$id" || { log "hermes_otel not configured; tracing is off"; return 0; }
-  # Where the spans actually go, which is the relay rather than
-  # MLFLOW_TRACKING_URI: the bridge talks to MLflow directly, the sandbox
-  # cannot. Read it back from the template so the two can never disagree.
-  local endpoint
-  endpoint=$(sed -n 's/^[[:space:]]*endpoint:[[:space:]]*//p' /config/hermes-otel-config.yaml.template | head -1 | tr -d '"')
-  log "hermes_otel installed, posting spans to ${endpoint:-the configured endpoint}"
+  fetch_otel_plugin || { log "hermes_otel not fetched; tracing is off"; return 0; }
+  sed -e "s|__MLFLOW_EXPERIMENT_ID__|$id|g" -e "s|__MLFLOW_TOKEN__|$token|g" \
+    /config/hermes-otel-config.yaml.template > "$WORK/hermes-otel-config.yaml"
+  publish "$WORK/hermes-otel-config.yaml" hermes-otel-config.yaml
+  rm -f "$WORK/hermes-otel-config.yaml"
+  log "hermes_otel prepared"
 }
 
-relay_healthy() {
-  [ -n "$RELAY_HOST" ] || return 1
-  [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
-        --cacert /mtls/ca.crt --cert /mtls/tls.crt --key /mtls/tls.key \
-        -H "Host: $RELAY_HOST" "$GATEWAY_ENDPOINT/health" 2>/dev/null)" = "200" ]
-}
-
-provision() {
-  local i out url
+# ---------------------------------------------------------------------------
+# Prepare: everything that does not need the sandbox, before the participant
+# creates it.
+# ---------------------------------------------------------------------------
+prepare() {
+  local MODEL_API_KEY API_SERVER_KEY
   MODEL_API_KEY=$(secret_value MODEL_API_KEY)
   API_SERVER_KEY=$(secret_value API_SERVER_KEY)
   if [ -z "$MODEL_API_KEY" ] || [ -z "$API_SERVER_KEY" ]; then
     log "Secret $HERMES_ENV_SECRET in $AGENTOPS_NS is missing, or lacks MODEL_API_KEY or API_SERVER_KEY"
     return 1
   fi
-
-  if [ -z "$(sandbox_phase)" ]; then
-    create_sandbox "$(policy_file)"
-  fi
-  wait_ready || return 1
-  apply_policy || return 1
 
   # Hermes lists tools once, at start-up. Starting it before the gateway has
   # discovered every server leaves it without those tools for good.
@@ -344,7 +260,6 @@ provision() {
   fi
   HERMES_HOME="$WORK/probe" python3 /config/wait-for-gateway.py || return 1
 
-  log "writing Hermes' files into the sandbox"
   {
     cat /config/hermes-config.yaml
     printf '\nmodel:\n  default: %s\n  provider: custom\n  base_url: %s\n  api_key: %s\n' \
@@ -352,7 +267,7 @@ provision() {
     printf '\ncustom_providers:\n  - name: %s\n    base_url: %s\n    api_key: %s\n    model: %s\n' \
       "$MODEL_DEFAULT" "$MODEL_BASE_URL" "$MODEL_API_KEY" "$MODEL_DEFAULT"
   } > "$WORK/config.yaml"
-  cat > "$WORK/env.sh" <<EOF
+  cat > "$WORK/hermes-env.sh" <<EOF
 export HERMES_HOME=/sandbox/.hermes
 export HERMES_PROFILE=default
 export XDG_STATE_HOME=/sandbox/.hermes/state
@@ -366,60 +281,85 @@ export MCP_CLIENT_ID='${MCP_CLIENT_ID}'
 export MCP_USERNAME='${MCP_USERNAME}'
 export MCP_PASSWORD='${MCP_PASSWORD}'
 export MCP_TOKEN_URL='${MCP_TOKEN_URL}'
+export TOKEN_REFRESH_SECONDS='${TOKEN_REFRESH_SECONDS}'
 EOF
-  local ok=1
-  put_file "$WORK/config.yaml" /sandbox/.hermes/config.yaml 600 || ok=0
-  put_file "$WORK/env.sh" /sandbox/.hermes-env.sh 600 || ok=0
-  put_file /config/mcp-token-refresh.py /sandbox/mcp-token-refresh.py 700 || ok=0
-  rm -f "$WORK/config.yaml" "$WORK/env.sh"
-  if [ "$ok" -ne 1 ]; then log "could not write files into the sandbox"; return 1; fi
-
-  # Before Hermes starts: it reads its plugins at start-up, as it does its
-  # tools. Hermes' config enables hermes_otel, so the plugin and its config
-  # have to be in place by then.
-  setup_otel
-
-  # Stop whatever an earlier bridge started. The bracketed patterns keep the
-  # command from matching its own command line.
-  log "restarting Hermes and its token refresher inside the sandbox"
-  X 'for p in $(ps -eo pid,args | awk "/[h]ermes gateway run|mcp-token-refres[h]/ {print \$1}"); do kill "$p" 2>/dev/null; done; sleep 2; true' >/dev/null 2>&1
-  if ! X ". /sandbox/.hermes-env.sh && python3 /sandbox/mcp-token-refresh.py" >/dev/null 2>&1; then
-    log "token fetch inside the sandbox failed; the sandbox policy must let python3 reach Keycloak"
-    return 1
-  fi
-  # setsid and a subshell reparent both to the supervisor, so exec returns.
-  X ". /sandbox/.hermes-env.sh && (setsid sh -c 'python3 /sandbox/mcp-token-refresh.py --loop ${TOKEN_REFRESH_SECONDS} < /dev/null >> /sandbox/mcp-token-refresh.log 2>&1' < /dev/null > /dev/null 2>&1 &); true" >/dev/null 2>&1
-  X ". /sandbox/.hermes-env.sh && (setsid sh -c 'hermes gateway run < /dev/null >> /sandbox/hermes-gateway.log 2>&1' < /dev/null > /dev/null 2>&1 &); true" >/dev/null 2>&1
-
-  log "waiting for Hermes' API server"
-  for i in $(seq 1 36); do
-    X "curl -sf --max-time 5 http://127.0.0.1:${API_PORT}/health" >/dev/null 2>&1 && break
-    if [ "$i" -eq 36 ]; then
-      log "Hermes did not answer /health after 180s; last lines of its log:"
-      X "tail -20 /sandbox/hermes-gateway.log" 2>&1 | sed 's/^/    /'
-      return 1
-    fi
-    sleep 5
-  done
-
-  log "exposing Hermes through the gateway's relay"
-  openshell service delete "$SANDBOX_NAME" openai >/dev/null 2>&1 || true
-  out=$(openshell service expose "$SANDBOX_NAME" "$API_PORT" openai 2>&1 | strip)
-  url=$(printf '%s\n' "$out" | awk '/URL:/ {print $2}')
-  if [ -z "$url" ]; then log "service expose returned no URL: $out"; return 1; fi
-  RELAY_HOST=${url#https://}
-  RELAY_HOST=${RELAY_HOST%%[:/]*}
-
-  sed -e "s|__GATEWAY_HOST__|${GATEWAY_HOST}|g" -e "s|__RELAY_HOST__|${RELAY_HOST}|g" \
-    /config/nginx.conf.template > /shared/nginx.conf.tmp
-  mv /shared/nginx.conf.tmp /shared/nginx.conf
-
-  if ! relay_healthy; then log "the relay did not answer /health for $RELAY_HOST"; return 1; fi
-  log "Hermes is up in sandbox $SANDBOX_NAME, relayed as $RELAY_HOST"
+  publish "$WORK/config.yaml" config.yaml
+  publish "$WORK/hermes-env.sh" hermes-env.sh
+  rm -f "$WORK/config.yaml" "$WORK/hermes-env.sh"
+  publish /config/mcp-token-refresh.py mcp-token-refresh.py
+  publish /config/start-hermes.sh start-hermes.sh
+  prepare_otel
+  publish_policy
+  log "prepared $OUT for upload: $(ls "$OUT" | tr '\n' ' ')"
 }
 
+# ---------------------------------------------------------------------------
+# The console's relay. nginx serves a placeholder until there is a Hermes to
+# relay to, so the pod is Ready whether or not the participant has started it.
+# ---------------------------------------------------------------------------
+write_nginx() {
+  if [ -n "$RELAY_HOST" ]; then
+    sed -e '/#PLACEHOLDER/d' \
+        -e "s|__GATEWAY_HOST__|${GATEWAY_HOST}|g" -e "s|__RELAY_HOST__|${RELAY_HOST}|g" \
+      /config/nginx.conf.template > /shared/nginx.conf.tmp
+  else
+    sed -e '/#BEGIN_RELAY/,/#END_RELAY/d' -e 's|#PLACEHOLDER||' \
+      /config/nginx.conf.template > /shared/nginx.conf.tmp
+  fi
+  mv /shared/nginx.conf.tmp /shared/nginx.conf
+}
+
+relay_healthy() {
+  [ -n "$RELAY_HOST" ] || return 1
+  [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+        --cacert /mtls/ca.crt --cert /mtls/tls.crt --key /mtls/tls.key \
+        -H "Host: $RELAY_HOST" "$GATEWAY_ENDPOINT/health" 2>/dev/null)" = "200" ]
+}
+
+# Adopts the participant's Hermes once they have exposed it (step 4).
+adopt() {
+  local url
+  [ "$(sandbox_phase)" = "Ready" ] || return 1
+  url=$(service_url)
+  [ -n "$url" ] || return 1
+  RELAY_HOST=${url#https://}
+  RELAY_HOST=${RELAY_HOST%%[:/]*}
+  write_nginx
+  log "adopted sandbox $SANDBOX_NAME, relayed as $RELAY_HOST"
+}
+
+forget() {
+  RELAY_HOST=""
+  write_nginx
+  log "waiting for the participant to start Hermes in sandbox $SANDBOX_NAME and expose it"
+}
+
+# Re-runs the participant's own start script inside the sandbox. Skipped when
+# there is nothing to restart: the participant has not uploaded it yet.
+restart_hermes() {
+  local lock_fd rc=0
+  exec {lock_fd}>"$RESTART_LOCK"
+  if ! flock -w 60 "$lock_fd"; then
+    log "a restart is already running; skipping this trigger"
+    exec {lock_fd}>&-
+    return 1
+  fi
+  if [ "$(sandbox_phase)" != "Ready" ] || ! X "test -f $START_SCRIPT" >/dev/null 2>&1; then
+    log "no started Hermes in sandbox $SANDBOX_NAME to restart"
+    rc=1
+  else
+    log "restarting Hermes in sandbox $SANDBOX_NAME"
+    X "sh $START_SCRIPT" 2>&1 | strip | sed 's/^/    /'
+    rc=${PIPESTATUS[0]}
+  fi
+  flock -u "$lock_fd"
+  exec {lock_fd}>&-
+  return $rc
+}
+
+write_nginx
+until prepare; do log "preparation failed; retrying in 30s"; sleep 30; done
 connect_cli
-until provision_locked; do log "set-up failed; retrying in 30s"; sleep 30; done
 
 if [ "${ROLE_WATCH_ENABLED:-false}" = "true" ]; then
   role_watch_loop &
@@ -427,22 +367,31 @@ else
   log "role watch is off (ROLE_WATCH_ENABLED != true)"
 fi
 
+adopt || forget
 failures=0
 while true; do
   sleep "$HEALTH_CHECK_SECONDS"
   # A participant synced a new sandbox policy (the mounted ConfigMap changed).
-  if [ "$(policy_hash)" != "$APPLIED_POLICY" ]; then
-    log "the sandbox policy changed; applying it and restarting Hermes"
-    until provision_locked; do log "set-up failed; retrying in 30s"; sleep 30; done
-    failures=0
+  # Published only: applying it, and restarting Hermes, is theirs to do.
+  if [ "$(policy_hash)" != "$PUBLISHED_POLICY" ]; then
+    publish_policy
+    log "the sandbox policy changed; published it to $OUT/policy.yaml. Apply it with:"
+    log "  openshell policy set --policy $OUT/policy.yaml --wait $SANDBOX_NAME"
+    log "  openshell sandbox exec --name $SANDBOX_NAME -- sh $START_SCRIPT"
+  fi
+  if [ -z "$RELAY_HOST" ]; then
+    adopt && failures=0
     continue
   fi
   if relay_healthy; then failures=0; continue; fi
   failures=$((failures + 1))
   log "Hermes did not answer through the relay ($failures/3)"
   if [ "$failures" -ge 3 ]; then
-    log "setting the sandbox up again (it may have restarted)"
-    until provision_locked; do log "set-up failed; retrying in 30s"; sleep 30; done
     failures=0
+    if [ "$(sandbox_phase)" = "Ready" ] && [ -n "$(service_url)" ]; then
+      restart_hermes || true
+    else
+      forget
+    fi
   fi
 done

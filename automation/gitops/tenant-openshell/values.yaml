@@ -53,8 +53,8 @@ sandbox:
 # the poisoned maintenance record MR-2291 tells the agent to upload logs.
 #
 # Filesystem rules are fixed when a sandbox is created: a live sandbox accepts
-# new paths but refuses to drop any. The bridge recreates the sandbox when a
-# policy removes one.
+# new paths but refuses to drop any. A policy that removes one is refused by
+# `openshell policy set`; the participant deletes and recreates the sandbox.
 # ---------------------------------------------------------------------------
 baselinePolicy:
   permissiveEgress: true
@@ -103,8 +103,9 @@ baselinePolicy:
       - /dev/zero
 
 # ---------------------------------------------------------------------------
-# The bridge: one Deployment that sets up and supervises Hermes in the sandbox,
-# and proxies the console to it through the gateway's relay.
+# The bridge: one Deployment that prepares Hermes' files, gives the participant
+# a `cli` container to start Hermes in the sandbox themselves, restarts it on
+# Keycloak role changes, and proxies the console to it through the relay.
 # ---------------------------------------------------------------------------
 bridge:
   # Also the console's agent port (tenant-platform agent.hermes.port).
@@ -117,8 +118,8 @@ bridge:
   # `from __future__ import annotations` (seen on cluster-tpss7).
   cliImage: registry.redhat.io/openshift4/ose-cli-rhel9:latest
   proxyImage: registry.redhat.io/rhel9/nginx-124:latest
-  # How often the supervisor checks Hermes through the relay. Three failures
-  # in a row and it sets the sandbox up again.
+  # How often the supervisor checks Hermes through the relay, and looks for a
+  # newly exposed one. Three failures in a row and it re-runs start-hermes.sh.
   healthCheckSeconds: 20
   resources:
     requests: { cpu: 50m, memory: 128Mi }
@@ -126,6 +127,10 @@ bridge:
   proxyResources:
     requests: { cpu: 20m, memory: 32Mi }
     limits:   { cpu: 200m, memory: 128Mi }
+  # The participant's cli container: a shell and the openshell CLI.
+  cliResources:
+    requests: { cpu: 10m, memory: 64Mi }
+    limits:   { cpu: 500m, memory: 256Mi }
 
 hermes:
   # MODEL_API_KEY and API_SERVER_KEY, in the participant's lab namespace. The
@@ -192,8 +197,8 @@ mlflow:
   # mints a long-lived one for its own ServiceAccount. templates/bridge.yaml
   # grants exactly that and nothing else; this cluster honours 8760h.
   tokenDurationHours: 8760
-  # hermes_otel is not in the sandbox image, so the bridge fetches it and
-  # pushes it in. Pinned to a commit rather than a branch, like every other
+  # hermes_otel is not in the sandbox image, so the bridge fetches it into
+  # /hermes and the participant uploads it with the rest. Pinned to a commit rather than a branch, like every other
   # version in this lab.
   plugin:
     repo: briancaffey/hermes-otel
@@ -220,7 +225,7 @@ keycloak:
 
 # ---------------------------------------------------------------------------
 # Prototype: watches Keycloak for tool: role changes on the operator user and
-# re-provisions Hermes as soon as it sees one, instead of waiting on
+# restarts Hermes in the sandbox as soon as it sees one, instead of waiting on
 # mcp-token-refresh.py's own schedule (hermes.tokenRefreshSeconds) — which by
 # itself was measured to leave a grant or revoke unreflected for up to 20
 # minutes, because Hermes' MCP client does not reconnect just because the
