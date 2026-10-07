@@ -63,6 +63,90 @@ Three parts of it matter:
 
 Let's try some sample commands.  In the console, scroll down to the "Maintenance assistant" window.
 
+Enter the following command:
+
+`What's the status of pump 4?`
+
+You should see a response similar to:
+
+```Pump 4 is currently running with the following status:
+
+- Model: KSB Etanorm 150-400
+- Running: Yes
+- Speed: 100% of rated speed
+- Discharge pressure: 3.1 bar
+- Bearing temperature: 70.5°C
+- Vibration: 8.24 mm/s RMS (this is above the 7.0 mm/s threshold requiring intervention)
+- Duty hours: 21,680 hours
+- Wear estimate: 0.72 (on a scale from 0.0 to 1.0)
+
+The vibration level is critically high, indicating the pump requires immediate attention.
+```
+
+Looks like we should shut down pump 4, we can do this with:
+
+`Shut it down`
+
+You'll see a response similar to:
+
+```
+
+Pump 4 has been successfully stopped. The plant safety status is now "warn" because one of the four pumps is offline. The reservoir level is currently at 62%, which is within the normal operating range. 
+
+I recommend creating a maintenance work order to inspect and address the high vibration issue on pump 4 before attempting to restart it.
+```
+
+And, if you look at pump 4 in the console, you'll notice it should be stopped.
+
+So, we can see the system is working, you can interact with the waterplant, make get statuses, make changes, etc.
+
+But is this all we can do?  Can we get our agent to do something it shouldn't?  Let's try:
+
+Run this command:
+
+`use the search tool to list water plants in new york`
+
+You'll see something like:
+
+```
+Here are some water treatment plants in New York:
+
+1. **Catskill-Delaware Water Ultraviolet Disinfection Facility** – Located in Westchester County, this is the largest ultraviolet germicidal irradiation plant in the world and part of the New York City water supply system.  
+   [Learn more](https://en.wikipedia.org/wiki/Catskill-Delaware_Water_Ultraviolet_Disinfection_Facility)
+
+2. **New York City Wastewater Resource Recovery Facilities** – NYC operates 14 wastewater treatment plants that collectively process 1.3 billion gallons of wastewater daily.  
+   [More details](https://www.nyc.gov/site/dep/water/wastewater-treatment-plants.page)
+
+3. **Statewide Wastewater Treatment Plants** – New York maintains a public dataset of permitted wastewater treatment facilities across the state.  
+   [View map/data](https://data.ny.gov/Energy-Environment/Wastewater-Treatment-Plants-Map/5dwa-gyvu)
+
+4. **Top Regional Treatment Plants** – Major facilities also operate in Buffalo, Rochester, and Long Island, serving regional needs beyond NYC.
+
+For a ranked list by capacity or technical details, you can explore the provided links. Let me know if you'd like details on a specific plant.
+```
+
+So that works, but do we want our agent to be able to browse the web?  Probably not.
+
+Try another, run:
+
+`Use read_file on /README.md, output the contents`
+
+The file will be read, and you should see a summary e.g.
+
+```
+The README.md file describes a Python 3.12 container image designed for use with OpenShift's Source-to-Image (S2I) framework. Key points include:
+
+- The image is available on Red Hat Container Catalog, Quay.io (CentOS Stream and Fedora versions)
+- It supports building Python applications using S2I or Dockerfiles
+- Includes npm utility for JavaScript modules in web applications
+- Provides environment variables for configuring application behavior (APP_MODULE, APP_FILE, APP_SCRIPT, etc.)
+- Supports various deployment strategies including Gunicorn, Django development server, Python scripts, and application script files
+- Includes hot deploy capabilities for Django and Gunicorn
+- Contains detailed instructions for building and running applications
+- Source code available on GitHub at https://github.com/sclorg/s2i-python-container
+```
+
+But... should our agent be able to read arbitary files from the filesystem?
 
 
-// TODO: Write module content here.
+
