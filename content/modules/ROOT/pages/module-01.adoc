@@ -21,4 +21,48 @@
 
 == Content
 
+=== The initial deployment
+
+Everything in this picture is already running in your own namespace,
+`user-<userid>-agentops`. You don't need to deploy any of it. The lab is about operating
+an agent that already works -- observing it, measuring it, and deciding what it is
+allowed to do.
+
+image::agent-architecture.png["Participant browser through the operator console to Hermes, the MCP Gateway, three MCP servers and plant-api",align=center]
+
+Four things in that picture shape the rest of the lab:
+
+* **The agent is Hermes (Hermie), and it is just a workload.** A Deployment and a Pod, listening on port 8080. This lab follows the principal of "Bring Your Own Agent (BYOA)", so this agent is a standard Hermes deployment in OpenShift.
+* **Hermie connects to a model via MaaS** You never deploy or train a model.
+* **Every tool call goes through the MCP Gateway.** It federates three MCP servers --
+  18 tools between them -- and it is where per-tool authorization gets enforced.
+* **`plant-api` is the only stateful service**, and the console reads it directly. That
+  is why the dashboard reports the current system state,
+  broken, or absent -- which it will be, repeatedly.
+
+=== The console you'll be working in
+
+This is what you'll see in your browser: the operator console for Northgate Water
+Treatment Works, a simulated plant. 
+
+image::operator-console.png["The Northgate operator console: reservoir and flow gauges, water quality readings, four pump panels, valve controls, a safety envelope panel, and the maintenance assistant chat pane",align=center]
+
+Three parts of it matter:
+
+* **The gauges and pump panels** are read straight from `plant-api`. They keep updating
+  whether or not the agent is working, so they are your ground truth all the way through
+  the lab. In the shot above, pump 4 is in a critical state and pump 3 is stopped.
+* **The safety envelope** is marked _advisory -- not enforced_. Worth noticing early:
+  nothing in the plant stops the agent doing something unsafe. That is the gap the lab
+  is about.
+* **The maintenance assistant** at the bottom is the chat pane that talks to the agent.
+  The _agent trace_ toggle and the *MLflow traces* link in the footer are how you get from
+  any answer to the record of how it was produced.
+
+=== Try it out
+
+Let's try some sample commands.  In the console, scroll down to the "Maintenance assistant" window.
+
+
+
 // TODO: Write module content here.
