@@ -1,21 +1,23 @@
-= Module 4: Let the Agent Use Its Tools
+= Module 4: Let the Agent Write Files
 :page-duration: TBD
 
-// Overview: Participants diagnose why the agent's tools stopped working and enable MCP Gateway in
-// OpenShell policy to restore them. With tools working again, three new attacks get through: a
-// sensitive-information leak, an unauthorized control action, and a compromised external tool.
-// Participants scope tool access down to what each persona actually needs, updating MCPVirtualServers
-// and removing unneeded access at the OIDC provider.
+// Overview: Participants find the agent can't create a report because it can't write to the filesystem
+// at all. They're introduced to OpenShell filesystem policy with a first, overly broad example that
+// allows every filesystem action, then find exactly where the agent needs to write and narrow the
+// policy to just that. Two attacks -- deleted reports and a tampered configuration -- show why
+// narrowing down to specific file-creation actions matters.
 
 == Objectives
 
-* Diagnose why the agent's tools stopped working once it was sandboxed
-* Understand why MCP Gateway is used to broker and control tool access
-* Enable MCP Gateway in OpenShell policy and confirm the agent's tools work again
-* See three of the attacks this reopens: a sensitive-information leak, an unauthorized control action, and
-  a compromised external tool
-* Scope the agent down to only the tools each persona actually needs by updating MCPVirtualServers (and Keycloak so that authz properly blocks them)
-* Bonus: We have one eval still failing for tool usage, it's a tool (birthday calendar for example) that was disabled by default, users need to identify this and enable it to earn bonus points
+* Diagnose why the agent can no longer create a report
+* Get introduced to OpenShell filesystem policy, starting from an example that allows every filesystem
+  action
+* Find exactly where in the filesystem the agent needs to write its report
+* Update the policy to allow that, and confirm the agent can create reports again
+* See two attacks an overly broad filesystem policy allows: reports being deleted, and the agent's
+  configuration being tampered with
+* Narrow the policy down to just the specific file-creation actions the agent needs (touch, mkdir, and
+  similar)
 
 == Content
 

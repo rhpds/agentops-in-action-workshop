@@ -1,16 +1,23 @@
-= Module 1: Introduction to AgentOps
+= Module 1: Introduction to AgentOps & Meet Hermie
 :page-duration: TBD
 
 // Overview: Orients participants to the lab -- why runtime AgentOps controls matter, what they'll do
 // over the course of the lab, the attack-driven approach used to teach each control, and how to read
-// the dashboards they'll rely on throughout.
+// the dashboards they'll rely on throughout. Participants then get introduced to Hermie, the agent
+// already deployed in their environment -- what it is, its purpose, its architecture, and its
+// capabilities -- try some example prompts, and get introduced to MLflow. Then several different
+// attacks succeed against the agent while every normal use case also succeeds, showing the value
+// Red Hat AI provides and introducing evaluations.
 
 == Objectives
 
-* Explain why this lab exists and the problem it's solving
+* Explain why this lab exists and the problem it's solving (explain what is AgentOps)
 * Preview what you'll actually do over the course of the lab
-* Preview how you'll attack the agent to learn each control
-* Learn what the dashboards you'll use (MLflow, EvalHub) are showing you
+* Learn what's already deployed for you: the model, its tools, the MCP gateway, and what Hermie is for
+* Try out Hermie with a few example prompts to see what it can do and what it is vulnerable to
+* Get introduced to evaluations, the systematic way you'll measure the agent's behavior for the rest of
+  the lab
+** Confirm that every normal, legitimate use case also succeeds right now
 
 == Content
 
