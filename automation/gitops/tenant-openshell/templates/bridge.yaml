@@ -12,11 +12,11 @@ The participant starts Hermes themselves, from the `cli` container:
   oc exec -it deploy/hermes-openshell-bridge -c cli -- bash
   openshell gateway add $GATEWAY_URL --local --name lab
   openshell gateway select lab
-  openshell sandbox create --name hermes --from $HERMES_IMAGE --policy /hermes/policy.yaml \
+  openshell sandbox create --name hermie --from $HERMES_IMAGE --policy /hermes/policy.yaml \
     --cpu $SANDBOX_CPU --memory $SANDBOX_MEMORY --no-tty -- true
-  openshell sandbox upload hermes /hermes /sandbox
-  openshell sandbox exec --name hermes -- sh /sandbox/hermes/start-hermes.sh
-  openshell service expose hermes 8080 openai
+  openshell sandbox upload hermie /hermes /sandbox
+  openshell sandbox exec --name hermie -- sh /sandbox/hermes/start-hermes.sh
+  openshell service expose hermie 8080 openai
 
 `sandbox upload` always nests the directory, so /hermes lands at /sandbox/hermes
 (Hermes' own home is /sandbox/.hermes). Both it and `sandbox create`'s initial
@@ -50,8 +50,8 @@ synced it does not exist, and the supervisor publishes the baseline shipped here
 Either way it lands at /hermes/policy.yaml, refreshed when it changes; applying
 it, and restarting Hermes, is the participant's job:
 
-  openshell policy set --policy /hermes/policy.yaml --wait hermes
-  openshell sandbox exec --name hermes -- sh /sandbox/hermes/start-hermes.sh
+  openshell policy set --policy /hermes/policy.yaml --wait hermie
+  openshell sandbox exec --name hermie -- sh /sandbox/hermes/start-hermes.sh
 
 Why a supervisor at all. A sandbox pod always runs `sleep infinity`; the
 command given to `openshell sandbox create` is a one-off exec, not the pod's

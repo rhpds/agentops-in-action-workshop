@@ -31,7 +31,9 @@ helm-chart:
 # The sandbox Hermes runs in.
 # ---------------------------------------------------------------------------
 sandbox:
-  name: hermes
+  # The bridge finds, adopts and restarts the sandbox by this name, so it must
+  # match the --name participants give `openshell sandbox create`.
+  name: hermie
   image: quay.io/rh-aiservices-bu/waterplant-hermes:latest
   # Limits on the sandbox pod, included in the combined participant quota.
   cpu: "2"
