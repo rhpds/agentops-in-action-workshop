@@ -22,43 +22,75 @@
 
 2. Put Hermie in a Box
 
-Switch to Terminal tab
-
-oc login 
-
-oc rsh because of the mTLS client cert, the gateway is only accessible from inside the cluster. The gateway's relay
-then exposes it to the outside world as hermie-agent:8787.
-. Point the CLI at the OpenShell gateway (needs the gateway's mTLS client cert)
+. Switch to Terminal tab and log in to your OpenShift cluster with your credentials.
 +
 [source,bash]
 ----
-openshell gateway add https://<openshell-gw>:8080 --local --name {user}-openshell-gw
-openshell gateway select {user}-openshell-gw
+oc login https://<ocp-api>:6443 --username {user} --password {password} --insecure-skip-tls-verify
 ----
 
-. Create the sandbox with its policy
+. Jump into the gateway pod where the mTLS client cert and key are. Because of the mTLS client cert, the gateway is only accessible from inside the cluster.
 +
 [source,bash]
 ----
-openshell sandbox create --name hermie --from quay.io/rh-aiservices-bu/waterplant-hermes:latest \
-    --policy policy.yaml --cpu 2 --memory <mem> --no-tty -- echo ready
-openshell policy set --policy policy.yaml --wait hermie
+POD=$(oc get pod -l app.kubernetes.io/instance={user}-openshell -o name -n {user}-agentops)
+oc rsh -n {user}-agentops -c cli $POD
 ----
 
-. Copy in config.yaml (with the model key), an env file and the token script
-
-[source,bash]
-----
-  #    (base64 piped through `openshell sandbox exec`), then start Hermes inside the sandbox
-openshell sandbox exec --name hermie -- sh -c '. /sandbox/.hermes-env.sh && python3 /sandbox/mcp-token-refresh.py'
-openshell sandbox exec --name hermie -- sh -c '. /sandbox/.hermes-env.sh && setsid hermes gateway run &'
-----
-+
-. Publish it through the gateway's relay; the bridge's nginx then serves it as hermie-agent:8787
+. Let's point to the OpenShell gateway so we can create a sandboxed Hermie.
 +
 [source,bash]
 ----
-openshell service expose hermie 8787 openai
+openshell gateway add https://{user}-openshell.{user}-agentops.svc.cluster.local:8080 --local --name openshell-gw
+openshell gateway select openshell-gw
 ----
 
-3. Use Sandboxed Hermie instead of the original agent
+. Create the sandbox by pointing to the same image we use for the agent.
++
+[source,bash]
+----
+openshell sandbox create --name hermie --from quay.io/rh-aiservices-bu/waterplant-hermes:0.2.0 --cpu 2 --memory 4Gi --no-tty -- true
+----
++
+. Hermie has user or environment specific configuration that we externalized, so we don't have to build it everytime a config changes (a good practice of software engineering). But because the way that OpenShell works, we cannot mount these configs inside the sandbox. Sandboxes are immutable. OpenShell does not allow any external configuration change tor reflect inside the sandbox immediately. So we have to copy the configuration files into the sandbox.
++
+[source,bash]
+----
+openshell sandbox upload hermie /hermes /sandbox
+----
++
+. Alright, let's run sandboxed Hermie!
++
+[source,bash]
+----
+openshell sandbox exec --name hermie -- start-hermes
+----
++
+. Now let's point out UI to the sandboxed agent, because the UI still uses the unsandboxed Hermie. We need to update an environment parameter on UI. First get out of the OpenShell gateway pod and back to your local terminal. For that, just type `exit` in the OpenShell gateway pod terminal. Then run the following command to point the UI to the sandboxed Hermie.
++
+[source,bash]
+----
+oc set env deployment/water-plant-ui AGENT_URL=http://hermes-agent.{user}-agentops.svc:87877 -n {user}-agentops
+----
++
+. Wait for it to be healthy:
++
+[source,bash]
+----
+oc rollout status deployment/water-plant-ui -n {user}-agentops
+----
+
+. Let's test it! Go to the UI and ask the questions you tried previously:
+
+`What's the status of pump 4?`
+
+. Doesn't work, right? When you sandboxed an agent with OpenShell, by default, it comes with deny all network access. So, you are secure, but too secure (is there such a thing?). At the minimum, Hermie needs to access the model! We need to apply a `network policy` to access the endpoint.
++
+[source,bash]
+----
+openshell policy update hermie --rule-name model_endpoint --add-endpoint maas-rhdp.apps.maas.redhatworkshops.io:443:full:rest:enforce --binary /usr/bin/python3 --binary /usr/bin/python3.12 --binary /usr/local/bin/hermes --wait
+----
+
+. Get back to the UI and ask the same question again:
+
+`What's the status of pump 4?`
