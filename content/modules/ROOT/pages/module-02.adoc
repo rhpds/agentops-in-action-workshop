@@ -40,7 +40,7 @@ openshell gateway select {user}-openshell-gw
 +
 [source,bash]
 ----
-openshell sandbox create --name hermie --from quay.io/rh-aiservices-bu/waterplant-hermes:0.2.0 \
+openshell sandbox create --name hermie --from quay.io/rh-aiservices-bu/waterplant-hermes:0.2.1 \
     --policy policy.yaml --cpu 2 --memory <mem> --no-tty -- echo ready
 openshell policy set --policy policy.yaml --wait hermie
 ----
