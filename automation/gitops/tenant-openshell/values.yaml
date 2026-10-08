@@ -38,7 +38,7 @@ sandbox:
   # Hermes it carries start-hermes, the MCP token refresher and the hermes_otel
   # plugin, so participants upload only their own settings. Pinned: a moving
   # tag would change every new sandbox on the cluster at once.
-  image: quay.io/rh-aiservices-bu/waterplant-hermes:0.2.1
+  image: quay.io/rh-aiservices-bu/waterplant-hermes:0.2.2
   # Limits on the sandbox pod, included in the combined participant quota.
   cpu: "2"
   memory: 4Gi

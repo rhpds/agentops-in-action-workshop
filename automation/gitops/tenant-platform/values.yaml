@@ -300,7 +300,7 @@ agent:
     # Containerfile pulls an unpinned base and shallow-clones a fork with no
     # ref, so the pushed digest is fixed but a rebuild will not recreate it.
     image: quay.io/rh-aiservices-bu/waterplant-hermes
-    tag: "0.2.1"
+    tag: "0.2.2"
     port: 8787
     home: /app/.hermes
     storageSize: 5Gi
