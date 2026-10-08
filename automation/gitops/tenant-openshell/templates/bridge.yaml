@@ -10,8 +10,8 @@ The bridge between the console and Hermes in the sandbox.
 The participant starts Hermes themselves, from the `cli` container:
 
   oc exec -it deploy/hermes-openshell-bridge -c cli -- bash
-  openshell gateway add $GATEWAY_URL --local --name lab
-  openshell gateway select lab
+  openshell gateway add $GATEWAY_URL --local --name openshell-gw
+  openshell gateway select openshell-gw
   openshell sandbox create --name hermie --from $HERMES_IMAGE --policy /hermes/policy.yaml \
     --cpu $SANDBOX_CPU --memory $SANDBOX_MEMORY --no-tty -- true
   openshell sandbox upload hermie /hermes /sandbox
@@ -28,7 +28,10 @@ Three containers:
 
   cli         Where the participant runs those commands: the openshell CLI on
               PATH, the gateway's client certificate pre-placed for the gateway
-              name "lab", and the supervisor's prepared files at /hermes.
+              name "openshell-gw", and the supervisor's prepared files at
+              /hermes. The CLI has no flag for certificate paths: it reads
+              them from ~/.config/openshell/gateways/<name>/mtls/, so another
+              name needs a copy of /mtls/* there before `gateway add`.
   supervisor  Prepares /hermes before the participant starts: waits for the MCP
               gateway, renders Hermes' config with the model key, fetches the
               MLflow plugin and token, and copies the current sandbox policy.
@@ -477,9 +480,10 @@ spec:
             - -c
             - |
               # Pre-place the client certificate where `openshell gateway add
-              # --local --name lab` looks for it, as the supervisor does.
-              mkdir -p "$XDG_CONFIG_HOME/openshell/gateways/lab/mtls"
-              cp /mtls/ca.crt /mtls/tls.crt /mtls/tls.key "$XDG_CONFIG_HOME/openshell/gateways/lab/mtls/"
+              # --local --name openshell-gw` looks for it. The supervisor keeps
+              # its own "lab" registration in its own container.
+              mkdir -p "$XDG_CONFIG_HOME/openshell/gateways/openshell-gw/mtls"
+              cp /mtls/ca.crt /mtls/tls.crt /mtls/tls.key "$XDG_CONFIG_HOME/openshell/gateways/openshell-gw/mtls/"
               cat > "$HOME/.bashrc" <<'EOF'
               PS1='[openshell \W]\$ '
               echo "OpenShell CLI for sandbox '$SANDBOX_NAME'. Gateway: $GATEWAY_URL. Prepared files: /hermes"
