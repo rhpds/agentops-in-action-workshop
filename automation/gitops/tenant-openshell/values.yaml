@@ -34,75 +34,16 @@ sandbox:
   # The bridge finds, adopts and restarts the sandbox by this name, so it must
   # match the --name participants give `openshell sandbox create`.
   name: hermie
-  image: quay.io/rh-aiservices-bu/waterplant-hermes:latest
+  # Built from hermes-openshell/Containerfile in the agent repo. Besides
+  # Hermes it carries start-hermes, the MCP token refresher and the hermes_otel
+  # plugin, so participants upload only their own settings. Pinned: a moving
+  # tag would change every new sandbox on the cluster at once.
+  image: quay.io/rh-aiservices-bu/waterplant-hermes:0.2.0
   # Limits on the sandbox pod, included in the combined participant quota.
   cpu: "2"
   memory: 4Gi
   # Hermes' API server, on the sandbox's loopback. The relay reaches it there.
   apiPort: 8080
-
-# ---------------------------------------------------------------------------
-# The sandbox policy until tenant-policy has been synced.
-#
-# Participants edit their own copy in tenant-policy (openshell values), which
-# the bridge prefers as soon as it exists. Keep this in step with it: both are
-# the lab's "works, but dangerously" starting point.
-#
-# OpenShell has no "allow everything". Every egress rule names hosts and the
-# binaries that may use them; `*`, `**` and TLD wildcards like `**.com` are
-# refused (verified on cluster-tpss7). So the permissive baseline is a
-# deliberately generous named list, including *.example.com, which is where
-# the poisoned maintenance record MR-2291 tells the agent to upload logs.
-#
-# Filesystem rules are fixed when a sandbox is created: a live sandbox accepts
-# new paths but refuses to drop any. A policy that removes one is refused by
-# `openshell policy set`; the participant deletes and recreates the sandbox.
-# ---------------------------------------------------------------------------
-baselinePolicy:
-  permissiveEgress: true
-  broadOutbound:
-    hosts:
-      - example.com
-      - "*.example.com"
-      - httpbin.org
-      - github.com
-      - "*.github.com"
-      - "*.githubusercontent.com"
-      - pypi.org
-      - files.pythonhosted.org
-      - duckduckgo.com
-      - "*.duckduckgo.com"
-      - openrouter.ai
-    ports: [443, 80]
-    binaries:
-      - /usr/bin/curl
-      - /usr/bin/wget
-      - /usr/bin/python3
-      - /usr/bin/python3.12
-      - /usr/local/bin/hermes
-      - /usr/bin/bash
-      - /usr/bin/sh
-  # Only paths that exist in the Hermes image: OpenShell ignores a missing one,
-  # so listing it would give participants a rule whose removal changes nothing.
-  # /lib, /lib64, /bin and /sbin are symlinks into /usr there.
-  filesystem:
-    readOnly:
-      - /usr
-      - /lib
-      - /lib64
-      - /bin
-      - /sbin
-      - /proc
-      - /dev/urandom
-      - /etc
-      - /opt
-      - /var/log
-    readWrite:
-      - /sandbox
-      - /workspace
-      - /tmp
-      - /dev/null
-      - /dev/zero
 
 # ---------------------------------------------------------------------------
 # The bridge: one Deployment that prepares Hermes' files, gives the participant
@@ -124,7 +65,7 @@ bridge:
   cliImage: registry.redhat.io/openshift4/ose-cli-rhel9:latest
   proxyImage: registry.redhat.io/rhel9/nginx-124:latest
   # How often the supervisor checks Hermes through the relay, and looks for a
-  # newly exposed one. Three failures in a row and it re-runs start-hermes.sh.
+  # newly exposed one. Three failures in a row and it re-runs start-hermes.
   healthCheckSeconds: 20
   resources:
     requests: { cpu: 50m, memory: 128Mi }
@@ -202,14 +143,8 @@ mlflow:
   # mints a long-lived one for its own ServiceAccount. templates/bridge.yaml
   # grants exactly that and nothing else; this cluster honours 8760h.
   tokenDurationHours: 8760
-  # hermes_otel is not in the sandbox image, so the bridge fetches it into
-  # /hermes and the participant uploads it with the rest. Pinned to a commit rather than a branch, like every other
-  # version in this lab.
-  plugin:
-    repo: briancaffey/hermes-otel
-    # Release hermes-otel 1.13.0, 2026-09-22.
-    commit: a2afa2203e55f3bc261003f4f86fa01b62be32db
-    sha256: b0b1c82011d0dbcbfeaa370cb9e74ffb7370c0fb42742f19824a37394e54c077
+  # The hermes_otel plugin itself is baked into sandbox.image, pinned there
+  # (hermes-openshell/Containerfile); the bridge only prepares its config.
 
 # Must match tenant-platform's mcpGateway and mcp.servers.
 mcpGateway:

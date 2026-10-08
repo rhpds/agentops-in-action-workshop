@@ -6,13 +6,16 @@
 # and exposes it, from the `cli` container beside this one. This script:
 #
 #   prepare   before any of that: waits for the MCP gateway, renders Hermes'
-#             config, fetches the MLflow plugin and token, and writes it all to
-#             /hermes for the participant to upload
+#             per-participant settings (config with the model key, env, the
+#             MLflow token) and writes them to /hermes for the participant to
+#             upload. Everything shared — start-hermes, the token refresher,
+#             the hermes_otel plugin — is baked into the sandbox image.
 #   adopt     after it: finds the exposed service and points the console's
 #             relay at it
-#   restart   Hermes when the operator's Keycloak tool roles change, or when it
-#             stops answering. Never on a policy change: those are the
-#             participant's to apply, and restart, by hand.
+#   restart   Hermes, by running the image's start-hermes in the sandbox, when
+#             the operator's Keycloak tool roles change or when it stops
+#             answering. Never on a policy change: the participant grants
+#             access with `openshell policy update` and restarts by hand.
 #
 # Never runs with -x: the model key and Hermes' server key pass through here.
 set -uo pipefail
@@ -26,10 +29,11 @@ OUT=/hermes
 mkdir -p "$WORK/probe/mcp-tokens"
 GATEWAY_ENDPOINT="https://${GATEWAY_HOST}:8080"
 RELAY_HOST=""
-PUBLISHED_POLICY=""
-# Where the participant's `openshell sandbox upload <name> /hermes /sandbox` puts
-# start-hermes.sh: upload nests the directory. Must match the lab instructions.
-START_SCRIPT=/sandbox/hermes/start-hermes.sh
+# The sandbox image's start script, and the settings it needs: the participant's
+# `openshell sandbox upload <name> /hermes /sandbox` nests the directory, so
+# they land in /sandbox/hermes. Must match the image and the lab instructions.
+START_CMD=start-hermes
+UPLOADED_SETTINGS=/sandbox/hermes/hermes-env.sh
 # Serializes restart_hermes(): role_watch_loop calls it from a background
 # process, and must never overlap the main loop's own calls to it.
 RESTART_LOCK=/tmp/work/restart.lock
@@ -43,15 +47,6 @@ X()     { openshell sandbox exec --name "$SANDBOX_NAME" -- /bin/sh -c "$1"; }
 secret_value() {
   oc get secret "$HERMES_ENV_SECRET" -n "$AGENTOPS_NS" -o "jsonpath={.data.$1}" 2>/dev/null | base64 -d
 }
-
-# The sandbox policy participants edit lives in tenant-policy, mounted at
-# /policy once that Application has been synced. Until then, the chart's
-# baseline, which is equally permissive: an unsynced policy Application means
-# open everywhere else in the lab too (no AuthPolicy, no NetworkPolicy).
-policy_file() {
-  if [ -s /policy/policy.yaml ]; then echo /policy/policy.yaml; else echo /config/baseline-policy.yaml; fi
-}
-policy_hash() { sha256sum "$(policy_file)" | cut -c1-12; }
 
 connect_cli() {
   local mtls="$XDG_CONFIG_HOME/openshell/gateways/lab/mtls"
@@ -76,11 +71,6 @@ service_url() {
 # Atomic, so the participant never uploads a half-written file.
 publish() {
   cp "$1" "$OUT/.$2.tmp" && chmod 644 "$OUT/.$2.tmp" && mv "$OUT/.$2.tmp" "$OUT/$2"
-}
-
-publish_policy() {
-  publish "$(policy_file)" policy.yaml
-  PUBLISHED_POLICY=$(policy_hash)
 }
 
 # ---------------------------------------------------------------------------
@@ -165,7 +155,8 @@ role_watch_loop() {
 }
 
 # ---------------------------------------------------------------------------
-# MLflow tracing, prepared here and uploaded by the participant.
+# MLflow tracing: the plugin is in the sandbox image; its per-participant
+# config — the experiment and a token — is prepared here and uploaded.
 # ---------------------------------------------------------------------------
 otel_enabled() { [ "${MLFLOW_ENABLED:-false}" = "true" ] && [ -n "${MLFLOW_TRACKING_URI:-}" ]; }
 
@@ -198,31 +189,10 @@ mlflow_experiment_id() {
   printf '%s' "$id"
 }
 
-# hermes_otel is not in the sandbox image. It is fetched here, where no sandbox
-# policy applies, checked against the pinned digest and repacked for upload. So
-# a participant who tightens their policy stops the traces leaving, not the
-# install.
-fetch_otel_plugin() {
-  local dir="$WORK/otel"
-  rm -rf "$dir"; mkdir -p "$dir/pkg"
-  if ! curl -fsSL --max-time 120 "$MLFLOW_PLUGIN_URL" -o "$dir/src.tar.gz"; then
-    log "could not download hermes_otel from $MLFLOW_PLUGIN_URL"
-    return 1
-  fi
-  if [ "$(sha256sum "$dir/src.tar.gz" | cut -d' ' -f1)" != "$MLFLOW_PLUGIN_SHA256" ]; then
-    log "hermes_otel does not match its pinned sha256; not installing it"
-    return 1
-  fi
-  tar -xzf "$dir/src.tar.gz" --strip-components=2 -C "$dir/pkg" "$MLFLOW_PLUGIN_SUBDIR" || return 1
-  tar -czf "$dir/pkg.tar.gz" -C "$dir/pkg" . || return 1
-  publish "$dir/pkg.tar.gz" hermes_otel.tar.gz
-  rm -rf "$dir"
-}
-
 # Tracing is best-effort: a participant whose MLflow is unreachable should still
 # get a working agent, just an unobservable one. Says which it was.
 prepare_otel() {
-  rm -f "$OUT/hermes_otel.tar.gz" "$OUT/hermes-otel-config.yaml"
+  rm -f "$OUT/hermes-otel-config.yaml"
   otel_enabled || return 0
   local token id
   token=$(mlflow_token)
@@ -230,12 +200,11 @@ prepare_otel() {
   id=$(mlflow_experiment_id "$token")
   if [ -z "$id" ]; then log "no MLflow experiment $MLFLOW_EXPERIMENT; tracing is off"; return 0; fi
   log "MLflow experiment $MLFLOW_EXPERIMENT is id $id"
-  fetch_otel_plugin || { log "hermes_otel not fetched; tracing is off"; return 0; }
   sed -e "s|__MLFLOW_EXPERIMENT_ID__|$id|g" -e "s|__MLFLOW_TOKEN__|$token|g" \
     /config/hermes-otel-config.yaml.template > "$WORK/hermes-otel-config.yaml"
   publish "$WORK/hermes-otel-config.yaml" hermes-otel-config.yaml
   rm -f "$WORK/hermes-otel-config.yaml"
-  log "hermes_otel prepared"
+  log "hermes_otel config prepared"
 }
 
 # ---------------------------------------------------------------------------
@@ -286,10 +255,7 @@ EOF
   publish "$WORK/config.yaml" config.yaml
   publish "$WORK/hermes-env.sh" hermes-env.sh
   rm -f "$WORK/config.yaml" "$WORK/hermes-env.sh"
-  publish /config/mcp-token-refresh.py mcp-token-refresh.py
-  publish /config/start-hermes.sh start-hermes.sh
   prepare_otel
-  publish_policy
   log "prepared $OUT for upload: $(ls "$OUT" | tr '\n' ' ')"
 }
 
@@ -334,8 +300,8 @@ forget() {
   log "waiting for the participant to start Hermes in sandbox $SANDBOX_NAME and expose it"
 }
 
-# Re-runs the participant's own start script inside the sandbox. Skipped when
-# there is nothing to restart: the participant has not uploaded it yet.
+# Re-runs the image's start-hermes inside the sandbox. Skipped when there is
+# nothing to restart: the participant has not uploaded their settings yet.
 restart_hermes() {
   local lock_fd rc=0
   exec {lock_fd}>"$RESTART_LOCK"
@@ -344,12 +310,12 @@ restart_hermes() {
     exec {lock_fd}>&-
     return 1
   fi
-  if [ "$(sandbox_phase)" != "Ready" ] || ! X "test -f $START_SCRIPT" >/dev/null 2>&1; then
+  if [ "$(sandbox_phase)" != "Ready" ] || ! X "test -f $UPLOADED_SETTINGS" >/dev/null 2>&1; then
     log "no started Hermes in sandbox $SANDBOX_NAME to restart"
     rc=1
   else
     log "restarting Hermes in sandbox $SANDBOX_NAME"
-    X "sh $START_SCRIPT" 2>&1 | strip | sed 's/^/    /'
+    X "$START_CMD" 2>&1 | strip | sed 's/^/    /'
     rc=${PIPESTATUS[0]}
   fi
   flock -u "$lock_fd"
@@ -371,14 +337,6 @@ adopt || forget
 failures=0
 while true; do
   sleep "$HEALTH_CHECK_SECONDS"
-  # A participant synced a new sandbox policy (the mounted ConfigMap changed).
-  # Published only: applying it, and restarting Hermes, is theirs to do.
-  if [ "$(policy_hash)" != "$PUBLISHED_POLICY" ]; then
-    publish_policy
-    log "the sandbox policy changed; published it to $OUT/policy.yaml. Apply it with:"
-    log "  openshell policy set --policy $OUT/policy.yaml --wait $SANDBOX_NAME"
-    log "  openshell sandbox exec --name $SANDBOX_NAME -- sh $START_SCRIPT"
-  fi
   if [ -z "$RELAY_HOST" ]; then
     adopt && failures=0
     continue
