@@ -49,7 +49,7 @@ openshell gateway select openshell-gw
 +
 [source,bash]
 ----
-openshell sandbox create --name hermie --from quay.io/rh-aiservices-bu/waterplant-hermes:0.2.0 --cpu 2 --memory 4Gi --no-tty -- true
+openshell sandbox create --name hermie --from quay.io/rh-aiservices-bu/waterplant-hermes:0.2.2 --cpu 2 --memory 4Gi --no-tty -- true
 ----
 +
 . Hermie has user or environment specific configuration that we externalized, so we don't have to build it everytime a config changes (a good practice of software engineering). But because the way that OpenShell works, we cannot mount these configs inside the sandbox. Sandboxes are immutable. OpenShell does not allow any external configuration change tor reflect inside the sandbox immediately. So we have to copy the configuration files into the sandbox.
