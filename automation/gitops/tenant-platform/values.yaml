@@ -24,7 +24,10 @@ image:
   mcpTag: latest
   ui:
     repository: waterplant-ui
-    tag: latest
+    # 0.1.1 hands Hermes its conversation by X-Hermes-Session-Id instead of
+    # replaying the on-screen transcript, which had the model narrating tool
+    # calls it never made (agent repo, ui/src/waterplant_ui/harness.py).
+    tag: "0.1.1"
   agent:
     repository: waterplant-agent
     tag: latest
@@ -300,7 +303,7 @@ agent:
     # Containerfile pulls an unpinned base and shallow-clones a fork with no
     # ref, so the pushed digest is fixed but a rebuild will not recreate it.
     image: quay.io/rh-aiservices-bu/waterplant-hermes
-    tag: latest
+    tag: "0.2.2"
     port: 8787
     home: /app/.hermes
     storageSize: 5Gi

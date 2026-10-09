@@ -10,13 +10,20 @@ The bridge between the console and Hermes in the sandbox.
 The participant starts Hermes themselves, from the `cli` container:
 
   oc exec -it deploy/hermes-openshell-bridge -c cli -- bash
-  openshell gateway add $GATEWAY_URL --local --name lab
-  openshell gateway select lab
-  openshell sandbox create --name hermie --from $HERMES_IMAGE --policy /hermes/policy.yaml \
+  openshell gateway add $GATEWAY_URL --local --name openshell-gw
+  openshell gateway select openshell-gw
+  openshell sandbox create --name hermie --from $HERMES_IMAGE \
     --cpu $SANDBOX_CPU --memory $SANDBOX_MEMORY --no-tty -- true
   openshell sandbox upload hermie /hermes /sandbox
-  openshell sandbox exec --name hermie -- sh /sandbox/hermes/start-hermes.sh
+  openshell policy update hermie --rule-name <rule> --add-endpoint <host>:<port>:full:rest:enforce \
+    --binary <path> ... --wait                               # once per endpoint
+  openshell sandbox exec --name hermie -- start-hermes
   openshell service expose hermie 8080 openai
+
+The sandbox starts on OpenShell's built-in default policy: no network at all.
+The participant grants Hermes what it needs one endpoint at a time — Keycloak,
+the model, the MCP Gateway, the MLflow relay — and re-runs start-hermes after
+any policy change, since Hermes connects to its tools only at start-up.
 
 `sandbox upload` always nests the directory, so /hermes lands at /sandbox/hermes
 (Hermes' own home is /sandbox/.hermes). Both it and `sandbox create`'s initial
@@ -24,34 +31,34 @@ command go over ssh, which is why the cli container runs bridge.openshellCliImag
 rather than ose-cli: without an ssh client, create ends with a misleading
 "No such file or directory" and upload fails (verified on cluster-z5jhc).
 
+What is in /hermes is only what differs per participant: config.yaml (their MCP
+Gateway and their model key), hermes-env.sh (their Keycloak realm and Hermes'
+server key) and, with MLflow on, hermes-otel-config.yaml (their experiment and
+a token). Everything shared — start-hermes, mcp-token-refresh.py, the
+hermes_otel plugin — is baked into the sandbox image (sandbox.image), under
+/usr/local where the default filesystem policy lets the sandbox read it.
+
 Three containers:
 
   cli         Where the participant runs those commands: the openshell CLI on
               PATH, the gateway's client certificate pre-placed for the gateway
-              name "lab", and the supervisor's prepared files at /hermes.
+              names "openshell-gw" and "<username>-openshell-gw", and the
+              supervisor's prepared files at /hermes. The CLI has no flag for
+              certificate paths: it reads them from
+              ~/.config/openshell/gateways/<name>/mtls/, so any other name
+              needs a copy of /mtls/* there before `gateway add`.
   supervisor  Prepares /hermes before the participant starts: waits for the MCP
-              gateway, renders Hermes' config with the model key, fetches the
-              MLflow plugin and token, and copies the current sandbox policy.
-              Then adopts the participant's exposed Hermes for the relay, and
-              restarts it — by re-running start-hermes.sh in the sandbox — when
-              it stops answering, or, if roleWatch.enabled, the moment the
-              operator's Keycloak tool: roles change (see
+              gateway, renders Hermes' config with the model key, and mints the
+              MLflow token. Then adopts the participant's exposed Hermes for the
+              relay, and restarts it — by running the image's start-hermes in
+              the sandbox — when it stops answering, or, if roleWatch.enabled,
+              the moment the operator's Keycloak tool: roles change (see
               files/bridge-supervisor.sh's role_watch_loop). It never creates
-              the sandbox and never applies a policy.
+              the sandbox and never changes its policy.
   relay-proxy nginx on :8787, forwarding to the relay with the gateway's client
               certificate and the relay's Host header, unbuffered so streamed
               replies stream. A 503 placeholder until there is a Hermes to relay
               to, so the pod is Ready either way.
-
-The sandbox policy participants edit is tenant-policy's openshell-sandbox-policy
-ConfigMap in this namespace, mounted at /policy. Until that Application has been
-synced it does not exist, and the supervisor publishes the baseline shipped here
-(templates/_sandbox-policy.tpl), which is the same permissive starting point.
-Either way it lands at /hermes/policy.yaml, refreshed when it changes; applying
-it, and restarting Hermes, is the participant's job:
-
-  openshell policy set --policy /hermes/policy.yaml --wait hermie
-  openshell sandbox exec --name hermie -- sh /sandbox/hermes/start-hermes.sh
 
 Why a supervisor at all. A sandbox pod always runs `sleep infinity`; the
 command given to `openshell sandbox create` is a one-off exec, not the pod's
@@ -59,7 +66,7 @@ command (verified on cluster-tpss7). Processes started with
 `openshell sandbox exec` run inside the policy-enforced network namespace, which
 is the only place the relay can reach, but nothing restarts them. The
 supervisor restarts them when roles change or Hermes stops answering; if the
-sandbox pod itself restarts, the participant re-runs start-hermes.sh.
+sandbox pod itself restarts, the participant re-runs start-hermes.
 
 Why a proxy rather than pointing the console at the relay. The relay needs the
 gateway's client certificate, which the console should not hold. The console
@@ -220,8 +227,6 @@ data:
 {{ .Files.Get "files/mcp-token-refresh.py" | indent 4 }}
   wait-for-gateway.py: |
 {{ .Files.Get "files/wait-for-gateway.py" | indent 4 }}
-  start-hermes.sh: |
-{{ .Files.Get "files/start-hermes.sh" | indent 4 }}
   # Hermes' config. The supervisor appends the model block, which carries the
   # key, so the key never reaches a manifest, and publishes it to /hermes.
   hermes-config.yaml: |
@@ -249,8 +254,8 @@ data:
           skip_auth: true
 {{- if .Values.mlflow.enabled }}
 
-    # Traces to MLflow. The supervisor installs the plugin and writes its
-    # config into the sandbox; Hermes only has to switch it on.
+    # Traces to MLflow. The plugin is in the sandbox image and start-hermes
+    # installs it with the participant's config; Hermes only has to switch it on.
     plugins:
       enabled: [hermes_otel]
 {{- end }}
@@ -278,10 +283,6 @@ data:
           Authorization: "Bearer __MLFLOW_TOKEN__"
           X-MLflow-Workspace: {{ $agentops | quote }}
 {{- end }}
-  # The sandbox policy used until tenant-policy's openshell-sandbox-policy
-  # exists. See templates/_sandbox-policy.tpl.
-  baseline-policy.yaml: |
-{{ include "to.baselinePolicy" . | indent 4 }}
   # Rendered by the supervisor into /shared/nginx.conf, twice over: first as a
   # placeholder (the #BEGIN_RELAY..#END_RELAY block dropped, the #PLACEHOLDER
   # line kept), then — once the participant has exposed Hermes — with
@@ -385,7 +386,7 @@ spec:
       annotations:
         # Roll the bridge when its scripts or any value change. Hermes keeps
         # running in the sandbox; the new supervisor adopts it.
-        checksum/bridge: {{ printf "%s%s%s%s" (.Files.Get "files/bridge-supervisor.sh") (.Files.Get "files/wait-for-gateway.py") (.Files.Get "files/start-hermes.sh") (toJson .Values) | sha256sum }}
+        checksum/bridge: {{ printf "%s%s%s" (.Files.Get "files/bridge-supervisor.sh") (.Files.Get "files/wait-for-gateway.py") (toJson .Values) | sha256sum }}
     spec:
       serviceAccountName: hermes-openshell-bridge
       securityContext:
@@ -448,13 +449,6 @@ spec:
             - { name: MLFLOW_TRACKING_URI, value: {{ .Values.mlflow.trackingUri | quote }} }
             - { name: MLFLOW_EXPERIMENT, value: {{ .Values.mlflow.experimentName | default .Values.username | quote }} }
             - { name: MLFLOW_TOKEN_DURATION_HOURS, value: {{ .Values.mlflow.tokenDurationHours | quote }} }
-            - name: MLFLOW_PLUGIN_URL
-              value: {{ printf "https://github.com/%s/archive/%s.tar.gz" .Values.mlflow.plugin.repo .Values.mlflow.plugin.commit | quote }}
-            - { name: MLFLOW_PLUGIN_SHA256, value: {{ .Values.mlflow.plugin.sha256 | quote }} }
-            # GitHub names the archive's top directory <repo>-<commit>, and the
-            # package is one level inside it.
-            - name: MLFLOW_PLUGIN_SUBDIR
-              value: {{ printf "%s-%s/hermes_otel" (last (splitList "/" .Values.mlflow.plugin.repo)) .Values.mlflow.plugin.commit | quote }}
 {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
@@ -464,7 +458,6 @@ spec:
           volumeMounts:
             - { name: tools, mountPath: /tools }
             - { name: config, mountPath: /config, readOnly: true }
-            - { name: policy, mountPath: /policy, readOnly: true }
             - { name: mtls, mountPath: /mtls, readOnly: true }
             - { name: shared, mountPath: /shared }
             - { name: hermes, mountPath: /hermes }
@@ -477,9 +470,13 @@ spec:
             - -c
             - |
               # Pre-place the client certificate where `openshell gateway add
-              # --local --name lab` looks for it, as the supervisor does.
-              mkdir -p "$XDG_CONFIG_HOME/openshell/gateways/lab/mtls"
-              cp /mtls/ca.crt /mtls/tls.crt /mtls/tls.key "$XDG_CONFIG_HOME/openshell/gateways/lab/mtls/"
+              # --local --name <name>` looks for it, for the two names the lab
+              # uses. The supervisor keeps its own "lab" registration in its
+              # own container.
+              for gw in openshell-gw {{ .Values.username }}-openshell-gw; do
+                mkdir -p "$XDG_CONFIG_HOME/openshell/gateways/$gw/mtls"
+                cp /mtls/ca.crt /mtls/tls.crt /mtls/tls.key "$XDG_CONFIG_HOME/openshell/gateways/$gw/mtls/"
+              done
               cat > "$HOME/.bashrc" <<'EOF'
               PS1='[openshell \W]\$ '
               echo "OpenShell CLI for sandbox '$SANDBOX_NAME'. Gateway: $GATEWAY_URL. Prepared files: /hermes"
@@ -565,14 +562,6 @@ spec:
         - name: config
           configMap:
             name: hermes-openshell-bridge
-        # The participant's sandbox policy, owned by tenant-policy. Optional:
-        # until that Application syncs, the supervisor uses the baseline above.
-        # The kubelet refreshes it in place, and the supervisor republishes it
-        # to /hermes/policy.yaml when its content changes.
-        - name: policy
-          configMap:
-            name: openshell-sandbox-policy
-            optional: true
         # Created by the gateway chart's certgen hook, before this Deployment.
         - name: mtls
           secret:
