@@ -34,11 +34,7 @@ sandbox:
   # The bridge finds, adopts and restarts the sandbox by this name, so it must
   # match the --name participants give `openshell sandbox create`.
   name: hermie
-  # Built from hermes-openshell/Containerfile in the agent repo. Besides
-  # Hermes it carries start-hermes, the MCP token refresher and the hermes_otel
-  # plugin, so participants upload only their own settings. Pinned: a moving
-  # tag would change every new sandbox on the cluster at once.
-  image: quay.io/rh-aiservices-bu/waterplant-hermes:0.2.2
+  image: quay.io/rh-aiservices-bu/waterplant-hermes:0.2.22
   # Limits on the sandbox pod, included in the combined participant quota.
   cpu: "2"
   memory: 4Gi
