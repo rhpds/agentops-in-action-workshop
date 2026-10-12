@@ -187,6 +187,14 @@ spec:
                   "$MODEL_DEFAULT" "$MODEL_BASE_URL" "$MODEL_API_KEY"
                 printf '\ncustom_providers:\n  - name: %s\n    base_url: %s\n    api_key: %s\n    model: %s\n' \
                   "$MODEL_DEFAULT" "$MODEL_BASE_URL" "$MODEL_API_KEY" "$MODEL_DEFAULT"
+                # hermes_otel ships disabled and staging the files is not
+                # enough — Hermes loads only plugins listed here. `hermes
+                # plugins enable hermes_otel` writes this same stanza, but
+                # into the config.yaml this script overwrites on every start,
+                # so it has to be rendered rather than set once by hand.
+                if [ -n "${HERMES_OTEL_ENABLED:-}" ]; then
+                  printf '\nplugins:\n  enabled:\n    - hermes_otel\n  disabled: []\n'
+                fi
               } > "$HERMES_HOME/config.yaml"
               chmod 600 "$HERMES_HOME/config.yaml"
           envFrom:
@@ -196,6 +204,9 @@ spec:
             - { name: HERMES_HOME,    value: {{ $h.home | quote }} }
             - { name: MODEL_BASE_URL, value: {{ .Values.agent.litellm.baseUrl | quote }} }
             - { name: MODEL_DEFAULT,  value: {{ .Values.agent.litellm.model | quote }} }
+            {{- if .Values.ui.mlflowUrl }}
+            - { name: HERMES_OTEL_ENABLED, value: "1" }
+            {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: [ALL] }
@@ -374,10 +385,20 @@ spec:
             - { name: API_SERVER_HOST,    value: 0.0.0.0 }
             - { name: API_SERVER_PORT,    value: {{ $h.port | quote }} }
             {{- if .Values.ui.mlflowUrl }}
-            # hermes_otel exports through urllib and sets no CA of its own, so
             # MLflow's openshift-service-serving-signer certificate has to be
-            # trusted process-wide or every export fails silently.
-            - { name: SSL_CERT_FILE, value: "{{ $h.home }}/ca-bundle.crt" }
+            # trusted, and it takes two variables, not one.
+            #
+            # SSL_CERT_FILE covers stdlib ssl/urllib. The OTLP exporter does
+            # not use either: it goes through `requests`, which ignores
+            # SSL_CERT_FILE entirely and defaults to certifi's bundle. With
+            # only SSL_CERT_FILE set, every span batch died on
+            # "CERTIFICATE_VERIFY_FAILED: self-signed certificate in
+            # certificate chain" and the agent looked perfectly healthy while
+            # emitting nothing. CURL_CA_BUNDLE covers anything shelling to
+            # curl for the same reason.
+            - { name: SSL_CERT_FILE,      value: "{{ $h.home }}/ca-bundle.crt" }
+            - { name: REQUESTS_CA_BUNDLE, value: "{{ $h.home }}/ca-bundle.crt" }
+            - { name: CURL_CA_BUNDLE,     value: "{{ $h.home }}/ca-bundle.crt" }
             {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
