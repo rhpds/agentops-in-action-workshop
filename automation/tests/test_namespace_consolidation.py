@@ -23,8 +23,11 @@ def render(chart, release, namespace, params):
     return [d for d in yaml.safe_load_all(result.stdout) if d]
 
 
-def resource(docs, kind, name):
-    return next(d for d in docs if d['kind'] == kind and d['metadata']['name'] == name)
+def resource(docs, kind, name, required=True):
+    match = next((d for d in docs if d['kind'] == kind and d['metadata']['name'] == name), None)
+    if match is None and required:
+        raise StopIteration(f'no {kind}/{name} in the rendered manifests')
+    return match
 
 
 def tenant(user='user1', suffix='agentops', runtime='openshell', harness='hermes', enforced='false'):
@@ -99,7 +102,15 @@ class Consolidation(unittest.TestCase):
                 ui = resource(docs, 'Deployment', 'water-plant-ui')
                 env = {e['name']: e.get('value') for e in ui['spec']['template']['spec']['containers'][0]['env']}
                 if harness == 'hermes':
-                    self.assertEqual(env['AGENT_URL'], f'http://hermes-agent.{ns}.svc:8787')
+                    # hermes-plain whenever it is deployed alongside the
+                    # gateway, hermes-agent otherwise. ui.yaml derives this
+                    # from one switch so flipping the harness cannot leave the
+                    # console talking to a Service that no longer exists; the
+                    # assertion has to follow the same rule rather than naming
+                    # one side of it.
+                    plain = resource(docs, 'Deployment', 'hermes-plain', required=False)
+                    expected = 'hermes-plain' if plain else 'hermes-agent'
+                    self.assertEqual(env['AGENT_URL'], f'http://{expected}.{ns}.svc:8787')
                 if runtime == 'openshell':
                     gateway = resource(docs, 'StatefulSet', f'{user}-openshell')
                     gateway_labels = gateway['spec']['template']['metadata']['labels']

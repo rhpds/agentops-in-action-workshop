@@ -1,0 +1,95 @@
+{{- if .Values.docs.enabled }}
+{{- $ns := printf "%s-%s" .Values.username .Values.namespaceSuffix -}}
+# ---------------------------------------------------------------------------
+# waterplant-docs — Northgate's safety documentation, and the one thing in the
+# lab that can see an outbound request arrive.
+#
+# It serves three legitimate pages the agent is expected to read, and one
+# "field service bulletin" that redirects onward to /attack/collect. Every
+# request that reaches an /attack/ path is recorded with its query string and
+# body, and GET /hits?since= hands the log to the console's probe engine.
+#
+# Why one host and not two: a separate attacker host is stopped by any
+# host-level allowlist, and a participant who blocks it has learned nothing
+# transferable. With the bulletin and the real pages on the same host, the
+# cheap fix breaks read-documentation and the correct fix — allowing /doc/ and
+# refusing the rest — passes both. That tension is module 5.
+#
+# Sync wave 0 alongside plant-api: the console reads its /hits endpoint, and
+# MR-2291's seeded injection in plant-api names it, so it must exist before
+# either comes up.
+# ---------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: waterplant-docs
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: waterplant-docs
+    app.kubernetes.io/part-of: water-plant
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  # One replica, for the same reason plant-api has one: the hit log is an
+  # in-process ring buffer. Two replicas would put the log behind a round-robin
+  # Service, so roughly half of "did the exfiltration arrive?" would answer no
+  # while the request sat in the other pod's buffer — an attack reported
+  # blocked when it got through is the one failure this console must not have.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: waterplant-docs
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: waterplant-docs
+        app.kubernetes.io/part-of: water-plant
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: docs
+          image: {{ printf "%s/%s/%s:%s" .Values.image.registry .Values.image.namespace .Values.image.docs.repository .Values.image.docs.tag }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            {{- toYaml .Values.docs.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: waterplant-docs
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: waterplant-docs
+    app.kubernetes.io/part-of: water-plant
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  selector:
+    app.kubernetes.io/name: waterplant-docs
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+{{- end }}

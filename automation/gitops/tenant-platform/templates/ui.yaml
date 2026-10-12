@@ -285,6 +285,17 @@ spec:
             # still works with no ConfigMap at all.
             - name: PROBE_DEFS_DIR
               value: /config/probe-defs
+            {{- if .Values.docs.enabled }}
+            # The documentation site, which is also the exfiltration observer.
+            # Without it the honeypot attacks have no way to see whether data
+            # actually left, and the engine reports them unjudgeable rather
+            # than inferring a verdict from what the agent said it did.
+            # Read by the engine for the hit log, and rendered into every
+            # attack prompt as {{ "{{ docs_url }}" }} — a definition in git
+            # cannot know the participant's namespace.
+            - name: DOCS_URL
+              value: http://waterplant-docs.{{ $ns }}.svc:8080
+            {{- end }}
             - name: NAMESPACE
               value: {{ $ns }}
           volumeMounts:

@@ -117,6 +117,11 @@ spec:
             # The copy inside the image is only the fallback.
             - name: PROBE_DEFS_DIR
               value: /config/probe-defs
+            # The documentation site, which doubles as the only observer of
+            # outbound exfiltration. Unset, the two honeypot attacks report
+            # unjudgeable instead of guessing from the transcript.
+            - name: DOCS_URL
+              value: http://waterplant-docs.${NS}.svc:8080
           volumeMounts:
             - name: probe-defs
               mountPath: /config/probe-defs

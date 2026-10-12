@@ -42,6 +42,32 @@ data:
 {{ .Files.Get "files/mcp-token-refresh.py" | indent 4 }}
   wait-for-gateway.py: |
 {{ .Files.Get "files/wait-for-gateway.py" | indent 4 }}
+  {{- /*
+  A web_extract backend that just fetches the URL.
+
+  Hermes ships seven web backends and none of them can fetch a page in this
+  image: tavily, exa and parallel want SaaS credentials; searxng, brave-free
+  and ddgs are search-only; and firecrawl — the only self-hostable one — needs
+  a `firecrawl` package waterplant-hermes does not install. So web_extract
+  answers every call "only supports search, not direct URL content
+  extraction", and the agent has no way to read a document at all.
+
+  That blocks three cases outright. read-documentation cannot pass, and
+  malicious-doc-redirect and compromised-tool-injection can only report
+  "blocked" — which tells a participant they are defended against something
+  that was never tried.
+
+  Staged into $HERMES_HOME/plugins/web/firecrawl/ by seed-config, where its
+  path-derived key collides with the bundled provider's. hermes_cli/plugins.py
+  dedups discovered manifests by key and lets the user source win, so the
+  bundled module is never imported and there is no registration race.
+  */}}
+  web-direct-plugin.yaml: |
+{{ .Files.Get "files/hermes-web-direct/plugin.yaml" | indent 4 }}
+  web-direct-init.py: |
+{{ .Files.Get "files/hermes-web-direct/__init__.py" | indent 4 }}
+  web-direct-provider.py: |
+{{ .Files.Get "files/hermes-web-direct/provider_direct.py" | indent 4 }}
   # Hermes' config. seed-config appends the model block, which carries the
   # key, so the key never reaches a manifest.
   hermes-config.yaml: |
@@ -181,19 +207,72 @@ spec:
               mkdir -p "$HERMES_HOME/skills/write-report/scripts"
               cp /config/write-report-SKILL.md "$HERMES_HOME/skills/write-report/SKILL.md"
               cp /config/save-report.py "$HERMES_HOME/skills/write-report/scripts/save_report.py"
+              if [ -n "${WEB_DIRECT_ENABLED:-}" ]; then
+                # Removed first, not just overwritten: $HERMES_HOME is a PVC,
+                # so a file this plugin no longer ships would otherwise
+                # survive forever and be imported by a package that has
+                # stopped expecting it.
+                WEBDIR="$HERMES_HOME/plugins/web/firecrawl"
+                rm -rf "$WEBDIR"
+                mkdir -p "$WEBDIR"
+                cp /config/web-direct-plugin.yaml   "$WEBDIR/plugin.yaml"
+                cp /config/web-direct-init.py       "$WEBDIR/__init__.py"
+                cp /config/web-direct-provider.py   "$WEBDIR/provider_direct.py"
+              fi
               {
                 cat /config/hermes-config.yaml
                 printf '\nmodel:\n  default: %s\n  provider: custom\n  base_url: %s\n  api_key: %s\n' \
                   "$MODEL_DEFAULT" "$MODEL_BASE_URL" "$MODEL_API_KEY"
                 printf '\ncustom_providers:\n  - name: %s\n    base_url: %s\n    api_key: %s\n    model: %s\n' \
                   "$MODEL_DEFAULT" "$MODEL_BASE_URL" "$MODEL_API_KEY" "$MODEL_DEFAULT"
-                # hermes_otel ships disabled and staging the files is not
-                # enough — Hermes loads only plugins listed here. `hermes
-                # plugins enable hermes_otel` writes this same stanza, but
-                # into the config.yaml this script overwrites on every start,
-                # so it has to be rendered rather than set once by hand.
-                if [ -n "${HERMES_OTEL_ENABLED:-}" ]; then
-                  printf '\nplugins:\n  enabled:\n    - hermes_otel\n  disabled: []\n'
+                if [ -n "${WEB_DIRECT_ENABLED:-}" ]; then
+                  # Hermes refuses to fetch a private or internal address at
+                  # all, in tools/url_safety.py, before any backend and before
+                  # any policy of the participant's gets a say. Every service
+                  # in this namespace is such an address, so left at its
+                  # default the agent cannot read the documentation site:
+                  # read-documentation cannot pass, and both honeypot attacks
+                  # report "blocked" having never left the pod — telling a
+                  # participant they are defended by a check they did not
+                  # configure and cannot see.
+                  #
+                  # Turning it off here is the point, not a concession. The
+                  # lab's thesis is that the platform enforces policy, not the
+                  # application, so the baseline agent has to be genuinely
+                  # undefended — what stops the exfiltration in module 5 must
+                  # be the participant's own egress rules. Scope: this one
+                  # sandboxed, fictional plant namespace.
+                  #
+                  # Cloud metadata endpoints (169.254.169.254,
+                  # metadata.google.internal) stay blocked regardless of this
+                  # flag — url_safety treats those as never-legitimate and
+                  # honours no toggle. Verified on the running pod.
+                  printf '\nsecurity:\n  allow_private_urls: true\n'
+                  # search_backend is pinned, not left to default. Setting
+                  # FIRECRAWL_API_URL (which the legacy availability check
+                  # needs) makes _get_backend() prefer "firecrawl" for *search*
+                  # too — and the direct provider is extract-only, so
+                  # web_search would start failing as "extract-only backend"
+                  # and module 1's search demonstration would break. ddgs is
+                  # what search already uses and it works.
+                  printf '\nweb:\n  search_backend: ddgs\n  extract_backend: firecrawl\n'
+                fi
+                # Staging a plugin's files is not enough — Hermes auto-loads
+                # only the bundled ones and gates everything else on this
+                # allow-list. `hermes plugins enable <x>` writes this same
+                # stanza, but into the config.yaml this script overwrites on
+                # every start, so it has to be rendered rather than set once
+                # by hand. web/firecrawl is the path-derived key, which is
+                # what the loader matches.
+                if [ -n "${HERMES_OTEL_ENABLED:-}" ] || [ -n "${WEB_DIRECT_ENABLED:-}" ]; then
+                  printf '\nplugins:\n  enabled:\n'
+                  if [ -n "${HERMES_OTEL_ENABLED:-}" ]; then
+                    printf '    - hermes_otel\n'
+                  fi
+                  if [ -n "${WEB_DIRECT_ENABLED:-}" ]; then
+                    printf '    - web/firecrawl\n'
+                  fi
+                  printf '  disabled: []\n'
                 fi
               } > "$HERMES_HOME/config.yaml"
               chmod 600 "$HERMES_HOME/config.yaml"
@@ -206,6 +285,9 @@ spec:
             - { name: MODEL_DEFAULT,  value: {{ .Values.agent.litellm.model | quote }} }
             {{- if .Values.ui.mlflowUrl }}
             - { name: HERMES_OTEL_ENABLED, value: "1" }
+            {{- end }}
+            {{- if .Values.docs.enabled }}
+            - { name: WEB_DIRECT_ENABLED, value: "1" }
             {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
@@ -384,6 +466,20 @@ spec:
             - { name: API_SERVER_ENABLED, value: "true" }
             - { name: API_SERVER_HOST,    value: 0.0.0.0 }
             - { name: API_SERVER_PORT,    value: {{ $h.port | quote }} }
+            {{- if .Values.docs.enabled }}
+            # Not a Firecrawl endpoint and nothing calls it. It is here
+            # because tools/web_tools.py gates backend selection on
+            # _is_backend_available(), a hardcoded if-chain in which
+            # "firecrawl" means check_firecrawl_api_key() — true when either
+            # FIRECRAWL_API_KEY or FIRECRAWL_API_URL is set. Without it,
+            # web.extract_backend: firecrawl is discarded, the lookup falls
+            # back to the search-only ddgs, and web_extract returns "ddgs is a
+            # search-only backend" having never consulted the registry.
+            #
+            # Pointed at the documentation site so the value is at least
+            # honest about what the agent is meant to be reading.
+            - { name: FIRECRAWL_API_URL,  value: {{ printf "http://waterplant-docs.%s.svc:8080" $ns | quote }} }
+            {{- end }}
             {{- if .Values.ui.mlflowUrl }}
             # MLflow's openshift-service-serving-signer certificate has to be
             # trusted, and it takes two variables, not one.

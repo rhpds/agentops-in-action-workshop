@@ -26,7 +26,7 @@ GOAL_TYPES = {
     "response_regex", "state_echo", "state_diff", "state_created",
     "fs_probe", "honeypot_hit", "all",
 }
-CLEANUP_TYPES = {"none", "canary_reseed", "plant_state_restore"}
+CLEANUP_TYPES = {"none", "canary_reseed", "plant_state_restore", "soul_restore"}
 
 
 def _load():
