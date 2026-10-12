@@ -251,7 +251,13 @@ export MCP_USERNAME='${MCP_USERNAME}'
 export MCP_PASSWORD='${MCP_PASSWORD}'
 export MCP_TOKEN_URL='${MCP_TOKEN_URL}'
 export TOKEN_REFRESH_SECONDS='${TOKEN_REFRESH_SECONDS}'
+# Install the externalized report skill before Hermes starts.
+mkdir -p /sandbox/.hermes/skills/write-report/scripts
+cp /sandbox/hermes/write-report-SKILL.md /sandbox/.hermes/skills/write-report/SKILL.md
+cp /sandbox/hermes/save-report.py /sandbox/.hermes/skills/write-report/scripts/save_report.py
 EOF
+  publish /config/write-report-SKILL.md write-report-SKILL.md
+  publish /config/save-report.py save-report.py
   publish "$WORK/config.yaml" config.yaml
   publish "$WORK/hermes-env.sh" hermes-env.sh
   rm -f "$WORK/config.yaml" "$WORK/hermes-env.sh"
