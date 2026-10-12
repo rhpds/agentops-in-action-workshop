@@ -67,6 +67,38 @@ ValidatingAdmissionPolicy API; they are mandatory, not an optional hardening fla
 
 ## Existing deployments
 
+### Hermes report skill
+
+The OpenShell bridge includes the externalized `write-report` skill and its
+Python helper in `/hermes`. Upload that directory as usual and run
+`start-hermes`; when it sources `hermes-env.sh`, the skill is copied into
+`/sandbox/.hermes/skills/write-report`. After changing the skill, re-upload
+`/hermes` and restart Hermes. This integration targets the OpenShell runtime;
+plain Hermes needs the skill folder installed under its own `$HERMES_HOME/skills`.
+
+Example single prompt: `Write a report on the current water plant status.`
+The skill saves Markdown under `/reports`, creates the directory when permitted,
+and returns a filename such as
+`/reports/2026-10-12_14-30-45-123456Z_water-plant-status.md`. Times are UTC;
+exclusive creation prevents overwrites even if timestamps collide.
+
+Runtime prerequisite: `/reports` must be writable by Hermes. The current
+sandbox policy allows `/sandbox`, but does not allow `/reports`, and a non-root
+process cannot create a new directory at the filesystem root. In the external
+sandbox image, provision `/reports` as a symlink to `/sandbox/reports` (for
+example, `RUN ln -s /sandbox/reports /reports` while building as root). The helper
+then creates the target directory on the first report using the already allowed
+`/sandbox` path. Alternatively, provision a writable `/reports` directory in the
+image and add it to `openshell.filesystem.readWrite`. The image build and
+`start-hermes` source are maintained outside this repository; verify this
+prerequisite and that the start script sources `hermes-env.sh` before rollout.
+
+No end-user confirmation is requested by the skill or helper. Keep Hermes'
+normal command approvals enabled: this helper only creates a directory and a
+new report file. Deployment-specific command approval rules must permit this
+invocation without interaction; a skill cannot override those rules. Reports in
+the sandbox filesystem do not survive sandbox deletion unless exported.
+
 This is a repository change, not an automatic live migration. Kubernetes resources
 cannot be moved between namespaces in place. Recreating a participant environment
 is the simplest rollout for disposable lab environments. For an existing event,
