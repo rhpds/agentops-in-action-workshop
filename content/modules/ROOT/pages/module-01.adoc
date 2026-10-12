@@ -1,3 +1,9 @@
+- define persona - who is this agent for
+- define who am I - what is my role in this lab - we created this app for operators in the plants. We are getting attacks, you are here to find out what is going on, and fix it
+eg; you can sya that this operator shouldn't have access to pull the emergency_shutdown,  
+
+after sanbox, external access and filesystem are blocked. so we need to have these attacks here
+
 = Module 1: Introduction to AgentOps & Meet Hermie
 :page-duration: TBD
 
@@ -8,6 +14,11 @@
 // capabilities -- try some example prompts, and get introduced to MLflow. Then several different
 // attacks succeed against the agent while every normal use case also succeeds, showing the value
 // Red Hat AI provides and introducing evaluations.
+
+# External access
+
+# Disk access
+- create a weekly report
 
 == Objectives
 

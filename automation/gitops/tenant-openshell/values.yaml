@@ -91,7 +91,7 @@ hermes:
 # Must match tenant-platform agent.litellm.
 model:
   baseUrl: "https://maas-rhdp.apps.maas.redhatworkshops.io/v1"
-  model: "qwen3-235b"
+  model: "qwen3-235b-a22b"
 
 # ---------------------------------------------------------------------------
 # MLflow tracing. Hermes emits OTLP spans through the hermes_otel plugin, which
