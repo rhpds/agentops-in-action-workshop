@@ -262,7 +262,7 @@ agent:
   credentialsSecret: litellm-credentials
   litellm:
     baseUrl: "https://maas-rhdp.apps.maas.redhatworkshops.io/v1"
-    model: "qwen3-235b"
+    model: "qwen3-235b-a22b"
   temperature: 0
   maxSteps: 14
   # The shared MaaS endpoint 429s under light load: one sequential client saw
