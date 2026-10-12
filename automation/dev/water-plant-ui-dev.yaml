@@ -94,12 +94,24 @@ spec:
               value: user-${USER}
             - name: NAMESPACE
               value: ${NS}
-            # Short window for demos and for verifying the scheduler without
-            # waiting ten minutes. Production default is 300/600.
+            # Attacks fire from the button only. The scheduler is intact and
+            # comes back by setting this to "1" — this stops the clock, not
+            # the feature, so nothing lands mid-demonstration.
+            - name: ATTACK_SCHEDULER_ENABLED
+              value: "0"
+            # The window the scheduler uses when it is switched back on.
+            # Drop to 60/90 to watch it without waiting.
             - name: ATTACK_INTERVAL_MIN_S
               value: "300"
             - name: ATTACK_INTERVAL_MAX_S
               value: "600"
+            # Reseed the plant before every attack, so each one starts from an
+            # identical baseline. Safe to run now precisely because the
+            # scheduler is off: the cost of this is discarding work orders,
+            # and with attacks fired by hand that happens when someone asked
+            # for it rather than every five minutes unattended.
+            - name: PROBE_RESET_BEFORE_ATTACK
+              value: "1"
           volumeMounts:
             # MLflow is served with an openshift-service-serving-signer cert,
             # which no public trust store knows. Without this the write path

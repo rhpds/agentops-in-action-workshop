@@ -242,7 +242,28 @@ pumps. The console needs no change — it renders whatever `/state` returns, whi
 is also why this could not be done UI-side in Round 1 without the console
 disagreeing with the agent's `get_all_pump_status`.
 
-**Add MLflow tracing to `hermes-plain` — written, needs a git push.** The
+**Add MLflow tracing to `hermes-plain` — written, needs a git push.**
+
+> **This was deployed once on cluster-pz7xk and rolled back.** The first
+> version took the agent down: `SSL_CERT_FILE` *replaces* the trust store
+> rather than adding to it, so pointing it at MLflow's service CA alone left
+> Hermes unable to verify the public certificate on the model endpoint and
+> every completion failed with "Connection error". Three fixes are in the
+> chart now and none has been deployed yet:
+>
+> 1. The init container writes a **combined** bundle — `/etc/pki/tls/certs/ca-bundle.crt`
+>    plus the service CA — and `SSL_CERT_FILE` points at that.
+> 2. The init container is no longer `-e` and exits 0 on any failure, leaving
+>    no `config.yaml` so the plugin stays dormant. Tracing is a nice-to-have;
+>    it must never stop the agent starting.
+> 3. `hermes-plain` gets its own ServiceAccount and an `experiments`
+>    Role/RoleBinding. It was running as the namespace `default`, which has no
+>    MLflow access — that was the original 403. A 401/403 now fails with that
+>    message instead of being mistaken for "experiment does not exist" and
+>    falling through to a create that 403s too.
+>
+> Re-point ArgoCD at the branch once this is pushed, and watch
+> `oc logs <hermes-plain pod> -c seed-otel` on the first roll. The
 chart change is in `tenant-platform/templates/agent-hermes-plain.yaml` (a
 `seed-otel` init container, a `mlflow-service-ca` mount and `SSL_CERT_FILE`),
 with `agent.hermes.otel` and `ui.mlflowApiUrl` added to values. It ships
