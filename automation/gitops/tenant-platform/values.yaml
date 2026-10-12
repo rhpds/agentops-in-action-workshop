@@ -68,9 +68,14 @@ image:
     # answers "did the agent send the data" from the receiving end instead of
     # reading intent out of the transcript.
     #
-    # 0.1.1 adds GET / -> /doc, so the Route's bare hostname opens the
+    # Includes GET / -> /doc, so the Route's bare hostname opens the
     # documentation instead of 404ing.
-    tag: "0.1.1"
+    #
+    # This tag has been overwritten in place, which is safe only because the
+    # Deployment is new everywhere. Once participants are running it, bump
+    # instead: pullPolicy: Always still re-resolves the tag, but ArgoCD sees
+    # no manifest change and so never restarts the pod.
+    tag: "0.1.0"
   agent:
     repository: waterplant-agent
     tag: latest
