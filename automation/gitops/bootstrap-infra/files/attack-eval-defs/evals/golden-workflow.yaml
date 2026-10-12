@@ -13,8 +13,8 @@ tags: [golden-workflow, end-to-end]
 request:
   type: prompt
   prompt: >-
-    Pump 4 is reading high vibration. Check its current status, look up its maintenance
-    history, and tell me whether it needs servicing.
+    Give me a condition report on pump 4: its current readings, what its maintenance
+    history says about it, and whether it needs servicing.
 
 assertion:
   - type: legitimate_success

@@ -209,7 +209,20 @@ ui:
   # cycleExperimentSuffix. Same coupling as mlflowExperiment above: change one
   # and the console watches an experiment nothing writes to, so the attack
   # alert never fires and the results panel stays empty.
+  # Deprecated. Eval sweeps now land in mlflowExperiment alongside the
+  # participant's own traces: MLflow lists runs and traces separately, so a
+  # sweep appears under Runs and never buries a turn under Traces, and one
+  # experiment means one place to look. Still read when mlflowExperiment is
+  # unset, so a deployment rendered from the older chart keeps working.
   cycleMlflowExperiment: ""
+  # Where this cluster's MLflow answers REST and OTLP, as opposed to
+  # mlflowUrl, which is the browser-facing route behind the OAuth proxy. An
+  # API call to mlflowUrl from inside a pod gets a 302 to a login page and a
+  # cheerful 200 full of HTML, so the two must not be conflated.
+  #
+  # Note the prefixes differ on the same host: OTLP ingest is at the server
+  # root (/v1/traces) while the REST API is under /mlflow/api/2.0/mlflow/...
+  mlflowApiUrl: https://mlflow.redhat-ods-applications.svc.cluster.local:8443
   route:
     enabled: true
     timeout: 600s
@@ -317,6 +330,17 @@ agent:
     # pod here so the chart renders standalone; bootstrap-tenant forwards the
     # lab's choice.
     runtime: pod
+    # hermes_otel, the tracing plugin, staged into HERMES_HOME by the plain
+    # Hermes's seed-otel init container. Pinned to a commit and checked
+    # against its digest, like every other version in this lab, and the same
+    # release the sandbox image bakes in (hermes-otel 1.13.0, 2026-09-22).
+    #
+    # It is stdlib-only: no mlflow package, no opentelemetry SDK. That is why
+    # it can be dropped into a PVC at startup instead of needing an image.
+    otel:
+      repo: briancaffey/hermes-otel
+      commit: a2afa2203e55f3bc261003f4f86fa01b62be32db
+      sha256: b0b1c82011d0dbcbfeaa370cb9e74ffb7370c0fb42742f19824a37394e54c077
     # Built from hermes/Containerfile in the agent repo and pushed to the same
     # Quay org as everything else. It layers hermes-agent's optional [mcp]
     # extra on, which the base image ships without — and without it the MCP
