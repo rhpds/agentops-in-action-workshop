@@ -1,51 +1,85 @@
 = Module 2: Sandbox the Agent
-:page-duration: TBD
-
-// Overview: Participants learn the agent isn't sandboxed today, then place it in one, covering what
-// OpenShell is (architecture and background). Once sandboxed, they confirm they're shielded from the
-// earlier attacks -- but find the agent is now unable to do anything useful. Their job for the rest of
-// the lab is to restore the agent's usefulness without losing that protection, using MLflow Evals
-// instead of manual checks to see what's actually broken.
+:page-duration: 30 minutes
 
 == Objectives
 
-* Learn what OpenShell is: its architecture, background, and role in the lab
-* Put Hermie in a box, re-run the earlier attacks and confirm the sandbox now shields the agent against all of them
-* Discover that the sandboxed agent can no longer do anything useful, and understand why
-* Understand your job for the rest of the lab: make the agent useful again without losing that protection
-* Manually trigger evals to evaluate the agent's behavior in a sandbox
+* Understand why sandboxing matters and how OpenShell helps
+* Put Hermie in a sandbox and see how it behaves with default sandbox configurations
+* Make sure the agent is still operational even inside the box
+* Understand and apply network policies as the agent needs
 
 == Content
 
-1. Why Sandboxing Matters & How OpenShell Helps
+=== Why sandboxing matters
 
+Hermie can call plant tools, run commands, and read files. A prompt asking it to
+stay within its operator role does not enforce limits on those capabilities.
+OpenShell adds runtime controls around the agent: outbound connections and
+filesystem access must fit the sandbox policy, even when the model chooses an
+unexpected action.
 
-2. Put Hermie in a Box
+The goal is to restore the connections Hermie needs for plant operations while
+leaving unrelated destinations blocked.
+
+=== How the components fit together
+
+Your project already contains an OpenShell gateway and a bridge. You
+will create the sandbox and start Hermie inside it.
+
+* The *OpenShell gateway* manages sandboxes and authenticates CLI connections
+  using mutual TLS (mTLS).
+* The *sandbox* runs Hermie and enforces its network and filesystem policy.
+* The *bridge's CLI container* has the OpenShell CLI and client certificates.
+  This is where you run the commands in this module.
+* The *bridge supervisor* prepares participant-specific configuration, discovers
+  the exposed service, and restarts an already-started Hermie if necessary.
+* The *bridge relay* lets the operator console reach the sandboxed agent through
+  the gateway. The console uses the `hermes-agent` Service on port `8787`; Hermie's
+  API inside the sandbox listens on port `8080`.
+
+The request path is:
+
+[source,text]
+----
+Operator console -> hermes-agent Service -> bridge relay -> OpenShell gateway -> Hermie
+----
+
+=== Put Hermie in a sandbox
 
 . Switch to Terminal tab and log in to your OpenShift cluster with your credentials.
 +
 [source,bash]
 ----
-oc login https://<ocp-api>:6443 --username {user} --password {password} --insecure-skip-tls-verify
+oc login https://{openshift_api_url}:6443 --username {user} --password {password} --insecure-skip-tls-verify
 ----
 
-if it is asked, say yes
-
++
+If prompted, confirm the connection.
++
+[source,text]
+----
 The server uses a certificate signed by an unknown authority.
 You can bypass the certificate check, but any data you send to the server could be intercepted by others.
 Use insecure connections? (y/n): y
+----
 
-WARNING: Using insecure TLS client config. Setting this option is not supported!
+. First, list the OpenShell components we mentioned above in your namespace:
++
+[source,bash]
+----
+oc get pods -n {user}-agentops \
+  -l 'app.kubernetes.io/name in (openshell,hermes-openshell-bridge)'
+----
++
+You should see two pods: the *OpenShell gateway* (`{user}-openshell-0`)
+and the *Hermes bridge* (`hermes-openshell-bridge-...`). The bridge's
+*CLI*, *supervisor*, and *relay proxy* run as three containers in the same
+pod. Its `3/3` readiness means all three containers are ready; the gateway
+has one container and should show `1/1`.
++
 
-Logged into "https://api.cluster-nzpmx.dyn.redhatworkshops.io:6443" as "{user}" using the token provided.
+. In order to run the agent in a sandbox, we need to use `openshell` commands against the OpenShell gateway. The gateway uses an in-cluster Service address and requires mTLS client certificates. Run these commands inside the `cli` container of the Hermes bridge pod, where the CLI and certificates are already available.
 
-You have one project on this server: "{user}-agentops"
-
-Using project "{user}-agentops".
-Welcome! See 'oc help' to get started.
-
-
-. Jump into the gateway pod where the mTLS client cert and key are. Because of the mTLS client cert, the gateway is only accessible from inside the cluster.
 +
 [source,bash]
 ----
@@ -61,38 +95,63 @@ openshell gateway add https://{user}-openshell.{user}-agentops.svc.cluster.local
 openshell gateway select openshell-gw
 ----
 
-. Create the sandbox by pointing to the same image we use for the agent.
+. Create the sandbox using the same Hermes image.
 +
 [source,bash]
 ----
 openshell sandbox create --name hermie --from quay.io/rh-aiservices-bu/waterplant-hermes:0.2.2 --cpu 2 --memory 4Gi --no-tty -- true
 ----
 +
-. Hermie has user or environment specific configuration that we externalized, so we don't have to build it everytime a config changes (a good practice of software engineering). But because the way that OpenShell works, we cannot mount these configs inside the sandbox. Sandboxes are immutable. OpenShell does not allow any external configuration change tor reflect inside the sandbox immediately. So we have to copy the configuration files into the sandbox.
+. Hermie's user-specific configuration is externalized, so changing the model endpoint, credentials, or skill definitions does not require rebuilding the image. The bridge prepares these files in `/hermes` folder. We need to upload them before starting Hermie. 
+
 +
 [source,bash]
 ----
 openshell sandbox upload hermie /hermes /sandbox
 ----
 +
-. Alright, let's run sandboxed Hermie!
+. Confirm that the sandbox exists and the configuration was uploaded:
++
+[source,bash]
+----
+openshell sandbox list
+openshell sandbox exec --name hermie -- ls /sandbox/hermes
+----
++
+The sandbox should be `Ready`. Alright, let's start sandboxed Hermie!
 +
 [source,bash]
 ----
 openshell sandbox exec --name hermie -- start-hermes
 ----
 +
+And make its port `8080` available through the gateway.
++
 [source,bash]
 ----
-openshell service expose hermie 8080 openai 
+openshell service expose hermie 8080 openai
+----
 
+. You should see a result like below:
++
+[source,text]
+----
 sh-5.1$ openshell service expose hermie 8080 openai
 ✓ Exposed service openai on sandbox hermie -> 127.0.0.1:8080
   URL: https://default--hermie--openai.openshell.localhost:8080/
-sh-5.1$ 
+sh-5.1$
 ----
 +
-. Now let's point out UI to the sandboxed agent, because the UI still uses the unsandboxed Hermie. We need to update an environment parameter on UI. First get out of the OpenShell gateway pod and back to your local terminal. For that, just type `exit` in the OpenShell gateway pod terminal. Then run the following command to point the UI to the sandboxed Hermie.
+. Now let's point our UI to the sandboxed agent, because the UI still uses the unsandboxed Hermie. We need to update an environment parameter on UI. First get out of the bridge CLI container and back to your local terminal.
+
+For that, just type `exit` in the bridge CLI container terminal.
++
+[source,bash]
+----
+exit
+----
++
+Then run the following command to point the UI to the sandboxed Hermie.
 +
 [source,bash]
 ----
@@ -106,11 +165,13 @@ oc set env deployment/water-plant-ui AGENT_URL=http://hermes-agent.{user}-agento
 oc rollout status deployment/water-plant-ui -n {user}-agentops
 ----
 
-. Let's test it! Go to the UI and ask the questions you tried previously:
+. Let's test it! Go to the agent UI and ask one of the questions you tried previously:
 
 `What's the status of pump 4?`
 
-. Doesn't work, right? When you sandboxed an agent with OpenShell, by default, it comes with deny all network access. So, you are secure, but too secure (is there such a thing?).  See it for yourself. Let's go back to the pod that we are running openshell commands:
+. No answer? Doesn't work, right? When you sandboxed an agent with OpenShell, by default, it comes with **deny all** outbound network access. So, you are secure, but too secure (is there such a thing?👀).
+
+See it for yourself. Let's go back to the pod that we were running the openshell commands:
 +
 [source,bash]
 ----
@@ -118,84 +179,223 @@ POD=$(oc get pod -l app.kubernetes.io/name=hermes-openshell-bridge -o name -n {u
 oc rsh -n {user}-agentops -c cli $POD
 ----
 
-Check OpenShell logs with this command:
+. Check OpenShell logs with this command:
 
-+[source,bash]
++
+[source,bash]
 ----
-sh-5.1$ openshell logs | grep DENIED
+openshell logs hermie --since 5m --source sandbox | grep DENIED
+----
+
+You'd see logs similar to below:
+
++
+[source,bash]
+----
 → Using sandbox 'hermie' (last used)
-[1791793977.327] [sandbox] [OCSF ] [ocsf] NET:OPEN [MED] DENIED /usr/bin/python3.12(131) -> sso.apps.cluster-nzpmx.dyn.redhatworkshops.io:443 [policy:- engine:opa] [reason:network connections not allowed by policy]
-[1791793977.524] [sandbox] [OCSF ] [ocsf] NET:OPEN [MED] DENIED /usr/bin/python3.12(137) -> sso.apps.cluster-nzpmx.dyn.redhatworkshops.io:443 [policy:- engine:opa] [reason:network connections not allowed by policy]
+[1791793977.327] [sandbox] [OCSF ] [ocsf] NET:OPEN [MED] DENIED /usr/bin/python3.12(131) -> sso.{openshift_cluster_ingress_domain}:443 [policy:- engine:opa] [reason:network connections not allowed by policy]
+[1791793977.524] [sandbox] [OCSF ] [ocsf] NET:OPEN [MED] DENIED /usr/bin/python3.12(137) -> sso.{openshift_cluster_ingress_domain}:443 [policy:- engine:opa] [reason:network connections not allowed by policy]
 [1791793980.339] [sandbox] [OCSF ] [ocsf] NET:OPEN [MED] DENIED /usr/bin/python3.12(138) -> github.com:443 [policy:- engine:opa] [reason:network connections not allowed by policy]
-sh-5.1$ 
 ----
 
-And also see Hermie's own logs:
+. And you can check Hermie the agent's own logs:
 
-sh-5.1$ openshell sandbox exec --name hermie -- cat /sandbox/hermes-gateway.log
-WARNING start-hermes: could not fetch an MCP token from https://sso.apps.cluster-nzpmx.dyn.redhatworkshops.io/realms/waterplant-{user}/protocol/openid-connect/token: the sandbox policy does not let python3 reach Keycloak. Hermes starts without its plant tools; grant Keycloak and run start-hermes again.
++
+[source,bash]
+----
+openshell sandbox exec --name hermie -- cat /sandbox/hermes-gateway.log
+----
+
++
+[source,bash]
+----
+*WARNING start-hermes: could not fetch an MCP token from https://sso.{openshift_cluster_ingress_domain}/realms/waterplant-{user}/protocol/openid-connect/token: the sandbox policy does not let python3 reach Keycloak. Hermes starts without its plant tools; grant Keycloak and run start-hermes again.*
 [hermes-otel] ✓ mlflow at http://hermes-mlflow-relay.{user}-agentops.svc.cluster.local:8788/v1/traces (traces only)
 [hermes-otel] ✓ content_capture=full — complete prompts and responses on every api.* span (set content_capture: preview or off to reduce)
 [hermes-otel] ✓ Live dashboard store active
 [hermes-otel] Registered 15 hooks
-WARNING tools.mcp_tool: MCP OAuth setup failed for 'gateway': MCP OAuth for 'gateway': non-interactive environment and no cached tokens found. Run `hermes mcp login gateway` interactively first to complete initial authorization.
+*WARNING tools.mcp_tool: MCP OAuth setup failed for 'gateway': MCP OAuth for 'gateway': non-interactive environment and no cached tokens found. Run `hermes mcp login gateway` interactively first to complete initial authorization.*
 WARNING tools.mcp_tool: MCP server 'gateway' failed initial OAuth authentication, not retrying automatically: MCP OAuth for 'gateway': non-interactive environment and no cached tokens found. Run `hermes mcp login gateway` interactively first to complete initial authorization.
-WARNING tools.mcp_tool: Failed to connect to MCP server 'gateway': MCP OAuth for 'gateway': non-interactive environment and no cached tokens found. Run `hermes mcp login gateway` interactively first to complete initial authorization.
-WARNING gateway.run: No user allowlists configured. All unauthorized users will be denied. Set GATEWAY_ALLOW_ALL_USERS=true in ~/.hermes/.env to allow open access, or configure platform allowlists (e.g., TELEGRAM_ALLOWED_USERS=your_id).
-sh-5.1$ 
+----
++
+. What you see in the logs is that Hermie complains it cannot access MCP Gateway and Keycloak. We need to apply a `network policy` to access these endpoints.
 
+The below command adds a named rule without replacing the entire policy:
 
-Hermie complains that it cannot access to MCP Gateway and Keycloak. We need to apply a `network policy` to access these endpoint. Let's do that
+[source,text]
+----
+openshell policy update <sandbox> --rule-name <name> \
+  --add-endpoint <host>:<port>:<access>:<protocol>:<enforcement> \
+  --binary <absolute-executable-path> --wait
+----
 
+* `--rule-name` identifies the rule for later inspection or removal.
+* `--add-endpoint` specifies the destination and how requests are inspected.
+  Here, `full:rest:enforce` permits HTTP methods to that endpoint and enforces
+  the rule. It does not grant access to every destination.
+* `--binary` limits the rule to the named executable.
+* `--wait` waits for the policy update to be applied.
 
-And apply the policy that allows Hermie to access the model endpoint:
+These are *OpenShell sandbox rules*, separate from Kubernetes NetworkPolicies.
+For more options, see the
+https://docs.nvidia.com/openshell/latest/sandboxes/policies[OpenShell policy documentation].
+
+Apply a policy for Keycloak access:
+
 +
 [source,bash]
 ----
 openshell policy update hermie --rule-name keycloak_token --add-endpoint sso.{openshift_cluster_ingress_domain}:443:full:rest:enforce --binary /usr/bin/python3 --binary /usr/bin/python3.12 --wait
 ----
 +
+. And following the same pattern, apply another one for MCP Gateway so we can get access to tools (more on the Keycloak and MCP Gateway is coming in the next chapter).
 +
 [source,bash]
 ----
-openshell policy update hermie --rule-name mcp_gateway --add-endpoint mcp-gateway-data-science-gateway-class.{user}-agentops.svc.cluster.local:8080:full:rest:enforce --binary /usr/bin/python3 --binary /usr/bin/python3.12 --binary /usr/local/bin/hermes --wait     # MCP gateway so we can get access to tools
+openshell policy update hermie --rule-name mcp_gateway --add-endpoint mcp-gateway-data-science-gateway-class.{user}-agentops.svc.cluster.local:8080:full:rest:enforce --binary /usr/bin/python3 --binary /usr/bin/python3.12 --binary /usr/local/bin/hermes --wait
 ----
 
-Restart Hermie, only needed for mcp_gateway because it fetches tools at startup, policies in general does not need restart.
-
+. Restart Hermie so it can fetch a token and discover the MCP tools. Network policy changes apply live, but Hermes discovers its tools at startup. Just for this one, we need to restart the boxed Hermie.
++
+[source,bash]
+----
 openshell sandbox exec --name hermie -- start-hermes
+----
 
++
+Confirm the two rules are present and inspect the startup log:
++
+[source,bash]
+----
+openshell policy get hermie --full
+openshell sandbox exec --name hermie -- tail -n 60 /sandbox/hermes-gateway.log
+----
+
+The latest startup should no longer report that it cannot fetch an MCP token or
+connect to the gateway. Older failures remain in the logs. Focus on the last lines on the logs.
 
 . Get back to the UI and ask the same question again:
 
 `What's the status of pump 4?`
 
-Still doesn't work, we may need to add a few more policies. Let's check the logs again:
-
-sh-5.1$ openshell logs  | grep maas | grep DENIED
+Still doesn't work 😥 We may need to add a few more policies. Let's check the logs again:
++
+[source,bash]
+----
+openshell logs hermie --since 5m --source sandbox | grep DENIED | grep maas
+----
++
+You should see an output like below:
++
+[source,bash]
+----
 → Using sandbox 'hermie' (last used)
 [1791795587.230] [sandbox] [OCSF ] [ocsf] NET:OPEN [MED] DENIED /usr/bin/python3.12(868) -> maas-rhdp.apps.maas.redhatworkshops.io:443 [policy:- engine:opa] [reason:endpoint maas-rhdp.apps.maas.redhatworkshops.io:443 is not allowed by any policy]
+----
 
-Add model access policy to allow Hermie to access the model endpoint:
-
+. This log shows us that Hermie is missing a policy to let it to access the model endpoint. Let's apply it:
++
+[source,bash]
+----
 openshell policy update hermie --rule-name model_endpoint --add-endpoint maas-rhdp.apps.maas.redhatworkshops.io:443:full:rest:enforce --binary /usr/bin/python3 --binary /usr/bin/python3.12 --binary /usr/local/bin/hermes --wait
+----
 
-Check the traces. No traces? Shame..You should know what to do at this point. First, check logs:
+. Same drill. Go back to the agent UI and send a prompt.
 
-sh-5.1$ openshell logs  | grep mlflow | grep DENIED
+IT WORKS! 🎉🎉
+
+Open the *MLflow traces* link in the console footer. Select your participant's
+experiment (`{user}` by default), open its traces, and look for the request you
+just sent. A trace lets you inspect the model interaction and tool calls behind
+Hermie's answer. Use the latest request time to distinguish it from older runs.
+
+But..no traces? Ahh, wonder why? Yup, you know what to do at this point! First, check the logs:
++
+[source,bash]
+----
+openshell logs hermie --since 5m --source sandbox | grep mlflow | grep DENIED
+----
+
+A familiar output:
++
+[source,bash]
+----
 → Using sandbox 'hermie' (last used)
 [1791795587.426] [sandbox] [OCSF ] [ocsf] HTTP:POST [MED] DENIED /usr/bin/python3.12(868) -> POST http://hermes-mlflow-relay.{user}-agentops.svc.cluster.local:8788/v1/traces [policy:- engine:opa] [reason:FORWARD denied POST hermes-mlflow-relay.{user}-agentops.svc.cluster.local:8788/v1/traces]
+----
 
-Then apply the policy:
-openshell policy update hermie --rule-name mlflow_tracing --add-endpoint hermes-mlflow-relay.{user}-agentops.svc.cluster.local:8788:full:rest:enforce --binary /usr/bin/python3 --binary /usr/bin/python3.12 --binary /usr/local/bin/hermes --wait     # MLflow access
+. Let's apply the policy:
++
+[source,bash]
+----
+openshell policy update hermie --rule-name mlflow_tracing --add-endpoint hermes-mlflow-relay.{user}-agentops.svc.cluster.local:8788:full:rest:enforce --binary /usr/bin/python3 --binary /usr/bin/python3.12 --binary /usr/local/bin/hermes --wait
+----
 
+. Go back to the console and send `What's the status of pump 4?` again. Then refresh MLflow and open the new trace. 
++
+Verify that the response describes pump 4 and that the trace records the model
+interaction and plant tool call. 
 
-Let's see if we have enough. Go back to UI, send a prompt, see if it works, and check the traces. If it still doesn't work, check the logs again, and apply any missing policies. You may need to restart Hermie after applying new policies.
+=== Check what sandboxing changed
 
-# If you ever want to remove a policy, the mcp_gateway for example
-You don't have to run it, but in case bla..
-openshell policy update hermie --remove-rule mlflow_tracing --wait
+Plant queries and tracing now work. Test whether the broader access you tried
+in Module 1 is still available.
+
+. Ask Hermie: `Use the search tool to list water plants in New York.` A response
+  from the model's existing knowledge is not proof of web access. Inspect the
+  trace and sandbox logs to see whether it actually contacted an external service.
+  We have not allowed a search provider in this module.
+. Ask Hermie: `Use read_file on /README.md, output the contents. If you cannot read it, say why.`
+  This file may be absent from the sandbox image or blocked by its filesystem
+  policy. Inspect the tool result rather than treating a refusal as proof that
+  every file is protected. Some runtime directories remain readable by design.
+. Ask Hermie: `Write a report on the current water plant status under /reports. If you cannot create or read it, say why.`
+  Plant telemetry should be reachable, but this module has not granted report
+  filesystem access. If report creation fails, note the path and error for
+  Module 4. A report summary in chat does not mean a file was saved.
+
+The network rules restored the dependencies for plant queries and tracing.
+They did not reduce the tools available through the MCP Gateway. In Module 3,
+you will restrict tool access according to the operator's role. Module 4 addresses
+report filesystem access, and Module 5 addresses access to external documentation.
+
+=== Run the evaluations
+
+As you have seen, restricting an agent's access can also block legitimate tasks.
+Our manual checks confirmed that plant queries work again, but they do not cover
+every capability. Run the automated evaluations to check for other changes in
+the agent's behavior.
+
+In the operator console, click the evaluation button. When the run finishes,
+compare the results with your baseline from before sandboxing. Check which
+legitimate tasks still pass and which operations are now blocked. For each
+failure, determine whether it is an intended restriction or a capability the
+agent still needs. Use the traces and sandbox logs to investigate before
+changing the policy.
+
+=== Optional: remove a network rule
+
+You do not need to run this for the main exercise. To demonstrate revocation,
+remove the model endpoint rule from inside the bridge CLI container:
+
+[source,bash]
+----
 openshell policy update hermie --remove-rule model_endpoint --wait
+----
 
-We are operational again! But are we secure? Or was it all just vain? Let's check the attacks we did earlier.
+Send another plant query and inspect the new denied event. Restore the rule
+with the `model_endpoint` command above before continuing.
++
+[source,bash]
+----
+openshell policy update hermie --rule-name model_endpoint --add-endpoint maas-rhdp.apps.maas.redhatworkshops.io:443:full:rest:enforce --binary /usr/bin/python3 --binary /usr/bin/python3.12 --binary /usr/local/bin/hermes --wait
+----
 
+
+=== Completion checks
+
+* The console targets sandboxed Hermie through `hermes-agent`.
+* Hermie can answer a plant query using its MCP tools.
+* A new request appears in your MLflow experiment.
+* You can explain each of the four allowed outbound destinations.
+* You have recorded which web and filesystem operations still fail and why.
