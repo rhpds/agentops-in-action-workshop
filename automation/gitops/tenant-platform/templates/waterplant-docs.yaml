@@ -92,4 +92,42 @@ spec:
     - name: http
       port: 8080
       targetPort: http
+---
+{{/*
+A Route so a participant can read the documentation in a browser.
+
+For people only. Everything in the lab that fetches this site -- the console's
+probe engine, the agent's web_extract, MR-2291's seeded injection -- addresses
+it by Service name, and must keep doing so: from inside a pod the apps domain
+resolves to the router's internal address (10.10.10.101 on cluster-pz7xk),
+which is exactly what Hermes' SSRF check in tools/url_safety.py blocks. Nothing
+here is wired into DOCS_URL or DOCS_COLLECT_URL, and it should not be.
+
+Unscoped on purpose, so all three things a participant wants to see by hand
+work: /doc to browse, /doc/field-service-bulletin to watch the 302 fire, and
+/hits to confirm whether their own exfiltration attempt actually landed. That
+does put /attack/collect on the internet -- an in-memory, bounded log of
+requests to a fictional plant, which is the receiving end of an attack the lab
+fires at itself. Scope it with `path: /doc` if that is not wanted, accepting
+that the redirect then dead-ends for a browser.
+*/}}
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: waterplant-docs
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: waterplant-docs
+    app.kubernetes.io/part-of: water-plant
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  to:
+    kind: Service
+    name: waterplant-docs
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
 {{- end }}

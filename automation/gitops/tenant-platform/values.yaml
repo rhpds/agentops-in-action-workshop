@@ -67,7 +67,10 @@ image:
     # request reaching /attack/* is recorded and queryable, so the engine
     # answers "did the agent send the data" from the receiving end instead of
     # reading intent out of the transcript.
-    tag: "0.1.0"
+    #
+    # 0.1.1 adds GET / -> /doc, so the Route's bare hostname opens the
+    # documentation instead of 404ing.
+    tag: "0.1.1"
   agent:
     repository: waterplant-agent
     tag: latest
