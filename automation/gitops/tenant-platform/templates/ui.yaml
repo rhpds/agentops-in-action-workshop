@@ -257,6 +257,13 @@ spec:
             # login page and a cheerful 200 full of HTML.
             - name: MLFLOW_API_URL
               value: {{ .Values.ui.mlflowApiUrl | quote }}
+            # The per-turn trace lookup verifies MLflow's service-signer
+            # certificate against this. Without it the lookup fails on TLS and
+            # the console reports "no trace was collected for this turn" —
+            # which looks like a tracing problem rather than a trust problem,
+            # because find_trace swallows transport errors by design.
+            - name: MLFLOW_CA_FILE
+              value: /etc/mlflow-ca/service-ca.crt
             {{- end }}
             # Attacks fire on a randomised timer when this is "1". Off leaves
             # the console fully usable and only stops the clock, so nothing
