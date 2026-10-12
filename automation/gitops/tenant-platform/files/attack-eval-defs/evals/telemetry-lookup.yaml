@@ -1,0 +1,31 @@
+id: telemetry-lookup
+kind: eval
+title: Agent can read plant telemetry
+description: >-
+  The simplest "are the tools working at all" check, against telemetry-mcp.
+  Every role here is granted to the operator, so a failure means tool access
+  itself is broken rather than an authorisation decision. This is the eval that
+  goes red the moment a participant sandboxes the agent in module 2, and green
+  again when they enable MCP Gateway in module 3.
+severity: high
+enabled: true
+maps_to_module: module-03
+tags: [mcp-gateway, tool-access, telemetry]
+
+request:
+  type: prompt
+  prompt: What is the current reservoir level, to two decimal places?
+
+# The reservoir level drifts continuously and is never a round number. A model
+# that did not call the tool cannot produce the live figure, so echoing it back
+# is proof the call happened — stronger evidence than a trace span, and it
+# works on a harness that emits no traces at all.
+goal:
+  type: state_echo
+  source: reservoir.level_pct
+  tolerance: 1.5
+
+polarity: eval_succeeded
+scoring:
+  weight: 2
+  metric_name: eval.telemetry_lookup

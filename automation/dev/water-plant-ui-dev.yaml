@@ -1,0 +1,223 @@
+# A second operator console, built on-cluster and deployed outside ArgoCD.
+#
+# Why this exists: the live `water-plant-ui` is owned by the `<user>-platform`
+# Application, which runs with `prune: true` and `selfHeal: true`. Any change
+# made to it by hand is reverted within the sync interval, and its image tag
+# comes from quay. That makes it the wrong place to iterate on the console.
+#
+# This copy carries no `argocd.argoproj.io/tracking-id`. ArgoCD prunes what it
+# tracks and leaves everything else alone, so these three objects survive a
+# sync. The image comes from an ImageStreamTag the in-cluster BuildConfig
+# writes, so no registry credentials are involved anywhere.
+#
+# This file is a template: ${USER}, ${NS} and ${APPS_DOMAIN} are substituted by
+# deploy.sh, which is the supported way to apply it. Kept as placeholders
+# rather than a Helm chart because this is deliberately outside ArgoCD and
+# must stay applyable with plain oc on any cluster.
+#
+#   automation/dev/deploy.sh <username>        # e.g. deploy.sh 7ql4q
+#
+# That script creates the BuildConfig, uploads the ui/ directory as a binary
+# build, and applies this manifest with the placeholders filled in.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: water-plant-ui-dev
+  namespace: ${NS}
+  labels:
+    app.kubernetes.io/name: water-plant-ui-dev
+    app.kubernetes.io/part-of: water-plant
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    # Resolves the tag to a digest and redeploys on every new build.
+    image.openshift.io/triggers: |
+      [{"from":{"kind":"ImageStreamTag","name":"water-plant-ui-dev:latest"},
+        "fieldPath":"spec.template.spec.containers[?(@.name==\"ui\")].image"}]
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: water-plant-ui-dev
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: water-plant-ui-dev
+        app.kubernetes.io/part-of: water-plant
+    spec:
+      # Reuses the live console's ServiceAccount, which already carries the
+      # `water-plant-ui-mlflow-read` RoleBinding. Note that writing eval runs
+      # needs create/update on experiments, which that Role does not grant —
+      # see the MLflow note at the foot of this file.
+      serviceAccountName: water-plant-ui
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: ui
+          # Replaced by the trigger above on first reconcile.
+          image: image-registry.openshift-image-registry.svc:5000/${NS}/water-plant-ui-dev:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: PLANT_API_URL
+              value: http://plant-api.${NS}.svc:8080
+            # hermes-plain, not hermes-agent: the OpenShell sandbox answers
+            # "Hermes is not started in the sandbox yet" until the participant
+            # works through module 2, and the probes need a reachable agent.
+            - name: AGENT_URL
+              value: http://hermes-plain.${NS}.svc:8787
+            - name: AGENT_PROTOCOL
+              value: openai
+            - name: AGENT_MODEL
+              value: hermes-agent
+            - name: AGENT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-env
+                  key: API_SERVER_KEY
+                  optional: true
+            # The browser-facing route, behind the OpenShift OAuth proxy.
+            # Used only to build links; an API call from this pod would be
+            # answered with a 302 to a login page.
+            - name: MLFLOW_URL
+              value: https://rh-ai.${APPS_DOMAIN}/mlflow
+            # The in-cluster Service, for the eval-sweep write path. Note the
+            # REST API is at <this>/mlflow/api/2.0/mlflow/... — see
+            # probes/mlflow_run.py for the two prefixes.
+            - name: MLFLOW_API_URL
+              value: https://mlflow.redhat-ods-applications.svc.cluster.local:8443
+            - name: MLFLOW_EXPERIMENT
+              value: user-${USER}
+            - name: NAMESPACE
+              value: ${NS}
+            # Attacks fire from the button only. The scheduler is intact and
+            # comes back by setting this to "1" — this stops the clock, not
+            # the feature, so nothing lands mid-demonstration.
+            - name: ATTACK_SCHEDULER_ENABLED
+              value: "0"
+            # The window the scheduler uses when it is switched back on.
+            # Drop to 60/90 to watch it without waiting.
+            - name: ATTACK_INTERVAL_MIN_S
+              value: "300"
+            - name: ATTACK_INTERVAL_MAX_S
+              value: "600"
+            # Reseed the plant before every attack, so each one starts from an
+            # identical baseline. Safe to run now precisely because the
+            # scheduler is off: the cost of this is discarding work orders,
+            # and with attacks fired by hand that happens when someone asked
+            # for it rather than every five minutes unattended.
+            - name: PROBE_RESET_BEFORE_ATTACK
+              value: "1"
+            # The definitions come from the ConfigMap, which is the single
+            # source (automation/gitops/tenant-platform/files/attack-eval-defs/).
+            # The copy inside the image is only the fallback.
+            - name: PROBE_DEFS_DIR
+              value: /config/probe-defs
+          volumeMounts:
+            - name: probe-defs
+              mountPath: /config/probe-defs
+              readOnly: true
+            # MLflow is served with an openshift-service-serving-signer cert,
+            # which no public trust store knows. Without this the write path
+            # fails with "self-signed certificate in certificate chain".
+            - name: mlflow-ca
+              mountPath: /etc/mlflow-ca
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 300m, memory: 256Mi }
+      volumes:
+        - name: probe-defs
+          configMap:
+            name: water-plant-ui-probe-defs
+        - name: mlflow-ca
+          configMap:
+            name: mlflow-service-ca
+---
+# Recording an eval sweep means creating a run, and MLflow runs with
+# --app-name=kubernetes-auth: every API call becomes a SelfSubjectAccessReview
+# against this (deliberately non-existent) API group. The console's existing
+# `water-plant-ui-mlflow-read` Role grants get and list, which is enough to
+# read a trace and not enough to write a run.
+#
+# Two traps when checking this by hand, both documented in tenant-platform's
+# ui.yaml and both hit here: `oc auth can-i get experiments.mlflow.kubeflow.org`
+# answers "no" even when access is granted, because there is no CRD for it to
+# resolve against — post a real SubjectAccessReview instead. And the authorizer
+# caches denials for 300s, so a call made before this existed keeps failing for
+# five minutes after it does.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: water-plant-ui-mlflow-write
+  namespace: ${NS}
+rules:
+  - apiGroups: ["mlflow.kubeflow.org"]
+    resources: ["experiments"]
+    verbs: ["get", "list", "create", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: water-plant-ui-mlflow-write
+  namespace: ${NS}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: water-plant-ui-mlflow-write
+subjects:
+  - kind: ServiceAccount
+    name: water-plant-ui
+    namespace: ${NS}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: water-plant-ui-dev
+  namespace: ${NS}
+  labels:
+    app.kubernetes.io/name: water-plant-ui-dev
+    app.kubernetes.io/part-of: water-plant
+spec:
+  selector:
+    app.kubernetes.io/name: water-plant-ui-dev
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: water-plant-ui-dev
+  namespace: ${NS}
+  labels:
+    app.kubernetes.io/name: water-plant-ui-dev
+    app.kubernetes.io/part-of: water-plant
+  annotations:
+    # The router's 30s default would cut off a probe mid-thought: a golden
+    # workflow turn is a multi-step tool chain through a shared model endpoint
+    # that answers 429 under load, and an eval sweep is five of those.
+    haproxy.router.openshift.io/timeout: 600s
+spec:
+  to:
+    kind: Service
+    name: water-plant-ui-dev
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

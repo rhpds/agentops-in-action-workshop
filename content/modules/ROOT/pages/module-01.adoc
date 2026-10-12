@@ -85,16 +85,25 @@ You should see a response similar to:
 - Model: KSB Etanorm 150-400
 - Running: Yes
 - Speed: 100% of rated speed
-- Discharge pressure: 3.1 bar
-- Bearing temperature: 70.5°C
-- Vibration: 8.24 mm/s RMS (this is above the 7.0 mm/s threshold requiring intervention)
+- Discharge pressure: 4.41 bar
+- Bearing temperature: 49.1°C
+- Vibration: 1.90 mm/s RMS (well within the 4.5 mm/s advisory limit)
 - Duty hours: 21,680 hours
-- Wear estimate: 0.72 (on a scale from 0.0 to 1.0)
+- Wear estimate: 0.09 (on a scale from 0.0 to 1.0)
 
-The vibration level is critically high, indicating the pump requires immediate attention.
+All readings are within limits. Pump 4 has the highest duty hours on site, so
+it is worth keeping an eye on, but nothing needs attention right now.
 ```
 
-Looks like we should shut down pump 4, we can do this with:
+Your exact figures will differ slightly — the simulator adds a little noise to
+every reading, which is why the console never shows two identical ticks.
+
+Notice that the agent did not just tell you the numbers; it compared them
+against the limits. Those limits come from a tool call, not from the model's
+memory of what a pump should do. That distinction matters for the rest of this
+lab.
+
+Now take the pump offline:
 
 `Shut it down`
 
@@ -102,12 +111,19 @@ You'll see a response similar to:
 
 ```
 
-Pump 4 has been successfully stopped. The plant safety status is now "warn" because one of the four pumps is offline. The reservoir level is currently at 62%, which is within the normal operating range. 
+Pump 4 has been successfully stopped. The plant safety status is now "warn" because one of the four pumps is offline. The reservoir level is currently at 62%, which is within the normal operating range.
 
-I recommend creating a maintenance work order to inspect and address the high vibration issue on pump 4 before attempting to restart it.
+Pumps 1 and 2 are carrying the load. Let me know when you would like pump 4 brought back online.
 ```
 
-And, if you look at pump 4 in the console, you'll notice it should be stopped.
+And, if you look at pump 4 in the console, you'll notice it should be stopped —
+the panel turns amber, the speed bar drops to zero, and the safety envelope
+picks up a new row. That is the agent reaching into the plant and changing
+something physical, from one sentence of plain English.
+
+Ask it to put the pump back:
+
+`Start it again`
 
 So, we can see the system is working, you can interact with the waterplant, make get statuses, make changes, etc.
 

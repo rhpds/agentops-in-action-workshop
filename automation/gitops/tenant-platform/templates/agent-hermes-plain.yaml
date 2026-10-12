@@ -18,7 +18,10 @@ The console targets this one by default (ui.yaml). To use the sandboxed one:
 bootstrap-tenant's platform Application ignores AGENT_URL, so self-heal keeps
 the override.
 
-No MLflow traces: hermes_otel is installed only by the OpenShell bridge.
+MLflow traces: hermes_otel is staged into HERMES_HOME by the seed-otel init
+container below, when ui.mlflowUrl is set. Unlike the sandboxed Hermes this
+pod is not behind OpenShell's egress proxy, so it posts to MLflow directly
+over the service CA and needs no hermes-mlflow-relay hop.
 */}}
 apiVersion: v1
 kind: ConfigMap
@@ -79,6 +82,56 @@ spec:
     requests:
       storage: {{ $h.plain.storageSize }}
 ---
+{{- if .Values.ui.mlflowUrl }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: hermes-plain
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: hermes-plain
+    app.kubernetes.io/part-of: water-plant
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+---
+{{/*
+seed-otel resolves the experiment id over MLflow's REST API, and MLflow runs
+--app-name=kubernetes-auth: every call becomes a SelfSubjectAccessReview
+against this (deliberately non-existent) API group. Without the grant the
+lookup 403s.
+
+`create` as well as `get`/`list`, because on a participant's first run nothing
+has written to the experiment yet and it does not exist.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: hermes-plain-mlflow
+  namespace: {{ $ns }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+rules:
+  - apiGroups: ["mlflow.kubeflow.org"]
+    resources: ["experiments"]
+    verbs: ["get", "list", "create", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: hermes-plain-mlflow
+  namespace: {{ $ns }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: hermes-plain-mlflow
+subjects:
+  - kind: ServiceAccount
+    name: hermes-plain
+    namespace: {{ $ns }}
+---
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -113,6 +166,9 @@ spec:
         runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
+      {{- if .Values.ui.mlflowUrl }}
+      serviceAccountName: hermes-plain
+      {{- end }}
       initContainers:
         # Regenerated every start so the config always matches the chart.
         - name: seed-config
@@ -180,6 +236,124 @@ spec:
           volumeMounts:
             - { name: data, mountPath: {{ $h.home | quote }} }
             - { name: config, mountPath: /config, readOnly: true }
+{{- if .Values.ui.mlflowUrl }}
+        {{/*
+        Stage hermes_otel into HERMES_HOME so the plain Hermes traces to
+        MLflow like the sandboxed one does.
+
+        Three things make this cheaper than it looks, all verified against a
+        running pod on cluster-pz7xk:
+
+        * hermes_otel is stdlib-only. It needs neither the `mlflow` package
+          nor the opentelemetry SDK — it posts OTLP over urllib — so nothing
+          has to be installed into site-packages and the image is untouched.
+        * HERMES_HOME is the PVC, so the plugin is staged once and survives
+          restarts.
+        * The plugin has no TLS options of its own, so MLflow's
+          service-signer certificate has to be trusted process-wide. Note
+          SSL_CERT_FILE *replaces* the trust store rather than adding to it:
+          pointing it at the service CA alone cost an outage, because Hermes
+          could then no longer verify the public certificate on the model
+          endpoint and every completion failed with "Connection error". The
+          bundle written below is the system roots plus the service CA.
+
+        The experiment id is resolved here rather than baked in: it does not
+        exist until something has written to the experiment, and the id — not
+        the name — is what the OTLP header takes.
+        */}}
+        - name: seed-otel
+          image: {{ $image }}
+          # Deliberately not `-e`: a tracing problem must not stop the agent
+          # from starting. Anything that fails here leaves no config.yaml
+          # behind, the plugin stays dormant, and Hermes runs untraced.
+          command: ["bash", "-uo", "pipefail", "-c"]
+          args:
+            - |
+              PLUGIN="$HERMES_HOME/plugins/hermes_otel"
+              if [ ! -f "$PLUGIN/__init__.py" ]; then
+                mkdir -p "$PLUGIN"
+                curl -fsSL -o /tmp/ho.tgz \
+                  "https://github.com/{{ $h.otel.repo }}/archive/{{ $h.otel.commit }}.tar.gz"
+                echo "{{ $h.otel.sha256 }}  /tmp/ho.tgz" | sha256sum -c -
+                tar -xzf /tmp/ho.tgz --strip-components=2 -C "$PLUGIN" \
+                  "hermes-otel-{{ $h.otel.commit }}/hermes_otel"
+                rm -f /tmp/ho.tgz
+              fi
+              # System roots first, then MLflow's service CA. Both, or
+              # Hermes can reach MLflow and nothing else.
+              cat /etc/pki/tls/certs/ca-bundle.crt /etc/mlflow-ca/service-ca.crt \
+                > "$HERMES_HOME/ca-bundle.crt"
+
+              TOKEN="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)"
+              EXP_ID="$(python3 - <<'PY'
+              import json, os, ssl, urllib.error, urllib.request
+              base = os.environ["MLFLOW_API_URL"].rstrip("/") + "/mlflow/api/2.0/mlflow"
+              ctx = ssl.create_default_context(cafile="/etc/mlflow-ca/service-ca.crt")
+              hdr = {
+                  "Authorization": "Bearer " + open(
+                      "/var/run/secrets/kubernetes.io/serviceaccount/token").read().strip(),
+                  "X-MLflow-Workspace": os.environ["NAMESPACE"],
+                  "Content-Type": "application/json",
+              }
+              def post(path, body):
+                  req = urllib.request.Request(
+                      base + path, data=json.dumps(body).encode(), headers=hdr, method="POST")
+                  return json.load(urllib.request.urlopen(req, timeout=20, context=ctx))
+              name = os.environ["MLFLOW_EXPERIMENT"]
+              try:
+                  req = urllib.request.Request(
+                      base + "/experiments/get-by-name?experiment_name=" + name, headers=hdr)
+                  print(json.load(urllib.request.urlopen(req, timeout=20, context=ctx))
+                        ["experiment"]["experiment_id"])
+              except urllib.error.HTTPError as exc:
+                  if exc.code in (401, 403):
+                      # No MLflow permission. Say which, rather than falling
+                      # through to create and reporting that failure instead.
+                      raise SystemExit(
+                          f"seed-otel: MLflow refused the lookup ({exc.code}); "
+                          "the pod's ServiceAccount needs get/list/create on "
+                          "experiments.mlflow.kubeflow.org")
+                  if exc.code != 404:
+                      raise
+                  # First run for this participant: nothing has written to the
+                  # experiment yet, so it does not exist.
+                  print(post("/experiments/create", {"name": name})["experiment_id"])
+              PY
+              )"
+              if [ -z "$EXP_ID" ]; then
+                echo "seed-otel: could not resolve the MLflow experiment; starting untraced" >&2
+                rm -f "$PLUGIN/config.yaml"
+                exit 0
+              fi
+              umask 077
+              cat > "$PLUGIN/config.yaml" <<EOF
+              enabled: true
+              force_flush_on_session_end: true
+              capture_sender_id: true
+              capture_conversation_history: true
+              backends:
+                - type: otlp
+                  name: mlflow
+                  endpoint: {{ printf "%s/v1/traces" .Values.ui.mlflowApiUrl | quote }}
+                  metrics: false
+                  logs: false
+                  headers:
+                    x-mlflow-experiment-id: "$EXP_ID"
+                    Authorization: "Bearer $TOKEN"
+                    X-MLflow-Workspace: "{{ $ns }}"
+              EOF
+          env:
+            - { name: HERMES_HOME,     value: {{ $h.home | quote }} }
+            - { name: NAMESPACE,       value: {{ $ns | quote }} }
+            - { name: MLFLOW_API_URL,  value: {{ .Values.ui.mlflowApiUrl | quote }} }
+            - { name: MLFLOW_EXPERIMENT, value: {{ .Values.ui.mlflowExperiment | default .Values.username | quote }} }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: data, mountPath: {{ $h.home | quote }} }
+            - { name: mlflow-ca, mountPath: /etc/mlflow-ca, readOnly: true }
+{{- end }}
       containers:
         - name: hermes
           image: {{ $image }}
@@ -199,12 +373,21 @@ spec:
             - { name: API_SERVER_ENABLED, value: "true" }
             - { name: API_SERVER_HOST,    value: 0.0.0.0 }
             - { name: API_SERVER_PORT,    value: {{ $h.port | quote }} }
+            {{- if .Values.ui.mlflowUrl }}
+            # hermes_otel exports through urllib and sets no CA of its own, so
+            # MLflow's openshift-service-serving-signer certificate has to be
+            # trusted process-wide or every export fails silently.
+            - { name: SSL_CERT_FILE, value: "{{ $h.home }}/ca-bundle.crt" }
+            {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: [ALL] }
           volumeMounts:
             - { name: data, mountPath: {{ $h.home | quote }} }
             - { name: reports, mountPath: /reports }
+            {{- if .Values.ui.mlflowUrl }}
+            - { name: mlflow-ca, mountPath: /etc/mlflow-ca, readOnly: true }
+            {{- end }}
           readinessProbe:
             httpGet: { path: /health, port: http }
             initialDelaySeconds: 20
@@ -234,6 +417,11 @@ spec:
         - name: config
           configMap:
             name: hermes-plain
+        {{- if .Values.ui.mlflowUrl }}
+        - name: mlflow-ca
+          configMap:
+            name: mlflow-service-ca
+        {{- end }}
 ---
 apiVersion: v1
 kind: Service

@@ -84,6 +84,15 @@ class Consolidation(unittest.TestCase):
                     self.assertNotIn(f'{user}-openshell.svc', json.dumps(d))
                     for subject in d.get('subjects', []):
                         if subject['kind'] == 'ServiceAccount':
+                            # Subjects bound in a tenant namespace belong to that tenant,
+                            # with exactly one exception: the shared attack/eval runner,
+                            # which writes every participant's cycle results and so is
+                            # bound into each namespace from the shared one. It is the
+                            # only cross-tenant identity in the lab, which is why it is
+                            # named here rather than allowed by pattern — anything else
+                            # reaching across namespaces should still fail this.
+                            if (subject['name'], subject.get('namespace')) == ('attack-eval-runner', 'agentops-shared'):
+                                continue
                             self.assertEqual(subject.get('namespace', ns), ns)
                 for app in (d for d in bootstrap if d['kind'] == 'Application'):
                     self.assertEqual(app['spec']['destination']['namespace'], ns)
