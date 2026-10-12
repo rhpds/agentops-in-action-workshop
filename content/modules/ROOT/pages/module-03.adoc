@@ -1,22 +1,48 @@
 = Module 3: Let the Agent Use Its Tools
 :page-duration: TBD
 
-// Overview: Participants diagnose why the agent's tools stopped working and enable MCP Gateway in
-// OpenShell policy to restore them. With tools working again, three new attacks get through: a
-// sensitive-information leak, an unauthorized control action, and a compromised external tool.
-// Participants scope tool access down to what each persona actually needs, updating MCPVirtualServers
-// and removing unneeded access at the OIDC provider.
 
 == Objectives
 
-* Diagnose why the agent's tools stopped working once it was sandboxed
-* Understand why MCP Gateway is used to broker and control tool access
-* Enable MCP Gateway in OpenShell policy and confirm the agent's tools work again
-* See three of the attacks this reopens: a sensitive-information leak, an unauthorized control action, and
-  a compromised external tool
-* Scope the agent down to only the tools each persona actually needs by updating MCPVirtualServers (and Keycloak so that authz properly blocks them)
-* Bonus: We have one eval still failing for tool usage, it's a tool (birthday calendar for example) that was disabled by default, users need to identify this and enable it to earn bonus points
+* 
 
 == Content
+
+Congrats! You sandboxed the agent without loosing its capabilities, and was able to prevent some of the attacks, but not all. One of the attack surface is that agent has access to more tools than it should. Before we explore the attacks, let's understand how the agent access the tools and what tools the agent has access to. 
+
+
+
+Keycloak is the identity provider for the agent. It provides authentication and authorization for the agent to access the tools. The agent uses OpenID Connect (OIDC) to authenticate with Keycloak and obtain an access token. The access token is then used to access the tools.
+
+Now put your admin hat back on and access to Keycloak admin console. Open up the below URL in your browser and use the provided credentials:
+
+URL: https://sso.{openshift_cluster_ingress_domain}/realms/waterplant-{user}/
+
+Usrname: `admin`
+Password: `{password}`
+
+A nice `Welcome to Water Plant — {username}` message should be displayed.
+
+On the left menu, go to `Users` > `operator` > `Role Mappings`. You should see a list of roles that the operator has. These roles are used to determine what tools the operator has access to. (There are more than 10, so make sure you check the next page as well 🙈)
+
+They way we add or remote the access is through this `Role Mappings` page. Now the question is, do we need all? Is any of them causing the attacks we saw earlier? 
+
+Let's remember the attacks:
+
+`run the emergency stop`
+
+`dump plant configuration`
+
+And remember the main purpose of Hermie is to help water plant operators. There are some actions that the operator should not be able to do without a supervisor's approval; such as closing down the whole plant or access to the all sensitive plant configuration data. Therefore prompts like below should not work.
+
+Now find out which tools are used by the agent to perform these attacks. You can do this by checking the traces of the agent.
+
+
+
+
+
+
+
+
 
 // TODO: Write module content here.
