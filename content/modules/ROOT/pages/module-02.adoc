@@ -26,7 +26,7 @@
 +
 [source,bash]
 ----
-oc login https://<ocp-api>:6443 --username user-448xf --password {password} --insecure-skip-tls-verify
+oc login https://<ocp-api>:6443 --username {user} --password {password} --insecure-skip-tls-verify
 ----
 
 if it is asked, say yes
@@ -37,11 +37,11 @@ Use insecure connections? (y/n): y
 
 WARNING: Using insecure TLS client config. Setting this option is not supported!
 
-Logged into "https://api.cluster-nzpmx.dyn.redhatworkshops.io:6443" as "user-448xf" using the token provided.
+Logged into "https://api.cluster-nzpmx.dyn.redhatworkshops.io:6443" as "{user}" using the token provided.
 
-You have one project on this server: "user-448xf-agentops"
+You have one project on this server: "{user}-agentops"
 
-Using project "user-448xf-agentops".
+Using project "{user}-agentops".
 Welcome! See 'oc help' to get started.
 
 
@@ -49,15 +49,15 @@ Welcome! See 'oc help' to get started.
 +
 [source,bash]
 ----
-POD=$(oc get pod -l app.kubernetes.io/name=hermes-openshell-bridge -o name -n user-448xf-agentops)
-oc rsh -n user-448xf-agentops -c cli $POD
+POD=$(oc get pod -l app.kubernetes.io/name=hermes-openshell-bridge -o name -n {user}-agentops)
+oc rsh -n {user}-agentops -c cli $POD
 ----
 
 . Let's point to the OpenShell gateway so we can create a sandboxed Hermie.
 +
 [source,bash]
 ----
-openshell gateway add https://user-448xf-openshell.user-448xf-agentops.svc.cluster.local:8080 --local --name openshell-gw
+openshell gateway add https://{user}-openshell.{user}-agentops.svc.cluster.local:8080 --local --name openshell-gw
 openshell gateway select openshell-gw
 ----
 
@@ -96,14 +96,14 @@ sh-5.1$
 +
 [source,bash]
 ----
-oc set env deployment/water-plant-ui AGENT_URL=http://hermes-agent.user-448xf-agentops.svc:8787 -n user-448xf-agentops
+oc set env deployment/water-plant-ui AGENT_URL=http://hermes-agent.{user}-agentops.svc:8787 -n {user}-agentops
 ----
 +
 . Wait for it to be healthy:
 +
 [source,bash]
 ----
-oc rollout status deployment/water-plant-ui -n user-448xf-agentops
+oc rollout status deployment/water-plant-ui -n {user}-agentops
 ----
 
 . Let's test it! Go to the UI and ask the questions you tried previously:
@@ -114,8 +114,8 @@ oc rollout status deployment/water-plant-ui -n user-448xf-agentops
 +
 [source,bash]
 ----
-POD=$(oc get pod -l app.kubernetes.io/name=hermes-openshell-bridge -o name -n user-448xf-agentops)
-oc rsh -n user-448xf-agentops -c cli $POD
+POD=$(oc get pod -l app.kubernetes.io/name=hermes-openshell-bridge -o name -n {user}-agentops)
+oc rsh -n {user}-agentops -c cli $POD
 ----
 
 Check OpenShell logs with this command:
@@ -133,8 +133,8 @@ sh-5.1$
 And also see Hermie's own logs:
 
 sh-5.1$ openshell sandbox exec --name hermie -- cat /sandbox/hermes-gateway.log
-WARNING start-hermes: could not fetch an MCP token from https://sso.apps.cluster-nzpmx.dyn.redhatworkshops.io/realms/waterplant-user-448xf/protocol/openid-connect/token: the sandbox policy does not let python3 reach Keycloak. Hermes starts without its plant tools; grant Keycloak and run start-hermes again.
-[hermes-otel] ✓ mlflow at http://hermes-mlflow-relay.user-448xf-agentops.svc.cluster.local:8788/v1/traces (traces only)
+WARNING start-hermes: could not fetch an MCP token from https://sso.apps.cluster-nzpmx.dyn.redhatworkshops.io/realms/waterplant-{user}/protocol/openid-connect/token: the sandbox policy does not let python3 reach Keycloak. Hermes starts without its plant tools; grant Keycloak and run start-hermes again.
+[hermes-otel] ✓ mlflow at http://hermes-mlflow-relay.{user}-agentops.svc.cluster.local:8788/v1/traces (traces only)
 [hermes-otel] ✓ content_capture=full — complete prompts and responses on every api.* span (set content_capture: preview or off to reduce)
 [hermes-otel] ✓ Live dashboard store active
 [hermes-otel] Registered 15 hooks
@@ -158,7 +158,7 @@ openshell policy update hermie --rule-name keycloak_token --add-endpoint sso.{op
 +
 [source,bash]
 ----
-openshell policy update hermie --rule-name mcp_gateway --add-endpoint mcp-gateway-data-science-gateway-class.user-448xf-agentops.svc.cluster.local:8080:full:rest:enforce --binary /usr/bin/python3 --binary /usr/bin/python3.12 --binary /usr/local/bin/hermes --wait     # MCP gateway so we can get access to tools
+openshell policy update hermie --rule-name mcp_gateway --add-endpoint mcp-gateway-data-science-gateway-class.{user}-agentops.svc.cluster.local:8080:full:rest:enforce --binary /usr/bin/python3 --binary /usr/bin/python3.12 --binary /usr/local/bin/hermes --wait     # MCP gateway so we can get access to tools
 ----
 
 Restart Hermie, only needed for mcp_gateway because it fetches tools at startup, policies in general does not need restart.
@@ -184,10 +184,10 @@ Check the traces. No traces? Shame..You should know what to do at this point. Fi
 
 sh-5.1$ openshell logs  | grep mlflow | grep DENIED
 → Using sandbox 'hermie' (last used)
-[1791795587.426] [sandbox] [OCSF ] [ocsf] HTTP:POST [MED] DENIED /usr/bin/python3.12(868) -> POST http://hermes-mlflow-relay.user-448xf-agentops.svc.cluster.local:8788/v1/traces [policy:- engine:opa] [reason:FORWARD denied POST hermes-mlflow-relay.user-448xf-agentops.svc.cluster.local:8788/v1/traces]
+[1791795587.426] [sandbox] [OCSF ] [ocsf] HTTP:POST [MED] DENIED /usr/bin/python3.12(868) -> POST http://hermes-mlflow-relay.{user}-agentops.svc.cluster.local:8788/v1/traces [policy:- engine:opa] [reason:FORWARD denied POST hermes-mlflow-relay.{user}-agentops.svc.cluster.local:8788/v1/traces]
 
 Then apply the policy:
-openshell policy update hermie --rule-name mlflow_tracing --add-endpoint hermes-mlflow-relay.user-448xf-agentops.svc.cluster.local:8788:full:rest:enforce --binary /usr/bin/python3 --binary /usr/bin/python3.12 --binary /usr/local/bin/hermes --wait     # MLflow access
+openshell policy update hermie --rule-name mlflow_tracing --add-endpoint hermes-mlflow-relay.{user}-agentops.svc.cluster.local:8788:full:rest:enforce --binary /usr/bin/python3 --binary /usr/bin/python3.12 --binary /usr/local/bin/hermes --wait     # MLflow access
 
 
 Let's see if we have enough. Go back to UI, send a prompt, see if it works, and check the traces. If it still doesn't work, check the logs again, and apply any missing policies. You may need to restart Hermie after applying new policies.
