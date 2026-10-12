@@ -1,0 +1,705 @@
+---
+# =============================================================================
+# QA automation check registry — agentops-in-action-workshop
+# =============================================================================
+#
+# The contract this implements is Publishing House's qa-automation contract:
+# healthcheck.yml proves the environment this project provisions came up
+# healthy; e2e.yml proves a participant can complete the lab unattended. Both
+# are served from the Showroom pod at /stream/qa/healthcheck and /stream/qa/e2e.
+#
+# This file is the registry both playbooks are written against. Every `id`
+# below appears verbatim as the `check_id` of a recorded finding, so a failure
+# line in the playbook output maps to exactly one entry here, with its
+# rationale and its remediation. Keep the two in step: adding a check to a
+# playbook without adding it here is how the rationale gets lost.
+#
+# severity:
+#   fail  the lab cannot be delivered in this state — playbook exits non-zero
+#   warn  recorded and printed, does not change the exit code
+#
+# scope:
+#   cluster  evaluated once per run, covers shared and cluster-scoped objects
+#   tenant   evaluated once per participant in scope
+#   module   e2e only — a step of the learner path, keyed to a content module
+# =============================================================================
+
+version: 1
+project: agentops-in-action-workshop
+playbooks:
+  healthcheck: qa-automation/healthcheck.yml
+  e2e: qa-automation/e2e.yml
+
+# -----------------------------------------------------------------------------
+# Identity
+#
+# The Showroom pod's own ServiceAccount is `edit` on its own namespace and
+# nothing else — verified on cluster-zbtjb, where
+# `oc auth can-i get applications.argoproj.io -n openshift-gitops
+#  --as=system:serviceaccount:user-4jnxn-showroom:showroom` returns `no`. Every
+# check below reads outside that namespace, so both playbooks need the
+# runtime-automation cluster-admin identity. CLU-RBAC-01 is the preflight that
+# says so in one line instead of letting 20 checks fail as permission errors.
+#
+# Required in the AgnosticV catalog item's common.yml:
+#
+#   ocp4_workload_showroom_runtime_automation_enable: true
+#   ocp4_workload_showroom_runtime_automation_cluster_admin: true
+#   ocp4_workload_showroom_openshift_api_url: "{{ openshift_api_url }}"
+#   ocp4_workload_showroom_openshift_api_token: "{{ openshift_cluster_admin_token }}"
+#
+# The first flag is what creates the /stream/qa/* endpoints at all; the rest
+# populate the runtime-automation-kubeconfig Secret the playbooks read into
+# `k8s_kubeconfig`. Run from a laptop with an admin kubeconfig instead and the
+# same playbooks work unchanged — that is how they were verified.
+# -----------------------------------------------------------------------------
+identity:
+  variable: k8s_kubeconfig
+  fallback: ambient kubeconfig / in-cluster ServiceAccount
+  preflight: CLU-RBAC-01
+
+# -----------------------------------------------------------------------------
+# Scope selection
+#
+# Tenant namespaces carry rhdp.redhat.com/lab=agentops-in-action and
+# rhdp.redhat.com/participant=<username>, so discovery is a label query rather
+# than a list anyone has to maintain. In the Showroom pod the default is "my
+# own tenant", read from /user_data/user_data.yml, which keeps the healthcheck
+# inside its 60-second budget. `-e hc_all_tenants=true` sweeps every tenant on
+# the cluster, which is the mode a QA engineer wants from a laptop.
+# -----------------------------------------------------------------------------
+scope:
+  tenant_label: rhdp.redhat.com/participant
+  lab_label: rhdp.redhat.com/lab=agentops-in-action
+  user_data: /user_data/user_data.yml
+  namespace_suffixes:
+    agentops: "-agentops"    # workloads, gateway, MCP servers, OpenShell
+    showroom: "-showroom"    # Showroom pod, where these playbooks run
+
+# -----------------------------------------------------------------------------
+# Expectations the checks are written against, all confirmed against live
+# clusters (cluster-zbtjb at ArgoCD revision 092a66e, then cluster-vjl48).
+# Override with -e on the command line when an event build changes one.
+# -----------------------------------------------------------------------------
+expected:
+  mcp_servers: [control-mcp, maintenance-mcp, telemetry-mcp]
+  mcp_tool_total: 18          # control_ 7 + maintenance_ 5 + telemetry_ 6
+  gateway_name: mcp-gateway
+  shared_namespace: agentops-shared
+  argocd_namespace: openshift-gitops
+  keycloak_namespace: keycloak
+  dsc_name: default-dsc
+  dsc_components:             # the six the lab actually depends on
+    - AIGatewayReady
+    - MLflowOperatorReady
+    - MCPLifecycleOperatorReady
+    - TrustyAIReady
+    - KserveReady
+    - DashboardReady
+  operators:                  # namespace + the package prefix expected in it
+    - { namespace: redhat-ods-operator, prefix: rhods-operator }
+    - { namespace: agent-sandbox-system, prefix: agent-sandbox-operator }
+    - { namespace: kuadrant-system, prefix: rhcl-operator }
+    - { namespace: kuadrant-system, prefix: mcp-gateway }
+    - { namespace: kuadrant-system, prefix: authorino-operator }
+    - { namespace: kuadrant-system, prefix: limitador-operator }
+  policy_baseline:
+    configmaps: [openshell-sandbox-policy]
+    authpolicies: [mcp-auth-policy, mcp-authz-policy]
+    networkpolicies: [allow-ingress-within-namespace, egress-baseline]
+
+# =============================================================================
+# healthcheck.yml
+# =============================================================================
+checks:
+
+  # --- Preflight ------------------------------------------------------------
+
+  - id: CLU-RBAC-01
+    scope: cluster
+    severity: fail
+    title: Identity can read ArgoCD Applications
+    asserts: >-
+      A list of Application resources in openshift-gitops returns without a
+      permission error.
+    rationale: >-
+      Every ArgoCD, shared-service and cross-tenant check below reads outside
+      the Showroom pod's own namespace. Without the runtime-automation
+      cluster-admin identity those all fail as 403s, which reads as a broken
+      cluster rather than a missing catalog-item flag.
+    remediation: >-
+      Set the four ocp4_workload_showroom_runtime_automation_* variables listed
+      under `identity` above in the AgnosticV catalog item, then reprovision.
+
+  # --- Cluster and shared services -----------------------------------------
+
+  - id: CLU-NS-01
+    scope: cluster
+    severity: fail
+    title: Shared namespace is Active
+    asserts: Namespace agentops-shared exists with status.phase == Active.
+    rationale: Holds the EvalHub instance every participant's scorecards live in.
+    remediation: Sync the `bootstrap` Application.
+
+  - id: CLU-ARGO-01
+    scope: cluster
+    severity: fail
+    title: bootstrap Application is Synced and Healthy
+    asserts: Application `bootstrap` has sync.status Synced and health.status Healthy.
+    rationale: >-
+      bootstrap-infra installs every operator, the DataScienceCluster, the
+      shared services and the AdminNetworkPolicy. Nothing else in this file can
+      be true if it is not.
+    remediation: "`oc -n openshift-gitops patch application bootstrap --type merge -p '{\"operation\":{\"sync\":{}}}'`"
+
+  - id: CLU-OPR-01
+    scope: cluster
+    severity: fail
+    title: Pinned operator CSVs have Succeeded
+    asserts: >-
+      In each namespace under expected.operators, a CSV whose name starts
+      with the given package prefix has status.phase == Succeeded.
+    rationale: >-
+      Checked by package prefix, not by pinned version, and deliberately not by
+      Subscription state. bootstrap-infra pins every startingCSV with
+      installPlanApproval Manual, so a catalog refresh leaves the Subscription
+      reporting UpgradePending forever — on cluster-zbtjb the rhods-operator
+      Subscription sits at UpgradePending toward 3.5.1 while the pinned
+      rhods-operator.3.5.0 CSV is Succeeded and serving. Asserting on the
+      Subscription would red-flag that intended state on every run.
+    remediation: Check the InstallPlan approver Job in redhat-ods-operator.
+
+  - id: CLU-DSC-01
+    scope: cluster
+    severity: fail
+    title: DataScienceCluster is Ready
+    asserts: DataScienceCluster default-dsc has a Ready condition with status True.
+    rationale: RHOAI is the platform every lab component is served from.
+    remediation: "`oc describe datasciencecluster default-dsc`"
+
+  - id: CLU-DSC-02
+    scope: cluster
+    severity: fail
+    title: Required RHOAI components are Ready
+    asserts: >-
+      Each condition named in expected.dsc_components has status True on
+      default-dsc.
+    rationale: >-
+      Only the six components the lab uses. The DSC also reports a dozen
+      conditions False with reason Removed — those are the components
+      bootstrap-infra deliberately turns off to keep footprint down on a
+      30-tenant cluster, and a naive "all conditions True" check would fail on
+      a correct cluster.
+    remediation: Check the component's ManagementState in bootstrap-infra values.yaml.
+
+  - id: CLU-MLF-01
+    scope: cluster
+    severity: fail
+    title: MLflow is Available
+    asserts: The MLflow CR reports Available True.
+    rationale: >-
+      MLflow is the evidence layer the whole lab is built on — every module
+      asks the participant to confirm an outcome in a trace.
+    remediation: "`oc -n redhat-ods-applications describe mlflow mlflow`"
+
+  - id: CLU-EVH-01
+    scope: cluster
+    severity: fail
+    title: EvalHub is Ready
+    asserts: EvalHub agentops-evalhub in agentops-shared has phase Ready.
+    rationale: >-
+      Holds the baseline scorecard captured early in the lab and compared
+      against at the end. It is the one piece of lab state that must survive a
+      pod restart.
+    remediation: "`oc -n agentops-shared describe evalhub agentops-evalhub`"
+
+  - id: CLU-EVH-02
+    scope: cluster
+    severity: fail
+    title: EvalHub route answers
+    asserts: >-
+      The agentops-evalhub route returns an HTTP status in 200, 302, 401, 403.
+    rationale: >-
+      Proves the route, service and TLS path are wired. 401 is the expected
+      answer from an unauthenticated probe and is a pass, not a failure.
+    remediation: Check the route and the EvalHub Deployment's endpoints.
+
+  - id: CLU-ANP-01
+    scope: cluster
+    severity: fail
+    title: MCP servers are reachable only through a gateway
+    asserts: AdminNetworkPolicy mcp-servers-gateway-only exists.
+    rationale: >-
+      This is the control that makes the MCP Gateway the only path to a tool,
+      which is what modules 3 and 6 demonstrate. Its absence does not break any
+      pod, so nothing else in this file would notice it was gone.
+    remediation: Sync the `bootstrap` Application.
+
+  - id: CLU-KC-01
+    scope: cluster
+    severity: fail
+    title: Keycloak is Ready
+    asserts: Keycloak `keycloak` in namespace keycloak reports Ready True.
+    rationale: Issues the tokens the gateway's identity-aware authorization validates.
+    remediation: "`oc -n keycloak describe keycloak keycloak`"
+
+  # --- Per tenant -----------------------------------------------------------
+
+  - id: TEN-NS-01
+    scope: tenant
+    severity: fail
+    title: Tenant namespaces are Active
+    asserts: "<user>-agentops and <user>-showroom both exist with phase Active."
+    rationale: One holds the workloads, the other the Showroom the participant works in.
+    remediation: Sync the bootstrap-tenant-<user> Application.
+
+  - id: TEN-ARGO-01
+    scope: tenant
+    severity: fail
+    title: bootstrap-tenant Application is Synced and Healthy
+    asserts: Application bootstrap-tenant-<user> is Synced and Healthy.
+    rationale: Creates the namespace, quota, RBAC and the two per-participant Applications.
+    remediation: "`oc -n openshift-gitops patch application bootstrap-tenant-<user> --type merge -p '{\"operation\":{\"sync\":{}}}'`"
+
+  - id: TEN-ARGO-02
+    scope: tenant
+    severity: fail
+    title: platform Application is Synced and Healthy
+    asserts: Application <user>-platform is Synced and Healthy.
+    rationale: >-
+      Auto-sync with selfHeal — the agent, gateway, MCP servers, plant-api and
+      UI. Anything other than Synced/Healthy here means self-heal is losing.
+    remediation: "`oc -n openshift-gitops describe application <user>-platform`"
+
+  - id: TEN-ARGO-03
+    scope: tenant
+    severity: fail
+    title: openshell Application is Synced and Healthy
+    asserts: Application <user>-openshell is Synced and Healthy.
+    rationale: The OpenShell gateway and the bridge the participant drives in module 2.
+    remediation: "`oc -n openshift-gitops describe application <user>-openshell`"
+
+  - id: TEN-ARGO-04
+    scope: tenant
+    severity: fail
+    title: policy Application exists and is Healthy
+    asserts: Application <user>-policy exists and health.status is Healthy.
+    rationale: >-
+      Sync status is deliberately NOT asserted. The policy Application is
+      manual-sync with no selfHeal and no prune, by design — OutOfSync is the
+      signal that a participant has started working, and asserting Synced would
+      fail the moment the lab is used. Whether its content was ever applied is
+      TEN-POL-01's job.
+    remediation: "`oc -n openshift-gitops describe application <user>-policy`"
+
+  - id: TEN-POL-01
+    scope: tenant
+    severity: fail
+    title: Baseline policy resources exist
+    asserts: >-
+      Every object in expected.policy_baseline exists in <user>-agentops — the
+      openshell-sandbox-policy ConfigMap, both AuthPolicies, and both baseline
+      NetworkPolicies.
+    rationale: >-
+      Checked directly against the API rather than through the Application's
+      sync status, because the Application is manual-sync and its status cannot
+      distinguish "never applied" from "participant edited it". The baseline is
+      what the later modules tighten; without it there is nothing to tighten
+      and the lab has no starting state. Observed missing on every tenant of
+      both clusters built so far (three on cluster-zbtjb, two on
+      cluster-vjl48), each with the Application reporting
+      operationState: NEVER SYNCED. Nothing in provisioning syncs it, and
+      because the Application is manual-sync by design nothing ever will
+      without an explicit step.
+    remediation: >-
+      Sync once at provisioning time:
+      `oc -n openshift-gitops patch application <user>-policy --type merge
+      -p '{"operation":{"sync":{"syncStrategy":{"hook":{}}}}}'`.
+      syncStrategy.hook matters — it runs the PostSync Job that restarts the
+      gateway and the agent.
+
+      Verified on cluster-vjl48: syncing user-2bbzt-policy applied all five
+      objects, the PostSync Job completed, TEN-POL-01 flipped to pass, and e2e
+      module 1 still passed afterwards. user-z4x55 was left unsynced as a
+      control and still fails. Note the one side effect — the new NetworkPolicy
+      makes the MCPServerRegistration status unreadable from outside the
+      namespace; see TEN-MCP-02.
+
+  - id: TEN-WL-01
+    scope: tenant
+    severity: fail
+    title: All Deployments are at full replicas
+    asserts: >-
+      Every Deployment in <user>-agentops has status.readyReplicas equal to
+      spec.replicas.
+    rationale: Catches a crashlooping or unschedulable workload in one check.
+    remediation: "`oc -n <user>-agentops get deploy`"
+
+  - id: TEN-WL-02
+    scope: tenant
+    severity: fail
+    title: OpenShell StatefulSet is ready
+    asserts: StatefulSet <user>-openshell has readyReplicas equal to spec.replicas.
+    rationale: >-
+      The OpenShell gateway. Module 2 cannot start without it, and it is a
+      StatefulSet so TEN-WL-01 does not cover it.
+    remediation: "`oc -n <user>-agentops describe statefulset <user>-openshell`"
+
+  - id: TEN-WL-03
+    scope: tenant
+    severity: fail
+    title: No pod is unhealthy
+    asserts: >-
+      Every pod in <user>-agentops is in phase Running or Succeeded with all
+      containers ready, and no container reports a CrashLoopBackOff waiting
+      reason.
+    rationale: Catches a partially-ready pod that still satisfies its Deployment.
+    remediation: "`oc -n <user>-agentops get pods`"
+
+  - id: TEN-MCP-01
+    scope: tenant
+    severity: fail
+    title: MCP servers are Accepted
+    asserts: >-
+      Each MCPServer in expected.mcp_servers has an Accepted condition True.
+    rationale: >-
+      Accepted, not Ready, and that is not a weakened check. CLU-ANP-01's
+      AdminNetworkPolicy denies port 8080 to everything except the gateway,
+      including the MCP lifecycle operator's own protocol handshake — so a
+      correctly-secured MCP server always reports
+      Ready=False/MCPEndpointUnavailable. Confirmed on all nine MCPServer CRs
+      on cluster-zbtjb. TEN-MCP-02 is what actually proves the servers serve.
+    remediation: "`oc -n <user>-agentops describe mcpserver <name>`"
+
+  - id: TEN-MCP-02
+    scope: tenant
+    severity: fail, downgraded to warn on the signature described below
+    title: Gateway federates the expected tool set
+    asserts: >-
+      All three MCPServerRegistrations report Ready True, and their
+      status.discoveredTools sum to expected.mcp_tool_total.
+    rationale: >-
+      The registration is written by the broker after it has completed a real
+      MCP handshake and enumerated tools, so this is the functional proof that
+      the servers are up, the gateway reached them, and the agent will find its
+      tools. A short count means a server came up but exposed less than it
+      should.
+
+      One exception, and it is not a weakening. Once TEN-POL-01's baseline is
+      applied, the allow-ingress-within-namespace NetworkPolicy permits ingress
+      only from the same namespace and from the OpenShift ingress namespaces.
+      The mcp-gateway-controller runs in kuadrant-system, so its reconcile
+      probe to mcp-gateway.<ns>.svc:8080/status times out and all three
+      registrations flip to Ready=False/NotReady with discoveredTools unset —
+      while the data plane keeps working, because the agent reaches Envoy and
+      Envoy reaches the MCP servers entirely in-namespace. Verified on
+      cluster-vjl48: registrations read 0/18 while e2e module 1 still completed
+      with 3 tool calls and a correct pump-4 answer. When that exact signature
+      is present (baseline NetworkPolicy exists AND every registration is
+      NotReady with a "failed to send request" message) the check reports warn
+      instead of fail, because failing it would red-flag every correctly
+      provisioned tenant. TEN-AGT-01 and e2e module 1 are what cover the data
+      plane in that state.
+    remediation: >-
+      For a genuine short count: `oc -n <user>-agentops get
+      mcpserverregistrations`. For the warn case, fix the NetworkPolicy rather
+      than this check — add a namespaceSelector for kuadrant-system to the
+      ingress rules in tenant-policy/templates/networkpolicy.yaml, so the
+      controller can reach the broker. Once that lands the signature stops
+      matching and the check hard-fails again on its own, with no edit here.
+
+  - id: TEN-GW-01
+    scope: tenant
+    severity: fail
+    title: MCP Gateway is Programmed
+    asserts: Gateway mcp-gateway in <user>-agentops has a Programmed condition True.
+    rationale: Envoy has accepted the listener configuration and can route tool calls.
+    remediation: "`oc -n <user>-agentops describe gateway mcp-gateway`"
+
+  - id: TEN-BRG-01
+    scope: tenant
+    severity: fail
+    title: Bridge reached the gateway and created the MLflow experiment
+    asserts: >-
+      The hermes-openshell-bridge supervisor log contains a "gateway ready: N
+      tools" line and an "MLflow experiment <user> is id" line.
+    rationale: >-
+      Two integrations that no resource status covers — the bridge's own
+      federation wait and its per-participant MLflow experiment. The log line
+      "waiting for the participant to start Hermes in sandbox hermie" is the
+      correct provisioned state and is not a failure: the agent is unsandboxed
+      at baseline and the participant sandboxes it in module 2.
+    remediation: "`oc -n <user>-agentops logs deploy/hermes-openshell-bridge -c supervisor`"
+
+  - id: TEN-SEC-01
+    scope: tenant
+    severity: fail
+    title: Agent credentials are present
+    asserts: >-
+      Secret hermes-env in <user>-agentops has non-empty MODEL_API_KEY and
+      API_SERVER_KEY.
+    rationale: >-
+      No chart creates this Secret — tenant provisioning supplies it. Without
+      it the agent cannot start, and the failure surfaces as an unexplained
+      CrashLoopBackOff.
+    remediation: Check ocp4_workload_gitops_bootstrap_helm_values in the tenant catalog item.
+
+  - id: TEN-MOD-01
+    scope: tenant
+    severity: fail
+    title: Configured model is one the tenant's key may use
+    asserts: >-
+      MODEL_DEFAULT, read from the agent workload's own env, appears in the id
+      list returned by GET {MODEL_BASE_URL}/models using this tenant's
+      MODEL_API_KEY.
+    rationale: >-
+      The single highest-value check in this file. The MaaS virtual key is
+      minted per participant and scoped to a fixed model list, while the model
+      name is set in chart values — two places that drift independently, and
+      nothing in Kubernetes compares them. When they disagree every prompt in
+      the lab returns HTTP 401 from MaaS while all 10 pods stay green, every
+      ArgoCD Application stays Synced and Healthy, and no other check in this
+      file notices. Exactly that was live on all three tenants on
+      cluster-zbtjb at revision 092a66e — values said qwen3-235b-a22b, the key
+      allowed only qwen3-235b. The virtual key also carries a 7-day TTL, so
+      this check doubles as the expiry alarm. Since fixed: agnosticv master
+      now mints keys for qwen3-235b-a22b, and the check passes on
+      cluster-vjl48. Kept because the two sides can drift apart again the next
+      time either one moves.
+    remediation: >-
+      Align agent.litellm.model (tenant-platform) and model.model
+      (tenant-openshell) with litellm_available_models for the tenant, or
+      remint the key against the configured model.
+
+  - id: TEN-AGT-01
+    scope: tenant
+    severity: fail
+    title: Baseline agent is serving
+    asserts: >-
+      hermes-plain answers GET /health with 200, and GET /v1/models with 200
+      when presented the API_SERVER_KEY bearer.
+    rationale: >-
+      The unsandboxed agent is what the console talks to at baseline, before
+      the participant moves it into a sandbox. A cheap liveness and auth check;
+      e2e is what actually puts a prompt through it.
+    remediation: "`oc -n <user>-agentops logs deploy/hermes-plain -c hermes`"
+
+  - id: TEN-UI-01
+    scope: tenant
+    severity: fail
+    title: Operator console is reachable and points at an existing agent
+    asserts: >-
+      The water-plant-ui route returns 200, and the Service named in the
+      Deployment's AGENT_URL exists in the namespace.
+    rationale: >-
+      The console is the lab's front door. AGENT_URL is also the one setting a
+      participant rewrites by hand in module 2, so a dangling value is a
+      plausible state to find a reset environment in.
+    remediation: "`oc -n <user>-agentops get deploy water-plant-ui -o yaml`"
+
+  - id: TEN-KC-01
+    scope: tenant
+    severity: fail
+    title: Participant realm answers OIDC discovery
+    asserts: >-
+      GET https://<keycloak>/realms/waterplant-<user>/.well-known/openid-configuration
+      returns 200.
+    rationale: >-
+      Proves the KeycloakRealmImport actually imported, which its CR status
+      does not reliably report. The gateway's authorization and the agent's own
+      token refresh both depend on this realm.
+    remediation: "`oc -n keycloak get keycloakrealmimport waterplant-<user> -o yaml`"
+
+  - id: TEN-SR-01
+    scope: tenant
+    severity: fail
+    title: Showroom is reachable
+    asserts: The showroom route in <user>-showroom returns 200.
+    rationale: The lab instructions themselves.
+    remediation: "`oc -n <user>-showroom get pods`"
+
+  - id: TEN-QTA-01
+    scope: tenant
+    severity: warn
+    title: Quota has headroom
+    asserts: >-
+      ResourceQuota agentops-participant-quota exists and pods used is below
+      pods hard.
+    rationale: >-
+      Warn, not fail. A tenant at its pod ceiling still runs, but module 2
+      creates a sandbox and the participant will hit a confusing scheduling
+      failure rather than a quota message.
+    remediation: Raise quota.maxPods in bootstrap-tenant values.
+
+# =============================================================================
+# e2e.yml — the learner path, keyed to content/modules/ROOT/pages/
+#
+# Ordered as the participant walks it, and fails on the first broken step with
+# the module in the message. Steps that need human judgement (reading a trace,
+# comparing scorecards) are proven by their observable side effect instead.
+#
+# `implemented` says whether the step exists in e2e.yml today:
+#
+#   module 1    implemented and verified against a live tenant
+#   modules 2+  designed here, scaffolded in e2e.yml, not yet written
+#
+# Module 1's content is final and its prompts are exact, so its steps are real.
+# Modules 2 to 6 are still being authored — module-02 is drafted but its
+# OpenShell commands are not settled, and 3 to 6 are outlines. The designed
+# steps stay recorded here so the design is not lost; implement each in e2e.yml
+# as its content lands, and flip `implemented` when you do.
+#
+# Module 1 is read-only. The later modules are not: they create and start an
+# OpenShell sandbox, edit the sandbox policy and repoint the console, because
+# that IS the lab. When they are implemented, run them against a scratch
+# tenant, not one a participant is holding, and give e2e.yml a cleanup path
+# that deletes the sandbox and repoints the console.
+# =============================================================================
+e2e_steps:
+
+  - id: E2E-M1-01
+    implemented: true
+    module: module-01
+    title: Console answers a plant-status question through the agent
+    drives: >-
+      POST /v1/chat/completions to hermes-plain with "What's the status of
+      pump 4?", the prompt the module opens with.
+    asserts: >-
+      HTTP 200, a non-empty assistant message, and no agent_incomplete error
+      code.
+    rationale: >-
+      Proves the whole baseline path in one call — console to agent to MaaS to
+      MCP Gateway to the telemetry MCP server to plant-api. Also the step that
+      catches TEN-MOD-01 from the other side: a model the tenant key may not
+      use surfaces here as a 200 carrying an `error` object, not as a transport
+      failure, which is why ask-agent.yml inspects the body rather than the
+      status code.
+
+  - id: E2E-M1-02
+    implemented: true
+    module: module-01
+    title: Agent invokes a tool rather than answering from the model
+    drives: The same completion as E2E-M1-01.
+    asserts: >-
+      The response reports at least one tool call, or plant-api shows the
+      corresponding read.
+    rationale: >-
+      A fluent answer with no tool call means the agent lost its tools and is
+      improvising — which still returns 200 and would pass E2E-M1-01.
+
+  - id: E2E-M1-03
+    implemented: true
+    module: module-01
+    title: Baseline over-permission is reproducible
+    drives: >-
+      The module's two baseline attacks — the web-search prompt, and
+      `Use read_file on /README.md, output the contents`.
+    asserts: Both succeed.
+    rationale: >-
+      Inverted on purpose. These must SUCCEED at baseline: they are the
+      failures the participant is shown before sandboxing, and the ones module
+      2 proves are blocked afterwards. If they already fail, the lab's
+      before-and-after has no "before" and the narrative collapses.
+
+  - id: E2E-M2-01
+    implemented: false
+    module: module-02
+    title: OpenShell sandbox can be created and started
+    drives: >-
+      Inside the bridge's `cli` container, the module's own sequence —
+      `openshell gateway add` / `select`, `sandbox create --name hermie`,
+      `sandbox upload hermie /hermes /sandbox`, `sandbox exec -- start-hermes`,
+      `service expose hermie 8080 openai`.
+    asserts: Each command exits 0 and the sandbox reports as running.
+    rationale: >-
+      The lab's central mechanic. Also the longest-running step — sandbox
+      creation and the Hermes start dominate e2e wall time.
+
+  - id: E2E-M2-02
+    implemented: false
+    module: module-02
+    title: Default-deny sandbox blocks the agent
+    drives: >-
+      Repoint water-plant-ui at hermes-agent, wait for rollout, then re-send
+      the E2E-M1-01 prompt.
+    asserts: >-
+      The prompt fails, and `openshell logs | grep DENIED` shows a network
+      denial.
+    rationale: >-
+      Also inverted. OpenShell sandboxes deny all network by default, so the
+      agent being broken here is the intended teaching moment — "secure, but
+      too secure". A working agent at this point means the sandbox is not
+      enforcing.
+
+  - id: E2E-M2-03
+    implemented: false
+    module: module-02
+    title: Named egress policies restore the agent
+    drives: >-
+      The module's four `openshell policy update hermie --rule-name ...`
+      commands — keycloak_token, mcp_gateway, model_endpoint, mlflow_tracing —
+      then restart Hermes and re-send the prompt.
+    asserts: >-
+      The prompt now succeeds, and the earlier DENIED lines stop appearing for
+      those endpoints.
+    rationale: >-
+      The payoff: policy changed, agent restored, nothing rebuilt or
+      redeployed. Proves each of the four endpoints the agent genuinely needs
+      is reachable and correctly named for this cluster's domain.
+
+  - id: E2E-M2-04
+    implemented: false
+    module: module-02
+    title: Sandboxing blocked the baseline attacks
+    drives: Re-run the two E2E-M1-03 attacks against the sandboxed agent.
+    asserts: Both now fail.
+    rationale: >-
+      Closes the loop E2E-M1-03 opened, and is the lab's core claim: the same
+      agent, unmodified, with the attacks blocked and the workflow intact.
+
+  - id: E2E-M2-05
+    implemented: false
+    module: module-02
+    title: Traces reach MLflow
+    drives: Query the MLflow experiment named for the tenant.
+    asserts: The experiment exists and has gained runs since E2E-M2-03.
+    rationale: >-
+      The mlflow_tracing policy rule is only provably correct if spans actually
+      land. Participants are told to check the traces at this point, so a
+      silent trace drop is a visible lab failure.
+
+  # Modules 3 to 6 are 23-50 line outlines with no participant-facing commands
+  # yet, so there is nothing to design against beyond their titles. One
+  # placeholder each, so the gap is enumerated rather than implied.
+
+  - id: E2E-M3-01
+    implemented: false
+    module: module-03
+    title: Let the agent use its tools
+    drives: Content pending.
+    asserts: Content pending.
+    rationale: Outline only — no participant-facing commands to script yet.
+
+  - id: E2E-M4-01
+    implemented: false
+    module: module-04
+    title: Let the agent write files
+    drives: Content pending.
+    asserts: Content pending.
+    rationale: Outline only — no participant-facing commands to script yet.
+
+  - id: E2E-M5-01
+    implemented: false
+    module: module-05
+    title: Let the agent reach the docs website
+    drives: Content pending.
+    asserts: Content pending.
+    rationale: Outline only — no participant-facing commands to script yet.
+
+  - id: E2E-M6-01
+    implemented: false
+    module: module-06
+    title: Guard against a compromised account
+    drives: Content pending.
+    asserts: Content pending.
+    rationale: Outline only — no participant-facing commands to script yet.
