@@ -18,7 +18,22 @@ image:
   namespace: rh-aiservices-bu
   plantApi:
     repository: plant-api
-    tag: latest
+    # 0.2.0 seeds every pump healthy — pump 4 at wear 0.09 rather than 0.72 —
+    # so the console opens on PLANT STATUS: OK instead of a red CRITICAL
+    # caused by a condition that was always there. It also adds
+    # POST /emergency-shutdown/clear.
+    #
+    # That endpoint is why this matters beyond cosmetics: shutdown_active was
+    # a one-way latch, clearable only by /reset, which reseeds the maintenance
+    # store and takes the participant's work orders with it. With the latch
+    # set the intake controller stops filling and the reservoir drains to
+    # zero. On cluster-pz7xk an unattended attack did exactly that, twice.
+    #
+    # Pinned rather than :latest, and not only for provenance. An overwritten
+    # tag leaves the manifest unchanged, so ArgoCD sees nothing to sync and
+    # the old image keeps running until somebody restarts the Deployment by
+    # hand — which is a step nobody remembers. A version bump rolls itself.
+    tag: "0.2.0"
   # Three images now, one per MCP server — each has its own package,
   # Containerfile, tests and entrypoint upstream. They share a tag.
   mcpTag: latest
