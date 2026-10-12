@@ -114,6 +114,19 @@ Two things the script exists to get right:
 `ATTACK_INTERVAL_MAX_S` default to 300/600; drop them to 60/90 to watch the
 scheduler without waiting.
 
+### Dismissing notifications
+
+Every toast carries a **×**. Clicking the body still pins — an attack that got
+through is the one someone wants to read twice, and it tends to arrive while
+they are looking elsewhere — so dismissal is the button, and reading a result
+can never destroy it by accident. **Escape** clears all of them at once,
+except while the composer has focus, where Escape belongs to the text field.
+
+The × beats the pin deliberately. The eval scorecard pins itself on arrival,
+and pinning also cancels the dismiss timer, so before this it could not be
+closed at all: clicking it only unpinned it, and you then waited out the
+timer.
+
 ### Resetting the plant
 
 The console footer has a **Reset plant** button (`POST /api/plant/reset`). It
@@ -128,6 +141,62 @@ immediately beforehand and cleanup restores to *that*, so the measurement is
 already a clean delta from whatever was there. What the flag buys is a
 byte-identical starting point, which matters for a reproducible demo and not
 much else — turn it on for one.
+
+### Where the definitions live
+
+**This repo, and only this repo:**
+`automation/gitops/tenant-platform/files/attack-eval-defs/`. They are rendered
+into the `water-plant-ui-probe-defs` ConfigMap and mounted at
+`/config/probe-defs`. The console image ships **no** definitions — it is a
+runtime for them. `find` over a running container returns zero YAML under
+`waterplant_ui/`.
+
+So editing a prompt is: change the YAML here, ArgoCD delivers it, restart the
+console. No image rebuild. Demonstrated end to end on cluster-pz7xk.
+
+An earlier version of this kept a fallback copy inside the image. That is what
+the split was supposed to remove, and the two sets had already drifted — the
+workshop copies still carried `assertion:` blocks against OpenTelemetry spans
+no harness emits, while the console ran `goal:` blocks, and the same prompt
+fix had to be applied twice in one afternoon. The lab repo now holds only
+things that get built.
+
+Consequences worth knowing:
+
+* **An unmounted console has no attacks or evals**, and that must not look
+  like "everything is disabled" — identical on screen, unrelated causes.
+  `loader.load_problem()` names the fault, `/api/probes` returns it as
+  `problem`, and the console raises it as a notification.
+* **The unit tests carry their own definitions** (`FIXTURE_CASES` in
+  `tests/test_probes.py`) rather than loading the shipped set. That is the
+  right way round: a unit test should not fail because a lab author reworded
+  an attack prompt.
+* **The shipped set is validated here instead**, by
+  `automation/tests/test_attack_eval_defs.py` — goal types the console can
+  actually dispatch, regexes that compile, canary names that match across
+  files, a `disabled_reason` on anything switched off, and files filed where
+  the chart's globs will find them.
+
+Why `tenant-platform` and not `bootstrap-infra`, where they used to sit: the
+console is per-participant, and Helm's `.Files.Glob` cannot read outside its
+own chart, so the ConfigMap has to come from the chart that deploys it.
+
+Two traps, both hit while wiring this up:
+
+* **`.Files.Glob` is `filepath.Match`** — no brace alternation, no `**`. One
+  range per directory; `"{attacks,evals}/*.yaml"` silently renders an empty
+  ConfigMap.
+* **A ConfigMap mount is not a plain directory.** The real files sit in a
+  hidden `..2026_..` directory with a `..data` symlink and one symlink per key
+  beside it, so a plain `rglob` returns every definition *twice* — the suite
+  reported 14 attacks and 12 evals, and would have run and scored each one
+  twice per sweep. `loader._yaml_files` skips dot-dot components.
+
+The `attack-eval-runner/` scaffold in `bootstrap-infra` is now orphaned: it is
+`enabled: false`, and the defs it globbed have moved. Left in place for its
+README, which documents the shared-runner contract. If it is ever revived its
+`.Files.Glob` paths need repointing, or it will mount an empty ConfigMap and
+say nothing about it.
 
 ### Where results are recorded
 

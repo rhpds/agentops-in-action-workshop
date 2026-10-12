@@ -284,7 +284,14 @@ sharedServices:
 # participant workspace scoping already exists.
 # ---------------------------------------------------------------------------
 attackEvalRunner:
-  enabled: true
+  # Disabled: the attack/eval engine now runs inside each participant's
+  # console (waterplant-ui, probes/), which needs no Deployment here, no
+  # cross-namespace RBAC and no leader election.
+  #
+  # Leaving this true would deploy files/attack-eval-runner/, where every
+  # function body is still `raise NotImplementedError` — a CrashLoopBackOff in
+  # agentops-shared on the first sync, for a component nothing reads.
+  enabled: false
   # Any image with python3. The runner and its definitions are mounted from
   # ConfigMaps, so this is a runtime, not a build of the runner itself.
   # PINNED, like every other image in this chart.

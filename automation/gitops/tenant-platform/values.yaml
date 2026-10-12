@@ -24,10 +24,19 @@ image:
   mcpTag: latest
   ui:
     repository: waterplant-ui
-    # 0.1.1 hands Hermes its conversation by X-Hermes-Session-Id instead of
-    # replaying the on-screen transcript, which had the model narrating tool
-    # calls it never made (agent repo, ui/src/waterplant_ui/harness.py).
-    tag: "0.1.1"
+    # 0.2.0 is the single-screen console: the plant and the chat pane side by
+    # side rather than stacked, and the attack/eval engine (probes/) with its
+    # toasts, Run-attack / Run-evals / Reset-plant controls.
+    #
+    # Bumped rather than overwriting 0.1.1 on purpose. Both tags are pulled
+    # with pullPolicy: Always, but overwriting a tag leaves the manifest
+    # unchanged, so ArgoCD sees nothing to do and the old image keeps running
+    # until somebody restarts the Deployment by hand. A new tag rolls itself.
+    #
+    # 0.1.1 was the release that handed Hermes its conversation by
+    # X-Hermes-Session-Id instead of replaying the on-screen transcript,
+    # which had the model narrating tool calls it never made.
+    tag: "0.2.0"
   agent:
     repository: waterplant-agent
     tag: latest
@@ -223,6 +232,19 @@ ui:
   # Note the prefixes differ on the same host: OTLP ingest is at the server
   # root (/v1/traces) while the REST API is under /mlflow/api/2.0/mlflow/...
   mlflowApiUrl: https://mlflow.redhat-ods-applications.svc.cluster.local:8443
+  # The attack/eval engine that runs inside the console. It probes this
+  # participant's agent over the same chat endpoint the chat pane uses, so it
+  # needs no runner Deployment and no cross-namespace RBAC — which is why
+  # bootstrap-infra's attackEvalRunner is disabled.
+  probes:
+    # "0" while the lab is being built: attacks then fire from the console
+    # button only. The scheduler is intact and comes back by setting "1".
+    scheduler: "0"
+    intervalMinSeconds: 300
+    intervalMaxSeconds: 600
+    # Safe only while scheduler is "0". A reset discards the participant's
+    # work orders, and unattended that would happen every few minutes.
+    resetBeforeAttack: "1"
   route:
     enabled: true
     timeout: 600s

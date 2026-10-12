@@ -112,7 +112,15 @@ spec:
             # for it rather than every five minutes unattended.
             - name: PROBE_RESET_BEFORE_ATTACK
               value: "1"
+            # The definitions come from the ConfigMap, which is the single
+            # source (automation/gitops/tenant-platform/files/attack-eval-defs/).
+            # The copy inside the image is only the fallback.
+            - name: PROBE_DEFS_DIR
+              value: /config/probe-defs
           volumeMounts:
+            - name: probe-defs
+              mountPath: /config/probe-defs
+              readOnly: true
             # MLflow is served with an openshift-service-serving-signer cert,
             # which no public trust store knows. Without this the write path
             # fails with "self-signed certificate in certificate chain".
@@ -132,6 +140,9 @@ spec:
             requests: { cpu: 50m, memory: 128Mi }
             limits: { cpu: 300m, memory: 256Mi }
       volumes:
+        - name: probe-defs
+          configMap:
+            name: water-plant-ui-probe-defs
         - name: mlflow-ca
           configMap:
             name: mlflow-service-ca
