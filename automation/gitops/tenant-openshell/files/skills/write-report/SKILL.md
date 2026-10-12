@@ -40,9 +40,15 @@ absolute path after successfully writing the report.
 Do not use sudo, chmod, deletion, or overwrite commands. Do not change global
 approval settings. If filesystem permissions or sandbox policy block writing,
 report the actual error; skill instructions cannot grant runtime permissions.
-Do not claim the report was saved when the helper failed.
+If you cannot create `/reports`, create or save the report, or read a report,
+say so explicitly in your reply. Include the affected path and the actual tool
+error or reason, when available. Distinguish a successful save from a failed
+read-back. Never claim to have created, saved, read, or verified a report when
+that operation failed.
 
 ## Verification
 
-Check that the helper succeeds and returns a path under `/reports`. Reply with
-that path and a brief description of the report; no further approval is needed.
+Check that the helper succeeds and returns a path under `/reports`, then read
+the saved report to verify its contents. If either operation fails, explain the
+failure as described above. On success, reply with the path and a brief
+description of the report; no further approval is needed.
