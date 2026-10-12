@@ -48,6 +48,10 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "1"
 data:
+  write-report-SKILL.md: |
+{{ .Files.Get "files/skills/write-report/SKILL.md" | indent 4 }}
+  save-report.py: |
+{{ .Files.Get "files/skills/write-report/scripts/save_report.py" | indent 4 }}
   config.yaml: |
     # Staged here and copied into the data volume at start-up, because the
     # container's entrypoint rewrites this file from HERMES_CONFIG_* variables
@@ -188,6 +192,8 @@ spec:
       labels:
         app.kubernetes.io/name: hermes-agent
         app.kubernetes.io/part-of: water-plant
+      annotations:
+        checksum/report-skill: {{ printf "%s%s" (.Files.Get "files/skills/write-report/SKILL.md") (.Files.Get "files/skills/write-report/scripts/save_report.py") | sha256sum }}
     spec:
       securityContext:
         runAsNonRoot: true
@@ -203,6 +209,9 @@ spec:
             - -c
             - |
               set -e
+              mkdir -p "$HERMES_HOME/skills/write-report/scripts"
+              cp /config/write-report-SKILL.md "$HERMES_HOME/skills/write-report/SKILL.md"
+              cp /config/save-report.py "$HERMES_HOME/skills/write-report/scripts/save_report.py"
               # Regenerated every start so the config always matches the chart.
               # The model block is appended here rather than templated into the
               # ConfigMap because it carries the LiteLLM key: this way the
@@ -369,6 +378,7 @@ spec:
             readOnlyRootFilesystem: false
           volumeMounts:
             - { name: data, mountPath: "{{ .Values.agent.hermes.home }}" }
+            - { name: reports, mountPath: /reports }
           readinessProbe:
             httpGet: { path: /health, port: http }
             initialDelaySeconds: 20
@@ -394,6 +404,8 @@ spec:
             {{- toYaml .Values.agent.hermes.tokenRefreshResources | nindent 12 }}
 {{- end }}
       volumes:
+        - name: reports
+          emptyDir: {}
         - name: data
           persistentVolumeClaim:
             claimName: hermes-data
