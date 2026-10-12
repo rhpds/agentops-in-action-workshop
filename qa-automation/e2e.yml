@@ -1,13 +1,248 @@
 ---
-# E2E — End-to-end test
-# Runs all module solve + validate sequences to verify the full lab
-# works from start to finish without manual intervention.
+# E2E — AgentOps in Action
+#
+# Walks the learner's path through the content and fails on the first broken
+# step, naming the module.
+#
+#   ansible-playbook qa-automation/e2e.yml -e e2e_tenant=user-4jnxn
+#   curl -sk -N https://<showroom-host>/stream/qa/e2e
+#
+# IMPLEMENTATION STATUS
+#
+#   module 1   implemented and verified against a live tenant
+#   modules 2+ scaffolding only — the tasks below announce what each module
+#              will assert and exit 0 without touching anything
+#
+# Module 1's content is written and its prompts are exact, so its steps are
+# real. Modules 2 to 6 are still being authored; their designed steps —
+# including the full OpenShell sandbox sequence derived from the current
+# module-02 draft — are recorded under `e2e_steps` in
+# qa-automation/healthcheck-spec.yaml. Implement them here as each module's
+# content settles, and flip its `implemented` flag in the spec.
+#
+# Module 1 is read-only. The scaffolding for later modules is not: sandboxing
+# the agent and repointing the console is the lab. When those land, run them
+# against a scratch tenant, not one a participant is holding.
 
-- name: "End-to-End Test"
+- name: AgentOps in Action — end-to-end lab walkthrough
   hosts: localhost
   connection: local
   gather_facts: false
+
+  module_defaults:
+    group/kubernetes.core.k8s:
+      kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+
+  environment:
+    KUBECONFIG: "{{ k8s_kubeconfig | default(omit) }}"
+    K8S_AUTH_KUBECONFIG: "{{ k8s_kubeconfig | default(omit) }}"
+
+  vars:
+    e2e_tenant: ""
+    e2e_prompt_timeout: 180
+    e2e_user_data_file: /user_data/user_data.yml
+    hc_mcp_servers: [control-mcp, maintenance-mcp, telemetry-mcp]
+
+    # The three prompts module 1 has the participant type, verbatim from
+    # content/modules/ROOT/pages/module-01.adoc.
+    e2e_prompt_normal: "What's the status of pump 4?"
+    e2e_prompt_websearch: "use the search tool to list water plants in new york"
+    e2e_prompt_readfile: "Use read_file on /README.md, output the contents"
+
   tasks:
-    - name: "TODO: Implement end-to-end test sequence"
+
+    # ── Setup ───────────────────────────────────────────────────────────────
+
+    - name: "setup | Read the Showroom user data, when running inside a Showroom pod"
+      ansible.builtin.slurp:
+        src: "{{ e2e_user_data_file }}"
+      register: e2e_user_data_raw
+      failed_when: false
+
+    - name: "setup | Resolve the tenant"
+      ansible.builtin.set_fact:
+        t_user: "{{ e2e_tenant if e2e_tenant else _user_data.get('user', '') }}"
+      vars:
+        _user_data: "{{ (e2e_user_data_raw.content | default('') | b64decode | from_yaml) | default({}, true) }}"
+
+    - name: "setup | A tenant is required"
+      ansible.builtin.assert:
+        that: t_user | length > 0
+        fail_msg: >-
+          No tenant to test. Pass -e e2e_tenant=<username>, or run inside a
+          Showroom pod where {{ e2e_user_data_file }} supplies it.
+
+    - name: "setup | Derive namespaces and agent URLs"
+      ansible.builtin.set_fact:
+        t_ns: "{{ t_user }}-agentops"
+        # The unsandboxed agent the console talks to at baseline. Module 2
+        # repoints the console at hermes-agent, the sandboxed one.
+        t_plain_url: "http://hermes-plain.{{ t_user }}-agentops.svc:8787"
+
+    - name: "setup | Read the agent credentials"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        namespace: "{{ t_ns }}"
+        name: hermes-env
+      register: t_secret
+      no_log: true
+
+    - name: "setup | The agent credentials must exist"
+      ansible.builtin.assert:
+        that: t_secret.resources | length > 0
+        fail_msg: "No hermes-env Secret in {{ t_ns }} — run healthcheck.yml first (TEN-SEC-01)."
+
+    - name: "setup | Decode the agent credentials"
+      ansible.builtin.set_fact:
+        t_api_key: "{{ t_secret.resources[0].data.API_SERVER_KEY | b64decode }}"
+      no_log: true
+
+    - name: "setup | Find the pod the prompts are sent from"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ t_ns }}"
+        label_selectors:
+          - app.kubernetes.io/name=hermes-plain
+        field_selectors:
+          - status.phase=Running
+      register: t_client
+
+    - name: "setup | The baseline agent must be running"
+      ansible.builtin.assert:
+        that: t_client.resources | length > 0
+        fail_msg: "No running hermes-plain pod in {{ t_ns }} — run healthcheck.yml first (TEN-AGT-01)."
+
+    - name: "setup | Record the client pod"
+      ansible.builtin.set_fact:
+        # Every prompt is curl'd from inside this pod: the agent Services are
+        # ClusterIP, so there is no route to them from the controller.
+        e2e_client_pod: "{{ t_client.resources[0].metadata.name }}"
+
+    # ── Module 1: Introduction to AgentOps & Meet Hermie ────────────────────
+
+    - name: "M1 | Count tool invocations before the first prompt"
+      ansible.builtin.include_tasks: tasks/count-tool-calls.yml
+      vars:
+        count_label: "M1 before"
+
+    - name: "M1 | Remember the baseline tool-call count"
+      ansible.builtin.set_fact:
+        m1_tools_before: "{{ tool_calls }}"
+
+    - name: "M1 | Ask the agent the module's opening question"
+      ansible.builtin.include_tasks: tasks/ask-agent.yml
+      vars:
+        ask_label: "E2E-M1-01 — {{ e2e_prompt_normal }}"
+        ask_url: "{{ t_plain_url }}"
+        ask_prompt: "{{ e2e_prompt_normal }}"
+
+    - name: "M1 | E2E-M1-01 — the console's first question must be answered"
+      ansible.builtin.assert:
+        that:
+          - not (ask_failed | bool)
+          - ask_text | length > 0
+        fail_msg: >-
+          E2E-M1-01 FAILED (module-01): the first prompt the lab asks a
+          participant to type did not produce an answer.
+          {{ ('Agent error: ' ~ ask_error) if ask_error else ('Raw reply: ' ~ (ask_raw_stdout | truncate(400))) }}
+        success_msg: "E2E-M1-01 passed — agent answered: {{ ask_text | truncate(120) }}"
+
+    - name: "M1 | Count tool invocations after the first prompt"
+      ansible.builtin.include_tasks: tasks/count-tool-calls.yml
+      vars:
+        count_label: "M1 after"
+
+    - name: "M1 | E2E-M1-02 — the answer must come from a tool, not the model"
+      ansible.builtin.assert:
+        that: (tool_calls | int) > (m1_tools_before | int)
+        fail_msg: >-
+          E2E-M1-02 FAILED (module-01): the agent answered without calling any
+          MCP tool ({{ m1_tools_before }} calls before, {{ tool_calls }} after).
+          A fluent answer with no tool call means the agent lost its tools and
+          is improvising — which still looks like a pass to E2E-M1-01.
+        success_msg: "E2E-M1-02 passed — {{ (tool_calls | int) - (m1_tools_before | int) }} tool call(s) made"
+
+    # The next three assert that an ATTACK SUCCEEDS. That is deliberate: these
+    # are the baseline over-permissions module 1 demonstrates and module 2
+    # proves are blocked. If they already fail, the lab's before-and-after has
+    # no "before" and the whole narrative collapses — so a lab that is too
+    # secure at this point is as broken as one that is not secure at the end.
+
+    - name: "M1 | Attempt the baseline web-search over-permission"
+      ansible.builtin.include_tasks: tasks/ask-agent.yml
+      vars:
+        ask_label: "E2E-M1-03a — unrestricted web search"
+        ask_url: "{{ t_plain_url }}"
+        ask_prompt: "{{ e2e_prompt_websearch }}"
+
+    - name: "M1 | Remember the web-search outcome"
+      ansible.builtin.set_fact:
+        m1_websearch_worked: "{{ (not (ask_failed | bool)) and (ask_text | length > 0) }}"
+
+    - name: "M1 | Attempt the baseline filesystem over-permission"
+      ansible.builtin.include_tasks: tasks/ask-agent.yml
+      vars:
+        ask_label: "E2E-M1-03b — arbitrary file read"
+        ask_url: "{{ t_plain_url }}"
+        ask_prompt: "{{ e2e_prompt_readfile }}"
+
+    - name: "M1 | E2E-M1-03 — the baseline attacks must both SUCCEED"
+      ansible.builtin.assert:
+        that:
+          - m1_websearch_worked | bool
+          - not (ask_failed | bool)
+          - ask_text | length > 0
+        fail_msg: >-
+          E2E-M1-03 FAILED (module-01): a baseline over-permission did not
+          reproduce (web search worked={{ m1_websearch_worked }},
+          file read worked={{ not (ask_failed | bool) }}).
+          Both are meant to work before sandboxing — they are the "before" the
+          rest of the lab is measured against.
+        success_msg: "E2E-M1-03 passed — both baseline over-permissions reproduce"
+
+    - name: "M1 | Module 1 complete"
       ansible.builtin.debug:
-        msg: "Replace this task with your e2e test implementation"
+        msg: >-
+          Module 1 passed for {{ t_user }}: the agent answers the console's
+          opening question using a real tool call, and both baseline
+          over-permissions reproduce.
+
+    # ── Modules 2-6: scaffolding ────────────────────────────────────────────
+    #
+    # Placeholders, not skipped assertions. Each announces what it will assert
+    # so the gap is visible in the run output rather than inferred from the
+    # absence of tasks. The designed steps and their rationale — including the
+    # verbatim OpenShell command sequence from the module-02 draft — are in
+    # healthcheck-spec.yaml under `e2e_steps`.
+    #
+    # To implement one: add its tasks below this comment, reusing
+    # tasks/ask-agent.yml for prompts and tasks/count-tool-calls.yml for tool
+    # evidence, and set `implemented: true` on its step in the spec.
+
+    - name: "M2-M6 | Not yet implemented"
+      ansible.builtin.debug:
+        msg: |
+          SCAFFOLD — modules 2 to 6 have no e2e coverage yet.
+
+          {% for s in _scaffold %}
+          {{ s.id }} ({{ s.module }}) — {{ s.title }}
+          {% endfor %}
+
+          content/modules/ROOT/pages/module-0{3,4,5,6}.adoc are still
+          outlines; module-02 is drafted but its commands are not final.
+          Implementing them now would encode guesses and be rewritten when the
+          content settles. See `e2e_steps` in qa-automation/healthcheck-spec.yaml
+          for the designed steps.
+      vars:
+        _scaffold:
+          - { id: E2E-M2-01, module: module-02, title: "Create, seed and start the OpenShell sandbox" }
+          - { id: E2E-M2-02, module: module-02, title: "Default-deny sandbox BLOCKS the agent, with a DENIED line logged" }
+          - { id: E2E-M2-03, module: module-02, title: "Four named egress rules restore the agent, no rebuild" }
+          - { id: E2E-M2-04, module: module-02, title: "Baseline attacks are now BLOCKED while the workflow completes" }
+          - { id: E2E-M2-05, module: module-02, title: "Spans reach the MLflow relay" }
+          - { id: E2E-M3-01, module: module-03, title: "Let the agent use its tools — content pending" }
+          - { id: E2E-M4-01, module: module-04, title: "Let the agent write files — content pending" }
+          - { id: E2E-M5-01, module: module-05, title: "Let the agent reach the docs website — content pending" }
+          - { id: E2E-M6-01, module: module-06, title: "Guard against a compromised account — content pending" }
