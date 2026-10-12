@@ -1,0 +1,18 @@
+# Registered at $HERMES_HOME/plugins/web/firecrawl/, which is deliberately the
+# same path-derived key as the bundled provider.
+#
+# hermes_cli/plugins.py dedups discovered manifests by key and lets later
+# sources win: "user plugins take precedence over bundled". So this manifest
+# replaces plugins/web/firecrawl entirely — the bundled module is never
+# imported, and there is no registration-order race to lose.
+#
+# The name must be listed in plugins.enabled (by key or by this name), because
+# only bundled backends auto-load; user ones are opt-in. seed-config renders
+# that list.
+name: web-direct
+version: 1.0.0
+description: "Direct HTTP fetch for web_extract — plain GET, follows redirects. Replaces the bundled Firecrawl provider, whose SDK is not installed in this image."
+author: Red Hat AgentOps lab
+kind: backend
+provides_web_providers:
+  - firecrawl

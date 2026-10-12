@@ -55,7 +55,12 @@ metadata:
 rules:
   - apiGroups: ["mlflow.kubeflow.org"]
     resources: ["experiments"]
-    verbs: ["get", "list"]
+    # create and update as well as read: the console records an eval sweep as
+    # an MLflow run, and on a participant's first sweep the experiment does
+    # not exist yet. get/list alone is enough to resolve a trace link and not
+    # enough to write a scorecard — the sweep 403s and silently reports no
+    # run URL.
+    verbs: ["get", "list", "create", "update"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -88,6 +93,42 @@ what a control action actually did, independently of what the agent says it
 did. AGENT_URL is empty until the agent exists, and the chat pane degrades to a
 clear "not deployed" state rather than failing opaquely.
 */}}
+{{/*
+The attack and eval definitions, mounted into the console.
+
+This is the single source for them. The console ships a copy inside its image
+as a fallback, but whenever this ConfigMap is mounted it wins — so a lab
+author edits a prompt in files/attack-eval-defs/, ArgoCD delivers it, and the
+next console restart picks it up without anyone rebuilding waterplant-ui.
+
+Two ranges rather than one glob, because Helm's .Files.Glob is filepath.Match:
+no brace alternation and no "**", so "attack-eval-defs/{attacks,evals}/*.yaml"
+silently renders an empty ConfigMap. The key prefixes keep an attack and an
+eval of the same name from colliding in what is a flat namespace.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: water-plant-ui-probe-defs
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: water-plant-ui
+    app.kubernetes.io/part-of: water-plant
+    rhdp.redhat.com/lab: agentops-in-action
+    # The definitions are meant to be tuned during the lab.
+    rhdp.redhat.com/editable: "true"
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+data:
+{{- range $path, $_ := .Files.Glob "files/attack-eval-defs/attacks/*.yaml" }}
+  attack-{{ base $path }}: |
+{{ $.Files.Get $path | indent 4 }}
+{{- end }}
+{{- range $path, $_ := .Files.Glob "files/attack-eval-defs/evals/*.yaml" }}
+  eval-{{ base $path }}: |
+{{ $.Files.Get $path | indent 4 }}
+{{- end }}
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -194,9 +235,82 @@ spec:
             # console directly and never reaches this code path.
             - name: MLFLOW_EXPERIMENT
               value: {{ .Values.ui.mlflowExperiment | default .Values.username | quote }}
+            # Where the attack/eval runner writes its cycle summaries — one run every
+            # five minutes, separate from the traces above so the rollups do not bury
+            # the participant's own turns. The console reads the latest run here to
+            # show "you were just attacked" and the results panel behind it.
+            #
+            # The run id doubles as the freshness cursor: the console compares it
+            # against the last one it showed and only raises the alert when it changes,
+            # which is why no push channel is needed for any of this.
+            #
+            # Must resolve to the same name the runner builds from
+            # attackEvalRunner.cycleExperimentSuffix in bootstrap-infra. Change one and
+            # you must change the other, the same coupling MLFLOW_EXPERIMENT has above.
+            - name: MLFLOW_CYCLE_EXPERIMENT
+              value: {{ .Values.ui.cycleMlflowExperiment | default (printf "%s-cycle" .Values.username) | quote }}
+            {{- end }}
+            {{- if .Values.ui.mlflowUrl }}
+            # Where the console TALKS to MLflow, as opposed to MLFLOW_URL,
+            # which is the browser-facing route behind the OAuth proxy. A
+            # POST to MLFLOW_URL from in here is answered with a 302 to a
+            # login page and a cheerful 200 full of HTML.
+            - name: MLFLOW_API_URL
+              value: {{ .Values.ui.mlflowApiUrl | quote }}
+            # The per-turn trace lookup verifies MLflow's service-signer
+            # certificate against this. Without it the lookup fails on TLS and
+            # the console reports "no trace was collected for this turn" —
+            # which looks like a tracing problem rather than a trust problem,
+            # because find_trace swallows transport errors by design.
+            - name: MLFLOW_CA_FILE
+              value: /etc/mlflow-ca/service-ca.crt
+            {{- end }}
+            # Attacks fire on a randomised timer when this is "1". Off leaves
+            # the console fully usable and only stops the clock, so nothing
+            # lands in the middle of a demonstration.
+            - name: ATTACK_SCHEDULER_ENABLED
+              value: {{ .Values.ui.probes.scheduler | quote }}
+            - name: ATTACK_INTERVAL_MIN_S
+              value: {{ .Values.ui.probes.intervalMinSeconds | quote }}
+            - name: ATTACK_INTERVAL_MAX_S
+              value: {{ .Values.ui.probes.intervalMaxSeconds | quote }}
+            # Reseed the plant before each attack so every one starts from an
+            # identical baseline. Only sane with the scheduler off: a reset
+            # discards the participant's work orders, and unattended that
+            # happens every few minutes.
+            - name: PROBE_RESET_BEFORE_ATTACK
+              value: {{ .Values.ui.probes.resetBeforeAttack | quote }}
+            # The mounted definitions win over the set baked into the image.
+            # Empty or absent, the image's own copy is used, so the console
+            # still works with no ConfigMap at all.
+            - name: PROBE_DEFS_DIR
+              value: /config/probe-defs
+            {{- if .Values.docs.enabled }}
+            # The documentation site, which is also the exfiltration observer.
+            # Without it the honeypot attacks have no way to see whether data
+            # actually left, and the engine reports them unjudgeable rather
+            # than inferring a verdict from what the agent said it did.
+            # Read by the engine for the hit log, and rendered into every
+            # attack prompt as {{ "{{ docs_url }}" }} — a definition in git
+            # cannot know the participant's namespace.
+            - name: DOCS_URL
+              value: http://waterplant-docs.{{ $ns }}.svc:8080
             {{- end }}
             - name: NAMESPACE
               value: {{ $ns }}
+          volumeMounts:
+            - name: probe-defs
+              mountPath: /config/probe-defs
+              readOnly: true
+          {{- if .Values.ui.mlflowUrl }}
+            # MLflow is served with an openshift-service-serving-signer
+            # certificate that no public trust store knows, so without this
+            # every eval sweep fails to record with "self-signed certificate
+            # in certificate chain".
+            - name: mlflow-ca
+              mountPath: /etc/mlflow-ca
+              readOnly: true
+          {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -208,6 +322,15 @@ spec:
             periodSeconds: 5
           resources:
             {{- toYaml .Values.ui.resources | nindent 12 }}
+      volumes:
+        - name: probe-defs
+          configMap:
+            name: water-plant-ui-probe-defs
+        {{- if .Values.ui.mlflowUrl }}
+        - name: mlflow-ca
+          configMap:
+            name: mlflow-service-ca
+        {{- end }}
 ---
 apiVersion: v1
 kind: Service

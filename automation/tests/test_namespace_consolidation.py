@@ -23,8 +23,11 @@ def render(chart, release, namespace, params):
     return [d for d in yaml.safe_load_all(result.stdout) if d]
 
 
-def resource(docs, kind, name):
-    return next(d for d in docs if d['kind'] == kind and d['metadata']['name'] == name)
+def resource(docs, kind, name, required=True):
+    match = next((d for d in docs if d['kind'] == kind and d['metadata']['name'] == name), None)
+    if match is None and required:
+        raise StopIteration(f'no {kind}/{name} in the rendered manifests')
+    return match
 
 
 def tenant(user='user1', suffix='agentops', runtime='openshell', harness='hermes', enforced='false'):
@@ -84,13 +87,30 @@ class Consolidation(unittest.TestCase):
                     self.assertNotIn(f'{user}-openshell.svc', json.dumps(d))
                     for subject in d.get('subjects', []):
                         if subject['kind'] == 'ServiceAccount':
+                            # Subjects bound in a tenant namespace belong to that tenant,
+                            # with exactly one exception: the shared attack/eval runner,
+                            # which writes every participant's cycle results and so is
+                            # bound into each namespace from the shared one. It is the
+                            # only cross-tenant identity in the lab, which is why it is
+                            # named here rather than allowed by pattern — anything else
+                            # reaching across namespaces should still fail this.
+                            if (subject['name'], subject.get('namespace')) == ('attack-eval-runner', 'agentops-shared'):
+                                continue
                             self.assertEqual(subject.get('namespace', ns), ns)
                 for app in (d for d in bootstrap if d['kind'] == 'Application'):
                     self.assertEqual(app['spec']['destination']['namespace'], ns)
                 ui = resource(docs, 'Deployment', 'water-plant-ui')
                 env = {e['name']: e.get('value') for e in ui['spec']['template']['spec']['containers'][0]['env']}
                 if harness == 'hermes':
-                    self.assertEqual(env['AGENT_URL'], f'http://hermes-agent.{ns}.svc:8787')
+                    # hermes-plain whenever it is deployed alongside the
+                    # gateway, hermes-agent otherwise. ui.yaml derives this
+                    # from one switch so flipping the harness cannot leave the
+                    # console talking to a Service that no longer exists; the
+                    # assertion has to follow the same rule rather than naming
+                    # one side of it.
+                    plain = resource(docs, 'Deployment', 'hermes-plain', required=False)
+                    expected = 'hermes-plain' if plain else 'hermes-agent'
+                    self.assertEqual(env['AGENT_URL'], f'http://{expected}.{ns}.svc:8787')
                 if runtime == 'openshell':
                     gateway = resource(docs, 'StatefulSet', f'{user}-openshell')
                     gateway_labels = gateway['spec']['template']['metadata']['labels']

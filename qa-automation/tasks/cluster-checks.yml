@@ -1,0 +1,220 @@
+---
+# Cluster-scoped and shared-service checks. Run once per invocation, whatever
+# the tenant scope is. See healthcheck-spec.yaml for the rationale behind each
+# CLU-* id.
+#
+# Findings are appended to hc_findings as
+# {id, tenant, severity, ok, detail} — inline rather than through an included
+# task file, because at roughly 30 checks the include itself is a measurable
+# share of the run.
+#
+# The Application and Namespace lists these read were gathered once in
+# healthcheck.yml.
+
+# ── Gathers ──────────────────────────────────────────────────────────────────
+
+- name: "CLU-OPR-01 | List ClusterServiceVersions in the operator namespaces"
+  kubernetes.core.k8s_info:
+    api_version: operators.coreos.com/v1alpha1
+    kind: ClusterServiceVersion
+    namespace: "{{ item.namespace }}"
+  loop: "{{ hc_expected_operators }}"
+  loop_control:
+    label: "{{ item.namespace }}"
+  register: hc_csvs
+  failed_when: false
+
+- name: "CLU-DSC | Read the DataScienceCluster"
+  kubernetes.core.k8s_info:
+    api_version: datasciencecluster.opendatahub.io/v1
+    kind: DataScienceCluster
+    name: "{{ hc_dsc_name }}"
+  register: hc_dsc
+  failed_when: false
+
+# Cluster-scoped, so no namespace here.
+- name: "CLU-MLF-01 | Read the MLflow instance"
+  kubernetes.core.k8s_info:
+    api_version: mlflow.opendatahub.io/v1
+    kind: MLflow
+  register: hc_mlflow
+  failed_when: false
+
+- name: "CLU-EVH-01 | Read the EvalHub instance"
+  kubernetes.core.k8s_info:
+    api_version: trustyai.opendatahub.io/v1alpha1
+    kind: EvalHub
+    namespace: "{{ hc_shared_namespace }}"
+    name: "{{ hc_evalhub_name }}"
+  register: hc_evalhub
+  failed_when: false
+
+- name: "CLU-EVH-02 | Read the EvalHub route"
+  kubernetes.core.k8s_info:
+    api_version: route.openshift.io/v1
+    kind: Route
+    namespace: "{{ hc_shared_namespace }}"
+    name: "{{ hc_evalhub_name }}"
+  register: hc_evalhub_route
+  failed_when: false
+
+- name: "CLU-ANP-01 | Read the MCP server AdminNetworkPolicy"
+  kubernetes.core.k8s_info:
+    api_version: policy.networking.k8s.io/v1alpha1
+    kind: AdminNetworkPolicy
+    name: mcp-servers-gateway-only
+  register: hc_anp
+  failed_when: false
+
+- name: "CLU-KC-01 | Read the Keycloak instance"
+  kubernetes.core.k8s_info:
+    api_version: k8s.keycloak.org/v2alpha1
+    kind: Keycloak
+    namespace: "{{ hc_keycloak_namespace }}"
+  register: hc_keycloak
+  failed_when: false
+
+- name: "CLU-EVH-02 | Probe the EvalHub route"
+  ansible.builtin.uri:
+    url: "https://{{ hc_evalhub_route.resources[0].spec.host }}"
+    validate_certs: false
+    timeout: "{{ hc_http_timeout }}"
+    status_code: [200, 302, 401, 403]
+  register: hc_evalhub_probe
+  failed_when: false
+  when: hc_evalhub_route.resources | default([]) | length > 0
+
+# ── Checks ───────────────────────────────────────────────────────────────────
+
+- name: "Record CLU-NS-01 — shared namespace is Active"
+  ansible.builtin.set_fact:
+    hc_findings: "{{ hc_findings + [{'id': 'CLU-NS-01', 'tenant': '', 'severity': 'fail', 'ok': _ok, 'detail': _detail}] }}"
+  vars:
+    _ns: "{{ hc_namespaces.resources | selectattr('metadata.name', 'equalto', hc_shared_namespace) | list }}"
+    _phase: "{{ (_ns | first | default({})).get('status', {}).get('phase', 'absent') }}"
+    _ok: "{{ _phase == 'Active' }}"
+    _detail: "namespace {{ hc_shared_namespace }} phase={{ _phase }}"
+
+- name: "Record CLU-ARGO-01 — bootstrap Application"
+  ansible.builtin.set_fact:
+    hc_findings: "{{ hc_findings + [{'id': 'CLU-ARGO-01', 'tenant': '', 'severity': 'fail', 'ok': _ok, 'detail': _detail}] }}"
+  vars:
+    _app: "{{ hc_applications.resources | selectattr('metadata.name', 'equalto', 'bootstrap') | first | default({}) }}"
+    _sync: "{{ _app.get('status', {}).get('sync', {}).get('status', 'absent') }}"
+    _health: "{{ _app.get('status', {}).get('health', {}).get('status', 'absent') }}"
+    _ok: "{{ _sync == 'Synced' and _health == 'Healthy' }}"
+    _detail: "bootstrap sync={{ _sync }} health={{ _health }}"
+
+- name: "Record CLU-OPR-01 — pinned operator CSVs have Succeeded"
+  ansible.builtin.set_fact:
+    hc_findings: "{{ hc_findings + [{'id': 'CLU-OPR-01', 'tenant': '', 'severity': 'fail', 'ok': _ok, 'detail': _detail}] }}"
+  vars:
+    # A prefix is satisfied when at least one CSV in the operator's own
+    # namespace starts with it and reports Succeeded. Never asserted on the
+    # Subscription: bootstrap-infra pins every startingCSV with manual
+    # InstallPlan approval, so a Subscription reporting UpgradePending is the
+    # intended steady state, not a fault.
+    _unmet_json: >-
+      {%- set unmet = [] -%}
+      {%- for r in hc_csvs.results -%}
+        {%- for prefix in r.item.prefixes -%}
+          {%- set hits = r.resources | default([])
+                | selectattr('metadata.name', 'match', prefix)
+                | selectattr('status.phase', 'defined')
+                | selectattr('status.phase', 'equalto', 'Succeeded')
+                | list -%}
+          {%- if hits | length == 0 -%}
+            {%- set _ = unmet.append(r.item.namespace ~ '/' ~ prefix) -%}
+          {%- endif -%}
+        {%- endfor -%}
+      {%- endfor -%}
+      {{ unmet | to_json }}
+    _unmet: "{{ _unmet_json | from_json }}"
+    _total: "{{ hc_expected_operators | map(attribute='prefixes') | map('length') | sum }}"
+    _ok: "{{ _unmet | length == 0 }}"
+    _detail: >-
+      {{ _ok | ternary('all ' ~ _total ~ ' operator CSVs Succeeded',
+                       'not Succeeded: ' ~ (_unmet | join(', '))) }}
+
+- name: "Record CLU-DSC-01 and CLU-DSC-02 — DataScienceCluster"
+  ansible.builtin.set_fact:
+    hc_findings: "{{ hc_findings + [_f1, _f2] }}"
+  vars:
+    _true: >-
+      {{ hc_dsc.resources[0].status.conditions | default([])
+         | selectattr('status', 'equalto', 'True') | map(attribute='type') | list }}
+    # Only the six the lab uses. A dozen other conditions are False with reason
+    # Removed by design, so "all conditions True" would fail a correct cluster.
+    _absent: "{{ hc_dsc_components | difference(_true) }}"
+    _f1:
+      id: CLU-DSC-01
+      tenant: ""
+      severity: fail
+      ok: "{{ 'Ready' in _true }}"
+      detail: "{{ hc_dsc_name }} Ready={{ ('Ready' in _true) | ternary('True', 'False/absent') }}"
+    _f2:
+      id: CLU-DSC-02
+      tenant: ""
+      severity: fail
+      ok: "{{ _absent | length == 0 }}"
+      detail: >-
+        {{ (_absent | length == 0)
+           | ternary('all ' ~ (hc_dsc_components | length) ~ ' required components Ready',
+                     'not Ready: ' ~ (_absent | join(', '))) }}
+
+- name: "Record CLU-MLF-01 — MLflow is Available"
+  ansible.builtin.set_fact:
+    hc_findings: "{{ hc_findings + [{'id': 'CLU-MLF-01', 'tenant': '', 'severity': 'fail', 'ok': _ok, 'detail': _detail}] }}"
+  vars:
+    _m: "{{ hc_mlflow.resources | default([]) }}"
+    _ok: >-
+      {{ (_m | length > 0) and
+         (_m[0].status.conditions | default([])
+          | selectattr('type', 'equalto', 'Available')
+          | selectattr('status', 'equalto', 'True') | list | length > 0) }}
+    _detail: >-
+      {{ (_m | length == 0) | ternary('no MLflow CR found',
+         'mlflow ' ~ (_m[0].status.version | default('?')) ~ ' Available=' ~ _ok) }}
+
+- name: "Record CLU-EVH-01 and CLU-EVH-02 — EvalHub"
+  ansible.builtin.set_fact:
+    hc_findings: "{{ hc_findings + [_f1, _f2] }}"
+  vars:
+    _phase: "{{ hc_evalhub.resources[0].status.phase | default('absent') }}"
+    _status: "{{ hc_evalhub_probe.status | default(0) }}"
+    _f1:
+      id: CLU-EVH-01
+      tenant: ""
+      severity: fail
+      ok: "{{ _phase == 'Ready' }}"
+      detail: "{{ hc_evalhub_name }} phase={{ _phase }}"
+    _f2:
+      id: CLU-EVH-02
+      tenant: ""
+      severity: fail
+      # 401 is the expected answer from an unauthenticated probe: it proves
+      # route, service and TLS are wired, which is all this check is for.
+      ok: "{{ _status in [200, 302, 401, 403] }}"
+      detail: "evalhub route HTTP {{ hc_evalhub_probe.status | default('unreachable') }}"
+
+- name: "Record CLU-ANP-01 — MCP servers reachable only through a gateway"
+  ansible.builtin.set_fact:
+    hc_findings: "{{ hc_findings + [{'id': 'CLU-ANP-01', 'tenant': '', 'severity': 'fail', 'ok': _ok, 'detail': _detail}] }}"
+  vars:
+    _ok: "{{ hc_anp.resources | default([]) | length > 0 }}"
+    _detail: >-
+      {{ _ok | ternary('mcp-servers-gateway-only present at priority '
+                       ~ (hc_anp.resources[0].spec.priority | default('?')),
+                       'mcp-servers-gateway-only ABSENT — MCP servers are reachable without a gateway') }}
+
+- name: "Record CLU-KC-01 — Keycloak is Ready"
+  ansible.builtin.set_fact:
+    hc_findings: "{{ hc_findings + [{'id': 'CLU-KC-01', 'tenant': '', 'severity': 'fail', 'ok': _ok, 'detail': _detail}] }}"
+  vars:
+    _k: "{{ hc_keycloak.resources | default([]) }}"
+    _ok: >-
+      {{ (_k | length > 0) and
+         (_k[0].status.conditions | default([])
+          | selectattr('type', 'equalto', 'Ready')
+          | selectattr('status', 'in', ['True', true]) | list | length > 0) }}
+    _detail: "keycloak in {{ hc_keycloak_namespace }} Ready={{ _ok }}"

@@ -1,0 +1,238 @@
+{{- if .Values.attackEvalRunner.enabled }}
+{{/*
+The attack and evaluation runner — one instance for the whole event.
+
+Probes every participant's agent with the lab's attack set and its legitimate-use eval
+suite on a fixed cycle, writes the outcome to that participant's own MLflow cycle
+experiment, and republishes the leaderboard.
+
+Why one shared runner rather than one per participant: bootstrap-tenant creates exactly
+as many tenants as RHDP provisions, with no fixed list anywhere, so the thing that
+iterates over them has to discover them at runtime. Thirty copies of that loop would be
+thirty copies of the same discovery, the same definitions, and the same leaderboard
+aggregation racing each other.
+
+Why a loop and not a CronJob: the same reason mcp-token-refresh.py gives for the token
+refresher — "runs as an in-process background loop instead of an external CronJob". It
+also lets one process hold a participant's plant-state snapshot across the
+attack/cleanup pair without persisting it anywhere.
+
+EXACTLY ONE REPLICA. Two would double every participant's attack traffic and race each
+other's plant-state restores — one replica restoring a pump while the other is still
+probing it produces results neither of them can explain.
+*/}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: attack-eval-runner
+  namespace: {{ .Values.lab.sharedNamespace }}
+  labels:
+    app.kubernetes.io/name: attack-eval-runner
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "15"
+---
+{{/*
+Cluster-scoped, and deliberately only this: the runner reads namespaces to discover
+participants and does nothing else cluster-wide. Everything it does inside a tenant
+namespace is granted there, by tenant-platform, namespace by namespace — so revoking one
+participant's exposure to the runner is a change in that participant's Application, not
+here.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: attack-eval-runner-discovery
+  labels:
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "15"
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: attack-eval-runner-discovery
+  labels:
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "15"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: attack-eval-runner-discovery
+subjects:
+  - kind: ServiceAccount
+    name: attack-eval-runner
+    namespace: {{ .Values.lab.sharedNamespace }}
+---
+{{/*
+The leaderboard experiment lives in the shared namespace, so the runner needs to manage
+experiments here as well as in each tenant namespace.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: attack-eval-runner-mlflow
+  namespace: {{ .Values.lab.sharedNamespace }}
+  labels:
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "15"
+rules:
+  - apiGroups: [mlflow.kubeflow.org]
+    resources: [experiments]
+    verbs: [get, list, create, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: attack-eval-runner-mlflow
+  namespace: {{ .Values.lab.sharedNamespace }}
+  labels:
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "15"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: attack-eval-runner-mlflow
+subjects:
+  - kind: ServiceAccount
+    name: attack-eval-runner
+    namespace: {{ .Values.lab.sharedNamespace }}
+---
+{{/*
+Runner source and definitions, mounted rather than baked into an image.
+
+Same pattern as tenant-openshell's files/: the application images in this lab are all
+built in a separate repo, so a script that ships as a ConfigMap is editable by whoever
+is holding the lab without a build pipeline in between. The checksum annotation on the
+Deployment below restarts the runner whenever either changes.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: attack-eval-runner
+  namespace: {{ .Values.lab.sharedNamespace }}
+  labels:
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "15"
+data:
+{{- range $path, $_ := .Files.Glob "files/attack-eval-runner/*.py" }}
+  {{ base $path }}: |
+{{ $.Files.Get $path | indent 4 }}
+{{- end }}
+---
+{{/*
+Definitions in their own ConfigMap: content authors add attacks here without touching
+the runner, and the two restart independently.
+
+Two ranges, not one glob: Helm's .Files.Glob is Go filepath.Match, which has no brace
+alternation and no **. A pattern like "{attacks,evals}/*.yaml" matches nothing at all
+and renders an empty ConfigMap — quietly, with the runner then reporting zero
+definitions rather than failing.
+
+Keys are prefixed by kind because a ConfigMap is one flat namespace and attacks/foo.yaml
+would otherwise collide with evals/foo.yaml, last one winning. defs_loader reads `kind`
+from inside the document, so the prefix is for uniqueness only.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: attack-eval-defs
+  namespace: {{ .Values.lab.sharedNamespace }}
+  labels:
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "15"
+data:
+{{- range $path, $_ := .Files.Glob "files/attack-eval-defs/attacks/*.yaml" }}
+  attack-{{ base $path }}: |
+{{ $.Files.Get $path | indent 4 }}
+{{- end }}
+{{- range $path, $_ := .Files.Glob "files/attack-eval-defs/evals/*.yaml" }}
+  eval-{{ base $path }}: |
+{{ $.Files.Get $path | indent 4 }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: attack-eval-runner
+  namespace: {{ .Values.lab.sharedNamespace }}
+  labels:
+    app.kubernetes.io/name: attack-eval-runner
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "20"
+spec:
+  # EXACTLY ONE. See the note at the top of this file.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: attack-eval-runner
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: attack-eval-runner
+      annotations:
+        # Restart the runner when either ConfigMap's content changes. Both globs are
+        # single-level for the same filepath.Match reason as above — "**" matches
+        # nothing, which would pin this checksum to a constant and leave the runner
+        # happily executing whichever definitions it started with.
+        checksum/runner: {{ .Files.Glob "files/attack-eval-runner/*.py" | toYaml | sha256sum }}
+        checksum/defs: {{ printf "%s%s" (.Files.Glob "files/attack-eval-defs/attacks/*.yaml" | toYaml) (.Files.Glob "files/attack-eval-defs/evals/*.yaml" | toYaml) | sha256sum }}
+    spec:
+      serviceAccountName: attack-eval-runner
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: runner
+          image: {{ .Values.attackEvalRunner.image | quote }}
+          command: ["python3", "/app/runner.py"]
+          env:
+            - name: CYCLE_INTERVAL_SECONDS
+              value: {{ .Values.attackEvalRunner.cycleIntervalSeconds | quote }}
+            - name: MLFLOW_TRACKING_URI
+              value: {{ .Values.attackEvalRunner.mlflow.trackingUri | quote }}
+            - name: LEADERBOARD_EXPERIMENT
+              value: {{ .Values.attackEvalRunner.leaderboardExperiment | quote }}
+            - name: CYCLE_EXPERIMENT_SUFFIX
+              value: {{ .Values.attackEvalRunner.cycleExperimentSuffix | quote }}
+            - name: SHARED_NAMESPACE
+              value: {{ .Values.lab.sharedNamespace | quote }}
+            - name: PARTICIPANT_LABEL
+              value: {{ .Values.attackEvalRunner.participantLabel | quote }}
+            - name: DEFS_DIR
+              value: /config/defs
+            - name: REQUEST_TIMEOUT_SECONDS
+              value: {{ .Values.attackEvalRunner.requestTimeoutSeconds | quote }}
+          volumeMounts:
+            - name: runner
+              mountPath: /app
+            - name: defs
+              mountPath: /config/defs
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+{{ toYaml .Values.attackEvalRunner.resources | indent 12 }}
+      volumes:
+        - name: runner
+          configMap:
+            name: attack-eval-runner
+        - name: defs
+          configMap:
+            name: attack-eval-defs
+{{- end }}
