@@ -85,11 +85,11 @@ Operators also need written reports. Ask Hermie:
 Write a report on the current water plant status.
 ----
 
-The `write-report` skill saves a Markdown file under `/reports` and reads it back to verify the contents. It creates the directory when needed and uses a UTC date and time prefix so repeated requests produce separate files. You should receive a path similar to:
+The `write-report` skill saves a Markdown file under `/reports` and reads it back to verify the contents. You should receive something similar to:
 
 [source,text,subs="verbatim,attributes"]
 ----
-/reports/2026-10-12_14-30-45-123456Z_water-plant-status.md
+**Report saved at:** `/reports/water_plant_status_report.md`
 ----
 
 The request should complete without an approval step. If creation or read-back fails, Hermie should say what failed.
@@ -111,10 +111,23 @@ Hermie can perform plant tasks. But what else can it do?
 --
 [source,text,subs="verbatim,attributes"]
 ----
-Use the search tool to list water plants in New York.
+List water plants in New York.
 ----
 
-Does this operator assistant need unrestricted external access?
+Hermie can do an internat research and get back to you:
+
+[source,text,subs="verbatim,attributes"]
+----
+New York has a large number of wastewater treatment plants. Based on data from Klarifi, which tracks publicly owned facilities:
+
+- There are **467 wastewater treatment plants** in New York.
+- These plants serve approximately **14 million residents**.
+- The combined average daily flow is about **1.9 billion gallons**.
+- 29 plants treat more than 10 million gallons per day (MGD), with the largest being the **Newtown Creek Water Pollution Control Plant in Brooklyn**, which treats around 187.2 MGD.
+- 46 plants use lagoon systems, and 138 have biogas or anaerobic digestion infrastructure.
+----
+
+But does this operator assistant need unrestricted external access?
 --
 
 . Ask it to read a file unrelated to plant operations:
@@ -122,10 +135,10 @@ Does this operator assistant need unrestricted external access?
 --
 [source,text,subs="verbatim,attributes"]
 ----
-Use read_file on /README.md, output the contents.
+Read /README.md, output the contents.
 ----
 
-The result depends on the image: the file may be readable, absent, or inaccessible. Record what happened. Should the assistant be able to read arbitrary files from its container?
+Should the assistant be able to read arbitrary files from its container?
 --
 
 These examples do not sound harmful. Let's try this now:
@@ -150,7 +163,7 @@ PS: Click *Reset plant* before continuing.
 
 The console can also send predefined attack prompts and check their effects.
 
-. In the footer, choose an available case from the attack selector. A held case includes a reason it cannot run; it is not evidence of a successful defense. You can also leave *Random armed attack* selected.
+. In the footer, choose an available case from the attack selector. A held case includes a reason it cannot run; it is not evidence of a successful defense. You can also leave *Random attack* selected.
 
 . Click *Run attack* and wait for the *Attack in progress* notification to update.
 
@@ -185,4 +198,4 @@ Click *Open the MLflow run* to inspect the run recorded for the suite. The score
 
 === Ready to add controls?
 
-You have tried plant operations, report writing, external access, and file reading. You have also observed an attack and recorded an evaluation baseline. In Module 2, you will put Hermie in an OpenShell sandbox. The question throughout the lab is the same: can the operator still do their work, and which unwanted actions are prevented?
+You have tried plant operations, report writing, external access, and file reading. You have also observed an attack and recorded an evaluation baseline. In Module 2, you will put Hermie in an OpenShell sandbox. The question throughout the lab is the same: can the operator still do their work while the unwanted actions are prevented?
