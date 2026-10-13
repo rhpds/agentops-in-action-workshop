@@ -76,10 +76,10 @@ spec:
         object.spec.source.helm.parameters.all(p, size(object.spec.source.helm.parameters.filter(q, q.name == p.name)) == 1)
       message: Only policy Helm parameters and a normal hook sync may be changed; infrastructure settings are protected.
     - expression: >-
-        object.spec.source.helm.parameters.filter(p, !p.name.matches('^(mcpGateway[.]enforced|networkPolicy[.]permissiveEgress|openshell[.]permissiveEgress|openshell[.]filesystem[.](readOnly|readWrite)(\\[[0-9]+\\])?|openshell[.]broadOutbound[.](hosts|ports|binaries)(\\[[0-9]+\\])?)$')) == oldObject.spec.source.helm.parameters.filter(p, !p.name.matches('^(mcpGateway[.]enforced|networkPolicy[.]permissiveEgress|openshell[.]permissiveEgress|openshell[.]filesystem[.](readOnly|readWrite)(\\[[0-9]+\\])?|openshell[.]broadOutbound[.](hosts|ports|binaries)(\\[[0-9]+\\])?)$'))
+        object.spec.source.helm.parameters.filter(p, !p.name.matches('^(mcpGateway[.]enforced)$')) == oldObject.spec.source.helm.parameters.filter(p, !p.name.matches('^(mcpGateway[.]enforced)$'))
       message: Only policy Helm parameters and a normal hook sync may be changed; infrastructure settings are protected.
     - expression: >-
-        object.spec.source.helm.parameters.filter(p, p.name in ['mcpGateway.enforced', 'networkPolicy.permissiveEgress', 'openshell.permissiveEgress']).all(p, p.value in ['true', 'false'] && (!has(p.forceString) || !p.forceString))
+        object.spec.source.helm.parameters.filter(p, p.name in ['mcpGateway.enforced']).all(p, p.value in ['true', 'false'] && (!has(p.forceString) || !p.forceString))
       message: Policy toggles must be boolean true or false, without forceString.
     - expression: >-
         !has(object.operation) || (has(oldObject.operation) && object.operation == oldObject.operation) || (
@@ -132,7 +132,7 @@ spec:
   validations:
     - expression: >-
         request.namespace == {{ $ns | toJson }} &&
-        object.metadata.name in ['allow-ingress-within-namespace', 'egress-baseline'] &&
+        object.metadata.name in ['allow-ingress-within-namespace'] &&
         object.spec.podSelector == oldObject.spec.podSelector &&
         object.spec.policyTypes == oldObject.spec.policyTypes
       message: Edit the traffic rules of your exercise policies; their workload selectors and policy types are fixed.

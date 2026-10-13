@@ -146,14 +146,18 @@ spec:
           value: {{ .Values.namespaceSuffix | quote }}
         - name: keycloak.host
           value: {{ $keycloakHost | quote }}
-        # Baseline tool authorization. false is the lab's "works, but
-        # dangerously" starting point; module 5 turns it on.
+        # Baseline tool authorization: ON. Every tool call must carry
+        # tool:<name> from the participant's Keycloak realm.
+        #
+        # That is not the same as the agent being restricted, because
+        # tenant-platform's keycloak.withheldFromOperator is empty — the
+        # operator starts holding every tool role, so every call still
+        # succeeds. The exercise is revoking roles in the realm, not turning
+        # this on. (This comment used to say false was the starting point and
+        # module 5 flipped it; both values files have shipped true throughout,
+        # so the comment was the stale half.)
         - name: mcpGateway.enforced
           value: {{ .Values.policy.mcpGatewayEnforced | quote }}
-        # Hermes in an OpenShell sandbox: this Application also holds the
-        # sandbox policy participants edit.
-        - name: openshell.enabled
-          value: {{ and (eq .Values.platform.agentHarness "hermes") (eq .Values.platform.hermesRuntime "openshell") | quote }}
         # Whether this participant has a gateway at all. Without one, the
         # PostSync Job that restarts the gateway and agent has nothing to do.
         - name: mcpGateway.enabled
@@ -162,12 +166,25 @@ spec:
     server: https://kubernetes.default.svc
     namespace: {{ include "tenant.namespace" . }}
   syncPolicy:
-    # NO automated block. Manual sync only, no self-heal, no prune.
+    # Automated, but deliberately only automated.
     #
-    # Do not "fix" this by adding automation. It would revert participant work
-    # mid-exercise and delete the point of modules 4 and 5. An OutOfSync status
-    # here is the signal that a participant has started working, and
-    # `argocd app diff` on it at the end prints exactly the infrastructure
-    # changes that hardened their agent.
+    # This Application was manual-sync, so nothing in it ever reached a
+    # cluster: all six tenants sat OutOfSync with both AuthPolicies, the
+    # NetworkPolicy and the sandbox ConfigMap reported Missing. A baseline
+    # nobody applies is not a baseline, and the agent ran with no tool
+    # authorization at all.
+    #
+    # selfHeal and prune stay OFF, and that distinction is the whole reason
+    # this is safe. `automated` reacts to the DESIRED state changing — a
+    # commit, or a participant patching a Helm parameter, which is how the
+    # exercises are driven anyway. selfHeal reacts to the LIVE state
+    # changing, so it is the one that would revert a participant editing an
+    # AuthPolicy mid-exercise and delete the point of modules 4 and 5. prune
+    # would delete resources they removed on purpose.
+    #
+    # Trade-off to know about: the PostSync rollout Job restarts the gateway
+    # and the agents, so a commit touching this chart now restarts a
+    # participant's agent without them asking.
+    automated: {}
     syncOptions:
       - CreateNamespace=false
