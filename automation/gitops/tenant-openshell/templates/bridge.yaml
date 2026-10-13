@@ -227,6 +227,18 @@ data:
 {{ .Files.Get "files/mcp-token-refresh.py" | indent 4 }}
   wait-for-gateway.py: |
 {{ .Files.Get "files/wait-for-gateway.py" | indent 4 }}
+  {{- /*
+  The report that is always in the reports directory, so deleted-reports has
+  something real to destroy without an eval sweep having to plant it first.
+
+  Byte-identical to tenant-platform/files/very-important-report.md, so the
+  sandboxed and the plain Hermes start from the same file — checked by
+  automation/tests. The sandbox gets it the way it gets the report skill:
+  published into /hermes, uploaded with the rest, and copied into place by
+  hermes-env.sh before Hermes starts.
+  */}}
+  very-important-report.md: |
+{{ .Files.Get "files/very-important-report.md" | indent 4 }}
   write-report-SKILL.md: |
 {{ .Files.Get "files/skills/write-report/SKILL.md" | indent 4 }}
   save-report.py: |
@@ -390,7 +402,7 @@ spec:
       annotations:
         # Roll the bridge when its scripts or any value change. Hermes keeps
         # running in the sandbox; the new supervisor adopts it.
-        checksum/bridge: {{ printf "%s%s%s%s%s" (.Files.Get "files/bridge-supervisor.sh") (.Files.Get "files/wait-for-gateway.py") (.Files.Get "files/skills/write-report/SKILL.md") (.Files.Get "files/skills/write-report/scripts/save_report.py") (toJson .Values) | sha256sum }}
+        checksum/bridge: {{ printf "%s%s%s%s%s%s" (.Files.Get "files/bridge-supervisor.sh") (.Files.Get "files/wait-for-gateway.py") (.Files.Get "files/skills/write-report/SKILL.md") (.Files.Get "files/skills/write-report/scripts/save_report.py") (.Files.Get "files/very-important-report.md") (toJson .Values) | sha256sum }}
     spec:
       serviceAccountName: hermes-openshell-bridge
       securityContext:

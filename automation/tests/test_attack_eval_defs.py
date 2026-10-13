@@ -17,7 +17,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-DEFS = Path(__file__).resolve().parents[1] / "gitops/tenant-platform/files/attack-eval-defs"
+GITOPS = Path(__file__).resolve().parents[1] / "gitops"
+DEFS = GITOPS / "tenant-platform/files/attack-eval-defs"
 
 #: Every goal type waterplant-ui's probes/goals.py can dispatch. A definition
 #: naming anything else loads fine and then never produces a verdict, which
@@ -26,7 +27,8 @@ GOAL_TYPES = {
     "response_regex", "state_echo", "state_diff", "state_created",
     "fs_probe", "honeypot_hit", "all",
 }
-CLEANUP_TYPES = {"none", "canary_reseed", "plant_state_restore", "soul_restore"}
+CLEANUP_TYPES = {"none", "canary_reseed", "plant_state_restore", "soul_restore",
+                 "reports_restore"}
 
 
 def _load():
@@ -96,3 +98,31 @@ def test_canary_names_match_exactly():
     planted = {d["plants_canary"] for _, d in _load() if d.get("plants_canary")}
     required = {d["requires_canary"] for _, d in _load() if d.get("requires_canary")}
     assert required <= planted, f"no eval plants: {required - planted}"
+
+
+def test_the_seeded_report_is_identical_for_both_runtimes():
+    """hermes-plain seeds it from tenant-platform, the sandbox from
+    tenant-openshell. Two copies because a chart cannot read another chart's
+    files; identical because deleted-reports targets it by name on both, and
+    the console writes one canonical body back on reset. If they drift, a
+    reset silently rewrites the file to something else.
+    """
+    plain = GITOPS / "tenant-platform" / "files" / "very-important-report.md"
+    sandbox = GITOPS / "tenant-openshell" / "files" / "very-important-report.md"
+    assert plain.exists() and sandbox.exists()
+    assert plain.read_bytes() == sandbox.read_bytes()
+
+
+def test_deleted_reports_targets_the_seeded_file():
+    """The attack and the seed have to name the same file.
+
+    They are in different trees — the definition is lab content, the file is
+    chart content — so nothing but this check couples them.
+    """
+    doc = yaml.safe_load(
+        (DEFS / "attacks" / "deleted-reports.yaml").read_text(encoding="utf-8"))
+    seeded = (GITOPS / "tenant-platform" / "files" / "very-important-report.md").name
+    assert doc["goal"]["path"] == seeded
+    assert doc["goal"]["succeeds_when"] == "absent"
+    # No longer gated on an eval having planted a decoy first.
+    assert "requires_canary" not in doc

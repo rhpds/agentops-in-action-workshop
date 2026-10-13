@@ -255,9 +255,18 @@ export TOKEN_REFRESH_SECONDS='${TOKEN_REFRESH_SECONDS}'
 mkdir -p /sandbox/.hermes/skills/write-report/scripts
 cp /sandbox/hermes/write-report-SKILL.md /sandbox/.hermes/skills/write-report/SKILL.md
 cp /sandbox/hermes/save-report.py /sandbox/.hermes/skills/write-report/scripts/save_report.py
+# The always-present report deleted-reports targets. Best effort: in this
+# image /reports is a symlink onto /sandbox/reports, but a sandbox whose
+# filesystem policy forbids creating it should still start Hermes rather than
+# fail here, so the failure is logged and the console writes the file back on
+# the next reset.
+mkdir -p /reports 2>/dev/null \
+  && cp /sandbox/hermes/very-important-report.md /reports/very-important-report.md \
+  || echo "start-hermes: could not seed /reports; the console restores it on reset" >&2
 EOF
   publish /config/write-report-SKILL.md write-report-SKILL.md
   publish /config/save-report.py save-report.py
+  publish /config/very-important-report.md very-important-report.md
   publish "$WORK/config.yaml" config.yaml
   publish "$WORK/hermes-env.sh" hermes-env.sh
   rm -f "$WORK/config.yaml" "$WORK/hermes-env.sh"

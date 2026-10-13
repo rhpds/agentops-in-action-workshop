@@ -24,8 +24,7 @@ policy until that ConfigMap exists.
 Participants can inspect their own workloads, logs, services, gateways, MCP
 resources and policies. They can update these existing resources directly:
 
-- ConfigMap `openshell-sandbox-policy`.
-- NetworkPolicies `allow-ingress-within-namespace` and `egress-baseline`.
+- NetworkPolicy `allow-ingress-within-namespace`.
 - AuthPolicies `mcp-auth-policy` and `mcp-authz-policy`, when enforcement is enabled.
 
 Network-policy workload selectors and policy types stay fixed, keeping the
@@ -37,12 +36,7 @@ changes, recreating the sandbox when required by a filesystem restriction.
 Participants may also update these Helm parameters on their own policy Application:
 
 - `mcpGateway.enforced`.
-- `networkPolicy.permissiveEgress`.
-- `openshell.permissiveEgress`.
-- `openshell.filesystem.readOnly` and `openshell.filesystem.readWrite`.
-- `openshell.broadOutbound.hosts`, `.ports` and `.binaries`.
 
-Indexed array parameters such as `openshell.filesystem.readOnly[0]` are supported.
 Boolean toggles must use `true` or `false`, without `forceString`. Keep the existing
 identity and infrastructure parameters in place when patching the parameter list.
 

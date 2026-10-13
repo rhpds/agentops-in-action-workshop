@@ -229,13 +229,6 @@ keycloak:
   #     - emergency_shutdown         # Scenario 4
   withheldFromOperator: {}
 
-# Coarse egress restriction as defence in depth. Deliberately permissive at
-# baseline — the interesting per-binary policy is OpenShell's job in module 4,
-# and this is the layer participants compare it against.
-networkPolicy:
-  enabled: true
-  baselinePermissive: true
-
 # ---------------------------------------------------------------------------
 # Letting the participant sync their own policy Application
 #

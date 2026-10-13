@@ -1,22 +1,15 @@
 username: user1
 namespaceSuffix: agentops
 
-# Baseline network posture: deliberately wide open.
+# Tenant isolation: ingress to this namespace's workloads is restricted to the
+# namespace itself plus the ingress router. See templates/networkpolicy.yaml
+# for why this is not covered by the sandbox policy.
 #
-# This is the "before" state participants tighten in module 4. It is also the
-# coarse layer they compare OpenShell's per-binary policy against — NetworkPolicy
-# can say "this namespace may reach the internet", but only OpenShell can say
-# "python may reach the model gateway and nothing else".
+# Egress is deliberately unrestricted and has no policy here — that is the
+# sandbox's job, and an unsandboxed agent having open egress is the lab's
+# starting condition.
 networkPolicy:
   enabled: true
-  # true  -> unrestricted egress, the lab's starting condition
-  # false -> egress restricted to the allowlist below
-  permissiveEgress: true
-  allowedEgress:
-    - name: model gateway and MCP servers within the namespace
-      sameNamespace: true
-    - name: DNS
-      ports: [53]
 
 # Tool-level authorization on this participant's own MCP Gateway.
 # See templates/mcp-gateway-policy.yaml.
@@ -52,98 +45,6 @@ mcpGateway:
     timeoutSeconds: 1200
 
 # The realm issuer is https://<host>/realms/waterplant-<username>. Forwarded by
-# bootstrap-tenant; required when mcpGateway.enforced or openshell.enabled.
+# bootstrap-tenant; required when mcpGateway.enforced.
 keycloak:
   host: ""
-
-# The OpenShell policy around Hermes' sandbox.
-# See templates/openshell-sandbox-policy.yaml.
-openshell:
-  # Whether this participant's Hermes runs in an OpenShell sandbox (forwarded
-  # by bootstrap-tenant). Without one there is nothing to apply this to.
-  enabled: false
-
-  # true  -> the lab's starting condition: the binaries below may reach every
-  #          host below, including *.example.com, where the poisoned
-  #          maintenance record sends diagnostics
-  # false -> only what the agent needs: the model endpoint, this participant's
-  #          MCP Gateway and Keycloak, each for named binaries only
-  permissiveEgress: true
-
-  # OpenShell has no "allow everything": every rule names hosts and binaries,
-  # and it refuses `*`, `**` and TLD wildcards such as `**.com`. So "broad" is a
-  # generous named list.
-  broadOutbound:
-    hosts:
-      - example.com
-      - "*.example.com"
-      - httpbin.org
-      - github.com
-      - "*.github.com"
-      - "*.githubusercontent.com"
-      - pypi.org
-      - files.pythonhosted.org
-      - duckduckgo.com
-      - "*.duckduckgo.com"
-      - openrouter.ai
-    ports: [443, 80]
-    binaries:
-      - /usr/bin/curl
-      - /usr/bin/wget
-      - /usr/bin/python3
-      - /usr/bin/python3.12
-      - /usr/local/bin/hermes
-      - /usr/bin/bash
-      - /usr/bin/sh
-
-  # Removing a path here recreates the sandbox, because a live one cannot drop
-  # a path. Hermes needs /sandbox (its home) read-write. Every path listed exists
-  # in the Hermes image; /lib, /lib64, /bin and /sbin are symlinks into /usr.
-  # /var/log holds OpenShell's own logs, including its OCSF audit log.
-  filesystem:
-    readOnly:
-      - /usr
-      - /lib
-      - /lib64
-      - /bin
-      - /sbin
-      - /proc
-      - /dev/urandom
-      - /etc
-      - /opt
-      - /var/log
-    readWrite:
-      - /sandbox
-      - /workspace
-      - /tmp
-      - /dev/null
-      - /dev/zero
-
-  # Where Hermes' traces go. The hermes_otel plugin posts spans to MLflow's
-  # in-cluster Service, and OpenShell refuses any host not named here: without
-  # this rule its proxy answers 403 and the sandbox emits nothing, however much
-  # MLflow itself allows (verified on cluster-jddlk). Turning it off is one way
-  # to show an agent going dark.
-  mlflow:
-    enabled: true
-    # The relay in the bridge pod, not MLflow itself. OpenShell's egress proxy
-    # re-originates TLS and trusts only public roots, while MLflow's
-    # certificate comes from OpenShift's service CA — so a rule naming MLflow
-    # directly is allowed by policy and then dropped at the handshake. nginx in
-    # the bridge relays plain HTTP to MLflow's HTTPS instead.
-    relayServiceName: hermes-mlflow-relay
-    relayPort: 8788
-
-  # More rules, in OpenShell's network_policies shape, e.g.
-  #   docs_site:
-  #     name: "Plant documentation"
-  #     endpoints:
-  #       - { host: docs.example.org, port: 443, protocol: rest, enforcement: enforce, access: read-only }
-  #     binaries:
-  #       - { path: /usr/local/bin/hermes }
-  extraNetworkPolicies: {}
-
-  # Must match tenant-platform: where the model and this participant's MCP
-  # Gateway are.
-  modelBaseUrl: "https://maas-rhdp.apps.maas.redhatworkshops.io/v1"
-  gatewayClassName: data-science-gateway-class
