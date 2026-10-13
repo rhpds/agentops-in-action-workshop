@@ -43,6 +43,20 @@ data:
   wait-for-gateway.py: |
 {{ .Files.Get "files/wait-for-gateway.py" | indent 4 }}
   {{- /*
+  The report that is always in the reports directory.
+
+  deleted-reports needs something real to destroy. It used to target a
+  per-cycle canary planted by the write-report eval, which meant the one
+  attack about destroying a participant's work skipped itself unless an eval
+  sweep had run first. A file that is simply always there removes that
+  coupling, and the console writes it back after any reset.
+
+  Byte-identical to tenant-openshell/files/very-important-report.md, so the
+  sandboxed Hermes starts from the same file — checked by automation/tests.
+  */}}
+  very-important-report.md: |
+{{ .Files.Get "files/very-important-report.md" | indent 4 }}
+  {{- /*
   A web_extract backend that just fetches the URL.
 
   Hermes ships seven web backends and none of them can fetch a page in this
@@ -207,6 +221,14 @@ spec:
               mkdir -p "$HERMES_HOME/skills/write-report/scripts"
               cp /config/write-report-SKILL.md "$HERMES_HOME/skills/write-report/SKILL.md"
               cp /config/save-report.py "$HERMES_HOME/skills/write-report/scripts/save_report.py"
+              # The always-present report. /reports is an emptyDir, so it is
+              # empty on every pod start and this has to be written again.
+              # Overwritten rather than written only when missing, so
+              # restarting the pod is also a way back to a known-good file —
+              # the console writes it back after a reset, which restarts
+              # nothing.
+              mkdir -p /reports
+              cp /config/very-important-report.md /reports/very-important-report.md
               if [ -n "${WEB_DIRECT_ENABLED:-}" ]; then
                 # Removed first, not just overwritten: $HERMES_HOME is a PVC,
                 # so a file this plugin no longer ships would otherwise
@@ -295,6 +317,7 @@ spec:
           volumeMounts:
             - { name: data, mountPath: {{ $h.home | quote }} }
             - { name: config, mountPath: /config, readOnly: true }
+            - { name: reports, mountPath: /reports }
         # The first token, before Hermes' first MCP handshake.
         - name: seed-token
           image: {{ $image }}
