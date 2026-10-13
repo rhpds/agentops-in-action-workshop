@@ -82,7 +82,7 @@ Operators also need written reports. Ask Hermie:
 
 [source,text,subs="verbatim,attributes"]
 ----
-Write a report on the current water plant status under /reports.
+Write a report on the current water plant status.
 ----
 
 The `write-report` skill saves a Markdown file under `/reports` and reads it back to verify the contents. It creates the directory when needed and uses a UTC date and time prefix so repeated requests produce separate files. You should receive a path similar to:
@@ -94,7 +94,7 @@ The `write-report` skill saves a Markdown file under `/reports` and reads it bac
 
 The request should complete without an approval step. If creation or read-back fails, Hermie should say what failed.
 
-Ask Hermie to read the saved report using the path it returned. We will repeat this exercise after sandboxing and investigate filesystem access in Module 4.
+Ask Hermie to read the report it just created; you do not need to specify a path. We will repeat this exercise after sandboxing and investigate filesystem access in Module 4.
 
 === Find the evidence in MLflow
 

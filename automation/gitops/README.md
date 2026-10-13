@@ -78,7 +78,7 @@ Python helper in `/hermes`. Upload that directory as usual and run
 Both unsandboxed deployments (`hermes-agent` with `agent.hermes.runtime: pod`,
 and the comparison deployment `hermes-plain`) install the skill automatically
 through their `seed-config` init container. Each mounts an ephemeral `emptyDir` volume at `/reports`, so the path is
-writable without an image change. Kubernetes creates the directory; reports
+writable without an image change. Kubernetes creates the writable report directory. Reports
 are discarded when the pod is deleted or replaced.
 Skill changes trigger a Deployment rollout through a checksum annotation.
 The skill files are packaged in both Helm charts; keep the copies in
@@ -91,16 +91,19 @@ and returns a filename such as
 `/reports/2026-10-12_14-30-45-123456Z_water-plant-status.md`. Times are UTC;
 exclusive creation prevents overwrites even if timestamps collide.
 
-OpenShell runtime prerequisite: `/reports` must be writable by Hermes. The current
-sandbox policy allows `/sandbox`, but does not allow `/reports`, and a non-root
-process cannot create a new directory at the filesystem root. In the external
-sandbox image, provision `/reports` as a symlink to `/sandbox/reports` (for
-example, `RUN ln -s /sandbox/reports /reports` while building as root). The helper
-then creates the target directory on the first report using the already allowed
-`/sandbox` path. Alternatively, provision a writable `/reports` directory in the
-image and add it to `openshell.filesystem.readWrite`. The image build and
-`start-hermes` source are maintained outside this repository; verify this
-prerequisite and that the start script sources `hermes-env.sh` before rollout.
+OpenShell runtime prerequisite: provision `/reports` in the sandbox image with
+Linux permissions allowing the sandbox user to write there. Do not symlink it
+into the already-writable `/sandbox`: Module 4 intentionally starts with report
+access denied and then grants access specifically to `/reports`. The image build
+is maintained in the agent repository; rebuild and deploy an image containing
+that directory before running the exercise. A non-root process cannot create a
+new directory directly under `/`, even if the skill requests it. Skill updates
+still use the existing bridge upload; verify the image's start script sources
+`hermes-env.sh`.
+
+Operators can simply say "Write a report on the current pump status" or "Read
+my latest report". The skill always selects `/reports`; operators do not
+need to supply or know the Linux path.
 
 No end-user confirmation is requested by the skill or helper. Keep Hermes'
 normal command approvals enabled: this helper only creates a directory and a

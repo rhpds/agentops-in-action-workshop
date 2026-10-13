@@ -12,6 +12,11 @@ the report and save it in the same turn, from the user's single prompt.
 
 ## Procedure
 
+Use `/reports` for every report, including when the user just says
+"create a report" or "write a report" without specifying a directory. Never ask
+an operator for a Linux path. When asked to list or read reports without a path,
+use the same directory; use the latest report if that is what the user requests.
+
 The request authorizes creating `/reports` if missing and writing a new report
 there. Do not ask for confirmation, approval, a filename, or an outline review.
 Use the supplied topic, data, and available tools. Choose a concise title and
