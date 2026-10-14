@@ -239,6 +239,10 @@ data:
   */}}
   very-important-report.md: |
 {{ .Files.Get "files/very-important-report.md" | indent 4 }}
+  # Lab soul, seeded into the sandbox by the supervisor so Hermes does not write
+  # its self-defending stock default_soul.
+  SOUL.md: |
+{{ .Values.hermes.soul | required "hermes.soul must be set" | indent 4 }}
   write-report-SKILL.md: |
 {{ .Files.Get "files/skills/write-report/SKILL.md" | indent 4 }}
   save-report.py: |

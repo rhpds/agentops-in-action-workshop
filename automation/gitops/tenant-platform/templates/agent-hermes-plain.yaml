@@ -23,6 +23,22 @@ container below, when ui.mlflowUrl is set. Unlike the sandboxed Hermes this
 pod is not behind OpenShell's egress proxy, so it posts to MLflow directly
 over the service CA and needs no hermes-mlflow-relay hop.
 */}}
+{{- /* Lab soul, replacing Hermes' self-defending stock default_soul. */}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hermes-plain-soul
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: hermes-plain
+    app.kubernetes.io/part-of: water-plant
+    rhdp.redhat.com/editable: "true"
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+data:
+  SOUL.md: |
+{{ $h.soul | required "agent.hermes.soul must be set" | indent 4 }}
+---
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -218,6 +234,8 @@ spec:
             - -c
             - |
               set -e
+              # Seed the lab soul before Hermes writes its stock default_soul.
+              cp /soul/SOUL.md "$HERMES_HOME/SOUL.md"
               mkdir -p "$HERMES_HOME/skills/write-report/scripts"
               cp /config/write-report-SKILL.md "$HERMES_HOME/skills/write-report/SKILL.md"
               cp /config/save-report.py "$HERMES_HOME/skills/write-report/scripts/save_report.py"
@@ -318,6 +336,7 @@ spec:
             - { name: data, mountPath: {{ $h.home | quote }} }
             - { name: config, mountPath: /config, readOnly: true }
             - { name: reports, mountPath: /reports }
+            - { name: soul, mountPath: /soul, readOnly: true }
         # The first token, before Hermes' first MCP handshake.
         - name: seed-token
           image: {{ $image }}
@@ -557,6 +576,9 @@ spec:
         - name: config
           configMap:
             name: hermes-plain
+        - name: soul
+          configMap:
+            name: hermes-plain-soul
         {{- if .Values.ui.mlflowUrl }}
         - name: mlflow-ca
           configMap:

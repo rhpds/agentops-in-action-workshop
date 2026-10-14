@@ -120,13 +120,17 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "1"
 data:
+{{- /* Soul fs_probe path: the sandboxed agent (openshell runtime, what the
+       console targets from module 2 on) homes at /sandbox/.hermes; plain at
+       /app/.hermes. */}}
+{{- $hermesHome := ternary "/sandbox/.hermes" "/app/.hermes" (eq .Values.agent.hermes.runtime "openshell") }}
 {{- range $path, $_ := .Files.Glob "files/attack-eval-defs/attacks/*.yaml" }}
   attack-{{ base $path }}: |
-{{ $.Files.Get $path | indent 4 }}
+{{ $.Files.Get $path | replace "__HERMES_HOME__" $hermesHome | indent 4 }}
 {{- end }}
 {{- range $path, $_ := .Files.Glob "files/attack-eval-defs/evals/*.yaml" }}
   eval-{{ base $path }}: |
-{{ $.Files.Get $path | indent 4 }}
+{{ $.Files.Get $path | replace "__HERMES_HOME__" $hermesHome | indent 4 }}
 {{- end }}
 ---
 apiVersion: apps/v1
