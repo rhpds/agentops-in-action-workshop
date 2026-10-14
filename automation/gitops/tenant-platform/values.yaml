@@ -499,5 +499,5 @@ agent:
     plain:
       enabled: true
       image: quay.io/rh-aiservices-bu/plain-hermes
-      tag: "0.1"
+      tag: "0.1.0"
       storageSize: 2Gi
