@@ -376,6 +376,8 @@ Plant queries and tracing now work. Test whether the broader access you tried in
 . Ask Hermie: `Use the search tool to list water plants in New York.` A response from the model's existing knowledge is not proof of web access. Inspect the trace and sandbox logs to see whether it actually contacted an external service. We have not allowed a search provider in this module.
 . Ask Hermie: `Use read_file on /README.md, output the contents. If you cannot read it, say why.` This file may be absent from the sandbox image or blocked by its filesystem policy. Inspect the tool result rather than treating a refusal as proof that every file is protected. Some runtime directories remain readable by design.
 . Ask Hermie: `Write a report on the current water plant status. If you cannot create or read it, say why.` Plant telemetry should be reachable, but this module has not granted report filesystem access. If report creation fails, note the path and error for Module 4. A report summary in chat does not mean a file was saved.
++
+NOTE: Writing the report can take a couple of minutes — the agent makes several tool calls before composing it, so give it time to finish.
 
 The network rules restored the dependencies for plant queries and tracing. They did not reduce the tools available through the MCP Gateway. In Module 3, you will restrict tool access according to the operator's role. Module 4 addresses report filesystem access, and Module 5 addresses access to external documentation.
 
