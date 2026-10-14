@@ -540,14 +540,27 @@ checks:
 #
 # `implemented` says whether the step exists in e2e.yml today:
 #
-#   module 1    implemented and verified against a live tenant
-#   modules 2+  designed here, scaffolded in e2e.yml, not yet written
+#   modules 1-2  implemented and verified against a live tenant
+#   modules 3-6  designed here, scaffolded in e2e.yml, not yet written
 #
-# Module 1's content is final and its prompts are exact, so its steps are real.
-# Modules 2 to 6 are still being authored — module-02 is drafted but its
-# OpenShell commands are not settled, and 3 to 6 are outlines. The designed
-# steps stay recorded here so the design is not lost; implement each in e2e.yml
-# as its content lands, and flip `implemented` when you do.
+# Module 2 is gated behind `-e e2e_modules=1,2` (the default). Pass
+# `-e e2e_modules=1` to run module 1 alone, which keeps the whole playbook
+# read-only.
+#
+# What blocks the rest is not all the same thing, and the distinction matters:
+#
+#   module 3  content is written, but the exercise is a human judgement made
+#             in the Keycloak admin UI — which of ~10 role mappings to remove,
+#             decided by reading two attack traces. Scripting it hardcodes our
+#             answer rather than testing the lab.
+#   module 4  content is written and mostly deterministic; the report round
+#             trip is implementable. Its second half is deliberately NOT
+#             assertable — see E2E-M4-02.
+#   modules   still stubs with no participant-facing commands.
+#   5 and 6
+#
+# The designed steps stay recorded here so the design is not lost; implement
+# each in e2e.yml as its blocker clears, and flip `implemented` when you do.
 #
 # Module 1 is read-only. The later modules are not: they create and start an
 # OpenShell sandbox, edit the sandbox policy and repoint the console, because
@@ -602,7 +615,7 @@ e2e_steps:
       before-and-after has no "before" and the narrative collapses.
 
   - id: E2E-M2-01
-    implemented: false
+    implemented: true
     module: module-02
     title: OpenShell sandbox can be created and started
     drives: >-
@@ -616,7 +629,7 @@ e2e_steps:
       creation and the Hermes start dominate e2e wall time.
 
   - id: E2E-M2-02
-    implemented: false
+    implemented: true
     module: module-02
     title: Default-deny sandbox blocks the agent
     drives: >-
@@ -632,7 +645,7 @@ e2e_steps:
       enforcing.
 
   - id: E2E-M2-03
-    implemented: false
+    implemented: true
     module: module-02
     title: Named egress policies restore the agent
     drives: >-
@@ -648,7 +661,7 @@ e2e_steps:
       is reachable and correctly named for this cluster's domain.
 
   - id: E2E-M2-04
-    implemented: false
+    implemented: true
     module: module-02
     title: Sandboxing blocked the baseline attacks
     drives: Re-run the two E2E-M1-03 attacks against the sandboxed agent.
@@ -658,7 +671,7 @@ e2e_steps:
       agent, unmodified, with the attacks blocked and the workflow intact.
 
   - id: E2E-M2-05
-    implemented: false
+    implemented: true
     module: module-02
     title: Traces reach MLflow
     drives: Query the MLflow experiment named for the tenant.

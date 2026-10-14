@@ -111,10 +111,19 @@
     # What a synced tenant-policy Application leaves behind: the lab's starting
     # posture, the thing later modules tighten. Grouped by kind for the same
     # reason as the operators above.
+    #
+    # Keep this in step with automation/gitops/tenant-policy/templates/ — it is
+    # the set that chart actually renders, and the chart moves. The
+    # openshell-sandbox-policy ConfigMap and the egress-baseline NetworkPolicy
+    # were both in this list and have since been removed from the chart:
+    # participants now set OpenShell policy by hand with `openshell policy
+    # update` in module 2 rather than inheriting a pre-applied one. Check the
+    # Application's own resource list before editing this:
+    #   oc -n openshift-gitops get application <user>-policy \
+    #     -o jsonpath='{range .status.resources[*]}{.kind}/{.name}{"\n"}{end}'
     hc_policy_baseline:
-      - { api: v1, kind: ConfigMap, names: [openshell-sandbox-policy] }
       - { api: kuadrant.io/v1, kind: AuthPolicy, names: [mcp-auth-policy, mcp-authz-policy] }
-      - { api: networking.k8s.io/v1, kind: NetworkPolicy, names: [allow-ingress-within-namespace, egress-baseline] }
+      - { api: networking.k8s.io/v1, kind: NetworkPolicy, names: [allow-ingress-within-namespace] }
 
   tasks:
 

@@ -269,10 +269,21 @@
     _absent: "{{ _absent_json | from_json }}"
     _total: "{{ hc_policy_baseline | map(attribute='names') | map('length') | sum }}"
     _ok: "{{ _absent | length == 0 }}"
+    # Two very different causes produce the same missing objects, so the
+    # Application's own operationState picks them apart: never synced is a
+    # provisioning gap, whereas synced-but-missing means the chart no longer
+    # renders what hc_policy_baseline still expects.
+    _synced: >-
+      {{ (hc_applications.resources | selectattr('metadata.name', 'equalto', hc_tenant ~ '-policy')
+          | first | default({})).get('status', {}).get('operationState', {}).get('phase', '') == 'Succeeded' }}
     _detail: >-
       {{ _ok | ternary('baseline policy applied (' ~ _total ~ ' objects)',
-                       'baseline NEVER APPLIED, missing: ' ~ (_absent | join(', '))
-                       ~ ' — sync ' ~ hc_tenant ~ '-policy once at provisioning time') }}
+           (_synced | ternary(
+             'missing: ' ~ (_absent | join(', ')) ~ ' — ' ~ hc_tenant
+             ~ '-policy IS synced, so either the chart no longer renders these'
+             ~ ' (update hc_policy_baseline in healthcheck.yml) or a participant removed them',
+             'baseline NEVER APPLIED, missing: ' ~ (_absent | join(', '))
+             ~ ' — sync ' ~ hc_tenant ~ '-policy once at provisioning time'))) }}
 
 - name: "Record TEN-WL-01..03 — workloads and pods"
   ansible.builtin.set_fact:
@@ -387,9 +398,14 @@
     # fix is a chart change — add kuadrant-system to the NetworkPolicy's
     # ingress allowlist — after which this reverts to a hard failure on its
     # own, with no edit here.
+    # Looked up by kind, not by position in t_policy.results — that list is
+    # built from hc_policy_baseline, so indexing it couples this check to the
+    # order and length of an unrelated variable.
     _baseline_applied: >-
-      {{ (t_policy.results[2].resources | default([])
-          | map(attribute='metadata.name') | list) is contains('allow-ingress-within-namespace') }}
+      {{ (t_policy.results | selectattr('item.kind', 'equalto', 'NetworkPolicy')
+          | map(attribute='resources') | flatten
+          | map(attribute='metadata.name') | list)
+         is contains('allow-ingress-within-namespace') }}
     _probe_blocked: >-
       {{ (t_registrations | length > 0) and
          (t_registrations | map(attribute='status.conditions') | flatten

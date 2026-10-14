@@ -43,6 +43,18 @@
     e2e_user_data_file: /user_data/user_data.yml
     hc_mcp_servers: [control-mcp, maintenance-mcp, telemetry-mcp]
 
+    # Which modules to run. Module 1 is read-only; module 2 creates a sandbox
+    # and repoints the console. `-e e2e_modules=1` keeps the run read-only.
+    e2e_modules: "1,2"
+    _e2e_modules: >-
+      {{ (e2e_modules | string).split(',') | map('trim') | select() | map('int') | list }}
+
+    e2e_sandbox: hermie
+    # Must match tenant-openshell's hermes.image — module 2 sandboxes the same
+    # image the agent already runs, which is what makes "we changed nothing
+    # about the agent" true.
+    e2e_agent_image: quay.io/rh-aiservices-bu/waterplant-hermes:0.2.2
+
     # The three prompts module 1 has the participant type, verbatim from
     # content/modules/ROOT/pages/module-01.adoc.
     e2e_prompt_normal: "What's the status of pump 4?"
@@ -76,8 +88,55 @@
       ansible.builtin.set_fact:
         t_ns: "{{ t_user }}-agentops"
         # The unsandboxed agent the console talks to at baseline. Module 2
-        # repoints the console at hermes-agent, the sandboxed one.
+        # repoints the console at hermes-agent, which the bridge relay fronts
+        # with the sandboxed one.
         t_plain_url: "http://hermes-plain.{{ t_user }}-agentops.svc:8787"
+        t_sandboxed_url: "http://hermes-agent.{{ t_user }}-agentops.svc:8787"
+
+    - name: "setup | Read the cluster's ingress domain"
+      kubernetes.core.k8s_info:
+        api_version: config.openshift.io/v1
+        kind: Ingress
+        name: cluster
+      register: t_ingress
+
+    - name: "setup | Read the bridge Deployment for its model endpoint"
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        namespace: "{{ t_ns }}"
+        name: hermes-openshell-bridge
+      register: t_bridge_deploy
+
+    - name: "setup | Derive the hosts module 2's policy rules have to name"
+      ansible.builtin.set_fact:
+        # Read from the cluster and from the workload rather than hardcoded:
+        # these hostnames differ per cluster, and a wrong one is the most
+        # likely reason E2E-M2-03 fails on a new build.
+        t_keycloak_host: "sso.{{ t_ingress.resources[0].spec.domain }}"
+        t_model_host: "{{ _model_base | regex_replace('^https?://([^/:]+).*$', '\\1') }}"
+      vars:
+        # selectattr('env', 'defined') first: the bridge pod has containers
+        # with no env block at all (cli, relay-proxy), and map(attribute='env')
+        # over those yields Undefined, which silently collapses the whole
+        # chain to '' and produces a ':443' endpoint later.
+        _model_base: >-
+          {{ (t_bridge_deploy.resources[0].spec.template.spec.containers
+              | selectattr('env', 'defined') | map(attribute='env') | flatten
+              | selectattr('name', 'equalto', 'MODEL_BASE_URL')
+              | map(attribute='value') | first | default('')) }}
+
+    - name: "setup | The policy hosts must have resolved"
+      ansible.builtin.assert:
+        that:
+          - t_keycloak_host | length > 4
+          - t_model_host | length > 0
+        fail_msg: >-
+          Could not derive the hosts module 2's policy rules need
+          (keycloak={{ t_keycloak_host | default('') }},
+          model={{ t_model_host | default('') }}).
+          MODEL_BASE_URL is read from the hermes-openshell-bridge Deployment;
+          check it is still set there.
 
     - name: "setup | Read the agent credentials"
       kubernetes.core.k8s_info:
@@ -98,27 +157,43 @@
         t_api_key: "{{ t_secret.resources[0].data.API_SERVER_KEY | b64decode }}"
       no_log: true
 
-    - name: "setup | Find the pod the prompts are sent from"
+    - name: "setup | Find the baseline agent and the console pods"
       kubernetes.core.k8s_info:
         api_version: v1
         kind: Pod
         namespace: "{{ t_ns }}"
         label_selectors:
-          - app.kubernetes.io/name=hermes-plain
+          - "app.kubernetes.io/name={{ item }}"
         field_selectors:
           - status.phase=Running
-      register: t_client
+      loop: [hermes-plain, water-plant-ui]
+      loop_control:
+        label: "{{ item }}"
+      register: t_pods
 
-    - name: "setup | The baseline agent must be running"
+    - name: "setup | The baseline agent and the console must both be running"
       ansible.builtin.assert:
-        that: t_client.resources | length > 0
-        fail_msg: "No running hermes-plain pod in {{ t_ns }} — run healthcheck.yml first (TEN-AGT-01)."
+        that:
+          - t_pods.results[0].resources | length > 0
+          - t_pods.results[1].resources | length > 0
+        fail_msg: >-
+          Missing a running pod in {{ t_ns }}
+          (hermes-plain={{ t_pods.results[0].resources | length }},
+          water-plant-ui={{ t_pods.results[1].resources | length }}).
+          Run healthcheck.yml first.
 
-    - name: "setup | Record the client pod"
+    - name: "setup | Record the console as the client pod"
       ansible.builtin.set_fact:
-        # Every prompt is curl'd from inside this pod: the agent Services are
-        # ClusterIP, so there is no route to them from the controller.
-        e2e_client_pod: "{{ t_client.resources[0].metadata.name }}"
+        # Every prompt is curl'd from inside the operator console's pod. Two
+        # reasons: the agent Services are ClusterIP so there is no route to
+        # them from the controller, and the bridge's own NetworkPolicy
+        # (hermes-openshell-bridge-ingress) admits port 8787 ONLY from pods
+        # labelled water-plant-ui. Prompting from anywhere else reaches plain
+        # Hermes but gets a connection failure against the sandboxed agent in
+        # module 2 — correctly, since the console is the only thing allowed to
+        # talk to it. Sending from the console is also what the lab describes.
+        e2e_client_pod: "{{ t_pods.results[1].resources[0].metadata.name }}"
+        e2e_client_container: ui
 
     # ── Module 1: Introduction to AgentOps & Meet Hermie ────────────────────
 
@@ -221,28 +296,69 @@
     # tasks/ask-agent.yml for prompts and tasks/count-tool-calls.yml for tool
     # evidence, and set `implemented: true` on its step in the spec.
 
-    - name: "M2-M6 | Not yet implemented"
+    # ── Module 2: Sandbox the Agent ─────────────────────────────────────────
+    #
+    # Mutating. Skip with -e e2e_modules=1 to run module 1 on its own, which
+    # keeps the whole playbook read-only.
+
+    - name: "Module 2 — Sandbox the Agent"
+      ansible.builtin.include_tasks: tasks/e2e-module-02.yml
+      when: 2 in _e2e_modules
+
+    - name: "M2 | Skipped"
+      ansible.builtin.debug:
+        msg: "Module 2 skipped (e2e_modules={{ e2e_modules }}). Module 1 only — nothing was mutated."
+      when: 2 not in _e2e_modules
+
+    # ── Modules 3-6: scaffolding ────────────────────────────────────────────
+    #
+    # Placeholders, not silent gaps. Each says what it will assert and why it
+    # is not implemented, so the hole is visible in the run output.
+
+    - name: "M3-M6 | Not yet implemented"
       ansible.builtin.debug:
         msg: |
-          SCAFFOLD — modules 2 to 6 have no e2e coverage yet.
+          SCAFFOLD — modules 3 to 6 have no e2e coverage yet.
 
           {% for s in _scaffold %}
           {{ s.id }} ({{ s.module }}) — {{ s.title }}
+              {{ s.why }}
           {% endfor %}
 
-          content/modules/ROOT/pages/module-0{3,4,5,6}.adoc are still
-          outlines; module-02 is drafted but its commands are not final.
-          Implementing them now would encode guesses and be rewritten when the
-          content settles. See `e2e_steps` in qa-automation/healthcheck-spec.yaml
-          for the designed steps.
+          See `e2e_steps` in qa-automation/healthcheck-spec.yaml for the
+          designed steps, and implement them here as each blocker clears.
       vars:
         _scaffold:
-          - { id: E2E-M2-01, module: module-02, title: "Create, seed and start the OpenShell sandbox" }
-          - { id: E2E-M2-02, module: module-02, title: "Default-deny sandbox BLOCKS the agent, with a DENIED line logged" }
-          - { id: E2E-M2-03, module: module-02, title: "Four named egress rules restore the agent, no rebuild" }
-          - { id: E2E-M2-04, module: module-02, title: "Baseline attacks are now BLOCKED while the workflow completes" }
-          - { id: E2E-M2-05, module: module-02, title: "Spans reach the MLflow relay" }
-          - { id: E2E-M3-01, module: module-03, title: "Let the agent use its tools — content pending" }
-          - { id: E2E-M4-01, module: module-04, title: "Let the agent write files — content pending" }
-          - { id: E2E-M5-01, module: module-05, title: "Let the agent reach the docs website — content pending" }
-          - { id: E2E-M6-01, module: module-06, title: "Guard against a compromised account — content pending" }
+          - id: E2E-M3-01
+            module: module-03
+            title: "Restrict the operator's Keycloak roles, then re-run the attacks"
+            why: >-
+              Blocked on judgement, not content. The module has the participant
+              open the Keycloak admin console, read two attack traces, and
+              decide which of ~10 role mappings to remove. Scripting it means
+              hardcoding that answer, which would assert our guess rather than
+              the lab. Implementable via the Keycloak Admin REST API once the
+              intended role set is pinned down.
+          - id: E2E-M4-01
+            module: module-04
+            title: "Scoped filesystem policy restores report writing"
+            why: >-
+              Implementable — the policy edit, sandbox recreate and report
+              round trip are all deterministic CLI steps. Depends on module 3
+              having run first.
+          - id: E2E-M4-02
+            module: module-04
+            title: "An ambiguous cleanup request deletes reports it should not"
+            why: >-
+              Deliberately non-deterministic. The module itself says the
+              behaviour "can vary: if it asks a question or declines, inspect
+              whether any deletion occurred rather than claiming the
+              demonstration succeeded." Not assertable as pass/fail.
+          - id: E2E-M5-01
+            module: module-05
+            title: "Let the agent reach the docs website"
+            why: "Content is still a 23-line stub with no commands."
+          - id: E2E-M6-01
+            module: module-06
+            title: "Guard against a compromised account"
+            why: "Content is still a 24-line stub with no commands."

@@ -24,7 +24,7 @@
   kubernetes.core.k8s_exec:
     namespace: "{{ t_ns }}"
     pod: "{{ e2e_client_pod }}"
-    container: hermes
+    container: "{{ e2e_client_container }}"
     command: >-
       sh -c 'echo {{ _payload_b64 }} | base64 -d |
       curl -s --max-time {{ e2e_prompt_timeout }}
@@ -47,10 +47,19 @@
     # Hermes reports a refusal or a tool failure as a 200 carrying an `error`
     # object, so transport success does not mean the turn worked. An
     # unparseable or empty body counts as failed too.
+    #
+    # It also has a third failure shape: when its outbound calls are blocked
+    # it answers with an ordinary assistant message reading "API call failed
+    # after N retries: Connection error." — no error object, non-empty
+    # content. Matched here so callers are not told the turn succeeded.
+    # Callers that need infrastructure-level proof should still assert on
+    # denial logs or tool-call counts rather than on this flag.
     ask_failed: >-
       {{ (_parsed | length == 0) or ('error' in _parsed)
-         or (_parsed.get('choices', []) | length == 0) }}
+         or (_parsed.get('choices', []) | length == 0)
+         or (_content is search('API call failed after .* retries')) }}
     ask_error: "{{ _parsed.get('error', {}).get('message', '') }}"
   vars:
     _out: "{{ ask_raw.stdout | default('') | trim }}"
     _parsed: "{{ (_out | from_json) if (_out.startswith('{')) else {} }}"
+    _content: "{{ _parsed.get('choices', [{}])[0].get('message', {}).get('content', '') }}"
