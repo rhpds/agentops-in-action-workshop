@@ -20,9 +20,17 @@ You restored plant queries and report generation in the previous modules. The op
 
 === Let the skill choose the source
 
-The operator should not need to know a hostname. It has a skill called `read-safety-docs` that selects the documentation index at `https://waterplant-docs-{user}-agentops.{openshift_cluster_ingress_domain}/` and read the relevant page. It covers pump vibration limits, shutdown procedures, reservoir draining, and the field service bulletin.
+. Try it yourself, see the error. Send the below prompt:
++
+--
+[source,text]
+----
+Check the safety documentation and tell me the pump vibration limits.
+----
 
-. From the Terminal tab, enter the bridge's CLI container if you are not already there:
+There is a skill called `read-safety-docs` which knows where the documentation is and read the relevant page. Operator doesn't need to point out the documentation specifically.
+
+. If you want to check the skill definition, go back to the Terminal tab. Enter the bridge's CLI container if you are not already there:
 +
 --
 [source,bash,subs="verbatim,attributes"]
@@ -40,18 +48,10 @@ oc rsh -n {user}-agentops -c cli "$POD"
 openshell sandbox exec --name hermie -- cat /sandbox/.hermes/skills/read-safety-docs/SKILL.md
 ----
 
-Notice that the skill contains the source URL.
+Notice that the skill contains the documentation URL.
 --
 
-. In the operator console, send:
-+
---
-[source,text]
-----
-Check the safety documentation and tell me the pump vibration limits.
-----
-
-Inspect the trace. Hermie should attempt to read the index and the relevant documentation page and failed due to a very familiar error.
+. The timeout answer from the agent should already be very familiar by now. You can also inspect the trace in MLFlow if you wish.
 --
 
 === Restore documentation access
@@ -76,11 +76,27 @@ openshell policy update hermie \
 
 . You don't need to restart the agent; the policy is in effect immediately.
 
-The operator has the documentation back. Another successful fix! Or is it? 🫣
+. Go back to the agent give it a try before you give the good news to the operator.
 
-=== “Emojis everywhere!”
+--
+[source,text]
+----
+Check the safety documentation and tell me the pump vibration limits.
+----
 
-The operator calls again: “I asked Hermie to check the latest bulletin, AND NOW THE EMOJIS ARE EVERYWHERE. It is nonesens!!”
+. Here is another prompt an operator might try:
+
+--
+[source,text]
+----
+What is the Emergency shutdown procedure?
+----
+
+. Good job! The operator has the documentation back. Another successful fix! Or is it? 🫣
+
+=== “Emojis everywhere!” 👻👻👻
+
+The operator calls again: “I asked Hermie to check the latest bulletin, AND NOW THE EMOJIS ARE EVERYWHERE. It is nonesense!!”
 
 . See it for yourself. Ask Hermie to consult the bulletin:
 +
@@ -93,9 +109,9 @@ Read the latest field service bulletin and summarize what I should check.
 Emojis, emojis everywhere!
 --
 
-. Inspect the request's trace and the fetched content. Look for instructions that address the assistant rather than describe a plant procedure. Did Hermie treat those instructions as part of the document, or follow them when composing its answer?
+. Inspect the request's trace and the fetched content. In the trace you see an endpoint like `http://waterplant-docs:8080/attack/override`. What is going on?
 
-. Check Hermie's extraction log for the redirect chain:
+. Check Hermie's extraction log for the redirect chain. You see the same atack endpoint there too!
 +
 --
 [source,bash]
@@ -103,7 +119,7 @@ Emojis, emojis everywhere!
 openshell sandbox exec --name hermie -- tail -n 120 /sandbox/hermes-gateway.log
 ----
 
-The direct extraction provider records redirects. The relevant request path is:
+The documentation website must have been compromised 😱😱 This is what is going on:
 
 [source,text]
 ----
@@ -114,7 +130,12 @@ http://waterplant-docs:8080/doc/field-service-bulletin
 http://waterplant-docs:8080/attack/collect
 ----
 
-Both addresses use the same host and port. The host-wide permission allows the redirected request as well as the original documentation page.
+. You can also go to the documentation website and see it for yourself.
+
+https://waterplant-docs-{user}-agentops.{openshift_cluster_ingress_domain}/
+
+Click the newly published Field Service Bulletin. It's a prompt injection attack! 
+
 --
 
 Your investigation reveals that part of the documentation site has been compromised. The field service bulletin redirects Hermie to attacker-controlled content containing instructions to answer only in emojis. The operator asked for a maintenance briefing, but the fetched content tried to change how the assistant behaves. This is an indirect prompt injection: the instructions arrive through a document rather than from the operator.
@@ -188,7 +209,6 @@ The `sed` command inserts the new rule immediately beneath `network_policies:`.
 [source,bash]
 ----
 openshell policy set hermie --policy /tmp/hermie-docs-policy.restricted.yaml --wait
-openshell policy get hermie --full
 ----
 
 Confirm that `waterplant_docs` contains only the two `GET` path rules. Check that no other rule grants broad access to the same destination.
@@ -208,25 +228,43 @@ Only network permissions changed, so sandbox recreation is not required. OpenShe
 
 . Repeat the bulletin request. The fetch of `/doc/field-service-bulletin` is allowed, but its redirect to `/attack/collect` should be denied. Hermie should report that it could not retrieve the bulletin rather than claim it read it successfully.
 +
++
+--
+[source,text]
+----
+Read the latest field service bulletin and summarize what I should check.
+----
+
+. You can see the  fresh HTTP denial on `/attack/collect` in the OpenShell log as well.
 --
 [source,bash]
 ----
 openshell logs hermie --since 5m --source sandbox | grep DENIED
 ----
 
-Look for a fresh HTTP denial on `/attack/collect`.
+. But the fetch for the other document should still work. Verify it by sending one of the prompts earlier:
++
+--
+[source,text]
+----
+Check the safety documentation and tell me the pump vibration limits.
+----
 --
 
 . In the footer, select the documentation redirect attack and click *Run attack*. Inspect the notification. The attack checks whether its receiving endpoint was reached.
 
 . Click *Run all evals* and inspect the documentation result. Legitimate documentation reading should still work. Use the scorecard's trace links to investigate any failures and compare with your earlier run.
 
-The result we want is specific: useful documentation is readable, while the unwanted redirected destination is blocked. Blocking the entire host would stop the attack but break the operator's task again.
+The result we aimed is specific: useful documentation is readable, while the unwanted redirected destination is blocked. Blocking the entire host would stop the attack but break the operator's task again.
 
 === What did we learn?
 
 You restored an operator's access to safety documentation, then investigated why that access exposed Hermie to an unexpected page. Restricting the hostname was a useful first boundary, but method-and-path rules made that permission match the documentation task more closely.
 
-The policy stopped this delivery route. It did not solve every prompt injection problem. If malicious instructions appeared directly inside an allowed `/doc/` page, the fetch would still be permitted. An allowed website or tool can return content that the agent should treat as data rather than authority.
+The policy stopped this delivery route. It did not solve every prompt injection problem. If malicious instructions appeared directly inside an allowed `/doc/` page, the fetch would still be permitted.
 
-That is why tracing and response guardrails matter as well. You need to inspect what Hermie read, how it used that content, and whether its response still serves the operator's request. Keep that distinction in mind as you continue: permission to access a source is not permission for the source to control the assistant.
+The sandbox puts a boundary around Hermie, defining which systems, files, and endpoints it can reach. But we also need to watch what happens inside that boundary. A compromised tool or document can influence the agent through an allowed interaction, leading to misleading advice or harmful actions using permissions it already has. Those actions can disrupt the business even without crossing the sandbox boundary.
+
+That is why tracing and guardrails matter as well. You need to inspect what Hermie read, how it used that content, and whether its actions still serve the operator's request. Setting boundaries and checking the interactions within them are both part of operating the agent safely.
+
+Onto the guardrails then!
