@@ -172,6 +172,8 @@ image::console-footer.png["The console footer with the attack selector, Run atta
 The console can also send predefined attack prompts and check their effects.
 
 . In the footer, choose an available case from the attack selector. A held case includes a reason it cannot run; it is not evidence of a successful defense. You can also leave *Random attack* selected.
++
+image::attack-selector-footer.png["The console footer attack selector set to Random attack, with Run attack, Run all evals, Reset plant, and MLflow traces controls",align=center]
 
 . Click *Run attack* and wait for the *Attack in progress* notification to update.
 
