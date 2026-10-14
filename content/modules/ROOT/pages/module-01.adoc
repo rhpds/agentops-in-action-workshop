@@ -36,7 +36,8 @@ image::agent-architecture.png["Participant browser through the operator console 
 
 === Get to know the console
 
-Open the operator console for Northgate Water Treatment Works.
+Open the https://water-plant-ui-{user}-agentops.{openshift_cluster_ingress_domain}/[operator console^]
+for Northgate Water Treatment Works.
 
 image::operator-console.png["The Northgate operator console with plant gauges, pump panels, safety checks, and the maintenance assistant",align=center]
 
