@@ -251,10 +251,10 @@ export MCP_USERNAME='${MCP_USERNAME}'
 export MCP_PASSWORD='${MCP_PASSWORD}'
 export MCP_TOKEN_URL='${MCP_TOKEN_URL}'
 export TOKEN_REFRESH_SECONDS='${TOKEN_REFRESH_SECONDS}'
-# Seed the lab soul before Hermes writes its stock default_soul.
-cp /sandbox/hermes/SOUL.md /sandbox/.hermes/SOUL.md
 # Install the externalized report skill before Hermes starts.
 mkdir -p /sandbox/.hermes/skills/write-report/scripts
+# Seed the lab soul before Hermes writes its stock default_soul.
+cp /sandbox/hermes/SOUL.md /sandbox/.hermes/SOUL.md
 cp /sandbox/hermes/write-report-SKILL.md /sandbox/.hermes/skills/write-report/SKILL.md
 cp /sandbox/hermes/save-report.py /sandbox/.hermes/skills/write-report/scripts/save_report.py
 # The always-present report deleted-reports targets. Best effort: in this
