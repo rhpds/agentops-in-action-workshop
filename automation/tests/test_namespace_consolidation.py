@@ -97,6 +97,24 @@ class Consolidation(unittest.TestCase):
                             if (subject['name'], subject.get('namespace')) == ('attack-eval-runner', 'agentops-shared'):
                                 continue
                             self.assertEqual(subject.get('namespace', ns), ns)
+                # Every ServiceAccount a workload asks for must actually be
+                # rendered. A missing `---` between two objects in a template
+                # merges them into one document and the later kind silently
+                # wins: the console's ServiceAccount was swallowed by a Role
+                # added after it, and the only symptom was pods refusing to
+                # start with "serviceaccount not found" — nothing in the
+                # template looked wrong.
+                accounts = {d['metadata']['name'] for d in docs
+                            if d['kind'] == 'ServiceAccount'}
+                for d in docs:
+                    if d['kind'] not in ('Deployment', 'StatefulSet', 'Job'):
+                        continue
+                    wanted = d['spec']['template']['spec'].get('serviceAccountName')
+                    if wanted and wanted != 'default':
+                        self.assertIn(wanted, accounts,
+                                      f"{d['kind']}/{d['metadata']['name']} wants "
+                                      f"ServiceAccount {wanted}, which nothing renders")
+
                 for app in (d for d in bootstrap if d['kind'] == 'Application'):
                     self.assertEqual(app['spec']['destination']['namespace'], ns)
                     automated = app['spec'].get('syncPolicy', {}).get('automated')
