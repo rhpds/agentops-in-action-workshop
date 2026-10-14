@@ -3,7 +3,7 @@
 
 // Operator prompts should not include a URL. The read-safety-docs skill is
 // installed in plain and sandboxed Hermes and points to this participant's
-// http://waterplant-docs.<participant>-agentops.svc.cluster.local:8080/doc/.
+// http://waterplant-docs:8080/doc/.
 // Actual documentation routes use /doc/, not /docs/.
 // Example normal prompt: "What are the safety limits for pump vibration?"
 // Example bulletin prompt: "Read the latest field service bulletin and summarize what I should check."
@@ -22,6 +22,16 @@ it turned out there is a prompt injection attack
 we update the policy with website/docs
 
 but that teaches us that only accesing the authorized websites and tools are not enough, we need to inspect the ineractions > hint guardrails
+
+
+openshell policy update hermie \
+  --rule-name waterplant_docs \
+  --add-endpoint waterplant-docs:8080:full:rest:enforce \
+  --binary /usr/bin/python3 \
+  --binary /usr/bin/python3.12 \
+  --binary /usr/local/bin/hermes \
+  --wait
+
 
 == Objectives
 

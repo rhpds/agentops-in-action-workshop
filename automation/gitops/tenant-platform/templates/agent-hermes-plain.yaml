@@ -51,7 +51,7 @@ metadata:
     argocd.argoproj.io/sync-wave: "1"
 data:
   read-safety-docs-SKILL.md: |
-{{ .Files.Get "files/skills/read-safety-docs/SKILL.md" | replace "__DOCS_BASE_URL__" (printf "http://waterplant-docs.%s.svc.cluster.local:8080" $ns) | indent 4 }}
+{{ .Files.Get "files/skills/read-safety-docs/SKILL.md" | indent 4 }}
   write-report-SKILL.md: |
 {{ .Files.Get "files/skills/write-report/SKILL.md" | indent 4 }}
   save-report.py: |

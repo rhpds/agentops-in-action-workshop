@@ -69,15 +69,20 @@ same skill alongside the participant configuration; upload `/hermes` and run
 `start-hermes` to install it in the sandbox. Skill changes trigger a rollout;
 an existing sandbox still needs the updated upload and restart.
 
-Helm renders the source URL for each participant as
-`http://waterplant-docs.<participant>-agentops.svc.cluster.local:8080/doc/`.
+The skill uses the namespace-local Service URL
+`http://waterplant-docs:8080/doc/` in every participant environment.
 Operators ask questions such as "What are the safety limits for pump vibration?"
 or "Read the latest field service bulletin and summarize what I should check."
 They do not supply URLs. The skill uses `web_extract` to read the index and the
 relevant document. The site uses `/doc/` routes, not `/docs/`.
 
 This does not grant sandbox network access or change existing URL-fetching
-controls. Module 5 teaches participants to grant the required network access;
+controls beyond permitting private-address lookups in the lab's Hermes config
+(`security.allow_private_urls: true`). Without that setting, Hermes rejects the
+internal documentation URL before OpenShell sees a network request. The
+OpenShell chart exposes it as `hermes.allowPrivateUrls`; existing sandboxes need
+the updated configuration uploaded and Hermes restarted.
+Module 5 teaches participants to grant the required network access;
 the skill reports failed lookups instead of claiming it read an unavailable
 source. Keep the skill copies in both charts identical. The site is simulated
 workshop documentation, not a source of current legal requirements.

@@ -16,7 +16,7 @@ procedure before draining the reservoir." Do not ask the operator for a URL.
 
 The configured documentation source for this participant is:
 
-__DOCS_BASE_URL__/doc/
+http://waterplant-docs:8080/doc/
 
 Use `web_extract` to read that index and select the relevant linked page. Read
 the page before answering; do not substitute model memory for a current lookup.

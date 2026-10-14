@@ -79,6 +79,8 @@ bridge:
     limits:   { cpu: 500m, memory: 256Mi }
 
 hermes:
+  # Internal lab documentation must reach OpenShell's network policy checks.
+  allowPrivateUrls: true
   # MODEL_API_KEY and API_SERVER_KEY, in the participant's lab namespace. The
   # bridge reads it there; see templates/bridge.yaml.
   envSecret: hermes-env
