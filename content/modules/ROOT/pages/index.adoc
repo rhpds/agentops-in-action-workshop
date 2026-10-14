@@ -14,7 +14,43 @@ Welcome to this hands-on AgentOps lab. Over approximately two hours you will tak
 
 == Environment
 
-Your environment is a shared Red Hat OpenShift 4.22 cluster running Red Hat OpenShift AI 3.6. Your dedicated lab namespace is `{guid}-agentops`. Use the tabs above to navigate between the terminal, the OpenShift console, MLflow, and EvalHub.
+Your environment is a shared Red Hat OpenShift 4.22 cluster running Red Hat OpenShift AI 3.6. Your dedicated lab namespace is `{user}-agentops`. Use the tabs above to navigate between the terminal, the OpenShift console, MLflow, and EvalHub.
+
+Everything below is specific to your participant account and is filled in automatically. You do not need to share these with anyone.
+
+=== Your URLs
+
+[cols="1,3"]
+|===
+|What |Where
+
+|Operator console
+|https://water-plant-ui-{user}-agentops.{openshift_cluster_ingress_domain}/[water-plant-ui-{user}-agentops.{openshift_cluster_ingress_domain}^]
+
+|OpenShift web console
+|{openshift_console_url}[{openshift_console_url}^]
+
+|OpenShift API (for `oc login`)
+|`{openshift_api_url}`
+
+|Keycloak admin console
+|https://sso.{openshift_cluster_ingress_domain}/admin/waterplant-{user}/console[sso.{openshift_cluster_ingress_domain}/admin/waterplant-{user}/console^]
+|===
+
+=== Your credentials
+
+[cols="2,1,2"]
+|===
+|Where |Username |Password
+
+|OpenShift console and `oc login`
+|`{user}`
+|`{password}`
+
+|Keycloak admin console
+|`admin`
+|`{password}`
+|===
 
 == Modules
 

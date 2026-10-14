@@ -9,3 +9,18 @@ asciidoc:
     experimental: true
     page-pagination: true
     guid: '%GUID%'
+
+    # Sample values so the lab renders readably in a local Antora preview.
+    #
+    # Every one carries a trailing '@', which makes it a SOFT-SET attribute:
+    # anything that supplies the same attribute at build or deploy time wins,
+    # and these are used only when nothing else provides a value. They are
+    # deliberately fictional -- never put a real participant password here.
+    #
+    # Keep this list in step with the attributes the pages actually reference:
+    #   grep -rhoE '\{[a-z][a-z0-9_]*\}' content/modules/ROOT/pages/*.adoc | sort -u
+    user: 'user-example@'
+    password: 'ExamplePassw0rd@'
+    openshift_cluster_ingress_domain: 'apps.cluster-example.dyn.redhatworkshops.io@'
+    openshift_console_url: 'https://console-openshift-console.apps.cluster-example.dyn.redhatworkshops.io@'
+    openshift_api_url: 'https://api.cluster-example.dyn.redhatworkshops.io:6443@'

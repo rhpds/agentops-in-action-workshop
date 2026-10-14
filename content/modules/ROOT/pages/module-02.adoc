@@ -226,12 +226,14 @@ WARNING tools.mcp_tool: MCP server 'gateway' failed initial OAuth authentication
 --
 The below command adds a named rule without replacing the entire policy:
 
-[source,text,subs="verbatim,attributes"]
-----
+// Literal block, not [source]: the Showroom theme attaches its copy button to
+// .listingblock pre.highlight only, so a literal block renders without one.
+// This is a syntax template with placeholders, not a command to run.
+....
 openshell policy update <sandbox> --rule-name <name> \
   --add-endpoint <host>:<port>:<access>:<protocol>:<enforcement> \
   --binary <absolute-executable-path> --wait
-----
+....
 
 * `--rule-name` identifies the rule for later inspection or removal.
 * `--add-endpoint` specifies the destination and how requests are inspected. Here, `full:rest:enforce` permits HTTP methods to that endpoint and enforces the rule. It does not grant access to every destination.
