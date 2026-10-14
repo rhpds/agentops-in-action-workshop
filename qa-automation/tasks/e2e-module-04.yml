@@ -1,0 +1,343 @@
+---
+# E2E module 4 — Let the Agent Write Files
+#
+# Replays content/modules/ROOT/pages/module-04.adoc: the operator can no
+# longer save a report, because /reports is not in the sandbox's filesystem
+# policy. Add it, recreate the sandbox with the updated policy, and confirm a
+# timestamped report is written and readable.
+#
+# MUTATES THE TENANT: it deletes and recreates the sandbox. Depends on module
+# 2 having run — there must be a sandboxed agent to take the policy from.
+#
+# Judged on the sandbox filesystem, not on what the agent said. The module is
+# explicit about this: "A report displayed in chat is not the same as a file
+# written successfully."
+#
+# The module's second half — an ambiguous cleanup request deleting reports the
+# operator still wanted — is deliberately NOT asserted. The content says so
+# itself: the behaviour "can vary: if it asks a question or declines, inspect
+# whether any deletion occurred rather than claiming the demonstration
+# succeeded." It is driven and reported instead.
+
+- name: "M4 | Require a sandboxed, serving agent"
+  ansible.builtin.include_tasks: wait-agent-ready.yml
+  vars:
+    wait_label: "M4 precondition — agent sandboxed and serving"
+
+- name: "M4 | Find the OpenShell bridge pod"
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: "{{ t_ns }}"
+    label_selectors:
+      - app.kubernetes.io/name=hermes-openshell-bridge
+    field_selectors:
+      - status.phase=Running
+  register: m4_bridge
+
+- name: "M4 | Record the bridge pod"
+  ansible.builtin.set_fact:
+    e2e_bridge_pod: "{{ m4_bridge.resources[0].metadata.name }}"
+
+# The CLI's active gateway is per-container state, not per-sandbox, and it is
+# lost whenever the bridge pod restarts. Module 4 can run on its own hours
+# after module 2, so it selects the gateway itself rather than assuming it.
+- name: "M4 | Select the OpenShell gateway"
+  kubernetes.core.k8s_exec:
+    namespace: "{{ t_ns }}"
+    pod: "{{ e2e_bridge_pod }}"
+    container: cli
+    command: "{{ item }}"
+  loop:
+    - "openshell gateway add https://{{ t_user }}-openshell.{{ t_ns }}.svc.cluster.local:8080 --local --name openshell-gw"
+    - "openshell gateway select openshell-gw"
+  loop_control:
+    label: "{{ item.split(' ')[1:3] | join(' ') }}"
+  register: m4_gateway
+  changed_when: true
+  failed_when:
+    - m4_gateway.rc | default(0) != 0
+    - "'already exists' not in (m4_gateway.stderr | default('') ~ m4_gateway.stdout | default(''))"
+
+# ── E2E-M4-01 — the report skill is installed ──────────────────────────────
+
+- name: "M4 | E2E-M4-01 — read the write-report skill from inside the sandbox"
+  kubernetes.core.k8s_exec:
+    namespace: "{{ t_ns }}"
+    pod: "{{ e2e_bridge_pod }}"
+    container: cli
+    command: "openshell sandbox exec --name {{ e2e_sandbox }} -- cat /sandbox/.hermes/skills/write-report/SKILL.md"
+  register: m4_skill
+  changed_when: false
+  failed_when: false
+
+- name: "M4 | E2E-M4-01 — the skill must be installed and point at /reports"
+  ansible.builtin.assert:
+    that:
+      - "'write-report' in (m4_skill.stdout | default(''))"
+      - "'/reports' in (m4_skill.stdout | default(''))"
+    fail_msg: >-
+      E2E-M4-01 FAILED (module-04): the write-report skill is missing from the
+      sandbox or no longer targets /reports. The module has the participant
+      check the skill first precisely so a missing skill is not mistaken for a
+      permissions problem. Re-run the upload and startup steps from module 2.
+    success_msg: "E2E-M4-01 passed — write-report skill installed, destination /reports"
+
+# ── E2E-M4-02 — reproduce the failure ──────────────────────────────────────
+
+- name: "M4 | E2E-M4-02 — /reports must not be reachable yet"
+  kubernetes.core.k8s_exec:
+    namespace: "{{ t_ns }}"
+    pod: "{{ e2e_bridge_pod }}"
+    container: cli
+    command: "openshell sandbox exec --name {{ e2e_sandbox }} -- ls -1 /reports"
+  register: m4_reports_before
+  changed_when: false
+  failed_when: false
+
+- name: "M4 | Ask for a report, before the policy change"
+  ansible.builtin.include_tasks: ask-agent.yml
+  vars:
+    ask_label: "E2E-M4-02 — report request, /reports not writable"
+    ask_url: "{{ t_sandboxed_url }}"
+    ask_prompt: "{{ e2e_prompt_report }}"
+
+- name: "M4 | E2E-M4-02 — re-check /reports after the request"
+  kubernetes.core.k8s_exec:
+    namespace: "{{ t_ns }}"
+    pod: "{{ e2e_bridge_pod }}"
+    container: cli
+    command: "openshell sandbox exec --name {{ e2e_sandbox }} -- ls -1 /reports"
+  register: m4_reports_after_fail
+  changed_when: false
+  failed_when: false
+
+# /reports exists in the agent image (world-writable), but a sandbox only
+# exposes the paths its policy declares, so inside hermie it is simply absent
+# until the policy names it. Asserted on the filesystem: the agent will often
+# present a perfectly good report in chat regardless.
+- name: "M4 | E2E-M4-02 — no report file may exist yet"
+  ansible.builtin.assert:
+    that: _written | length == 0
+    fail_msg: >-
+      E2E-M4-02 FAILED (module-04): a report already exists under /reports
+      before the filesystem policy was changed ({{ _written | join(', ') }}).
+      The module's "reproduce the problem" step has nothing to show — the
+      sandbox is not enforcing its filesystem policy, or a previous run left
+      state behind.
+    success_msg: >-
+      E2E-M4-02 passed — report not written; /reports is outside the sandbox
+      policy. Agent said: {{ ask_text | default('') | truncate(120) }}
+  vars:
+    _written: >-
+      {{ (m4_reports_after_fail.stdout | default('')).split('\n')
+         | map('trim') | select() | select('search', '\\.md$') | list }}
+
+# ── E2E-M4-03 — add /reports to the filesystem policy ──────────────────────
+
+- name: "M4 | E2E-M4-03 — dump the sandbox's current policy"
+  kubernetes.core.k8s_exec:
+    namespace: "{{ t_ns }}"
+    pod: "{{ e2e_bridge_pod }}"
+    container: cli
+    command: "openshell sandbox get {{ e2e_sandbox }} --policy-only"
+  register: m4_policy_dump
+  changed_when: false
+
+- name: "M4 | E2E-M4-03 — add /reports to filesystem_policy.read_write"
+  ansible.builtin.set_fact:
+    # The module does this with a sed script. Parsing and re-emitting the YAML
+    # is the same edit without the quoting hazard, and it fails loudly if the
+    # policy shape ever changes rather than silently not matching.
+    m4_new_policy: "{{ _patched | to_nice_yaml(indent=2) }}"
+  vars:
+    _current: "{{ m4_policy_dump.stdout | from_yaml }}"
+    _fs: "{{ _current.filesystem_policy }}"
+    _patched: >-
+      {{ _current | combine({'filesystem_policy':
+           _fs | combine({'read_write': (_fs.read_write + ['/reports']) | unique})},
+           recursive=False) }}
+
+- name: "M4 | E2E-M4-03 — the edit must preserve the module 2 network rules"
+  ansible.builtin.assert:
+    that:
+      - "'/reports' in (m4_new_policy | from_yaml).filesystem_policy.read_write"
+      - (m4_new_policy | from_yaml).network_policies.keys() | list | sort == _expected_rules
+    fail_msg: >-
+      E2E-M4-03 FAILED (module-04): the updated policy would lose module 2's
+      network rules. Found {{ (m4_new_policy | from_yaml).network_policies.keys() | list | sort }},
+      expected {{ _expected_rules }}. Recreating the sandbox with this policy
+      would leave the agent unable to reach the model or the gateway.
+    success_msg: "E2E-M4-03 passed — /reports added, all four network rules preserved"
+  vars:
+    _expected_rules: "{{ ['keycloak_token', 'mcp_gateway', 'mlflow_tracing', 'model_endpoint'] | sort }}"
+
+# base64 so the YAML survives k8s_exec's shlex splitting intact — same reason
+# ask-agent.yml pipes its JSON payload in.
+- name: "M4 | E2E-M4-03 — write the updated policy into the cli container"
+  kubernetes.core.k8s_exec:
+    namespace: "{{ t_ns }}"
+    pod: "{{ e2e_bridge_pod }}"
+    container: cli
+    command: >-
+      sh -c 'echo {{ m4_new_policy | b64encode }} | base64 -d > /tmp/hermie-report-policy.updated.yaml &&
+      grep -c . /tmp/hermie-report-policy.updated.yaml'
+  register: m4_policy_written
+  changed_when: true
+  failed_when: (m4_policy_written.rc | default(0)) != 0
+
+# A sandbox's filesystem restrictions are fixed at creation: the module notes
+# that "Creating it with the defaults and restarting Hermes afterward would
+# not change the existing kernel filesystem restrictions."
+- name: "M4 | E2E-M4-03 — recreate the sandbox with the updated policy"
+  kubernetes.core.k8s_exec:
+    namespace: "{{ t_ns }}"
+    pod: "{{ e2e_bridge_pod }}"
+    container: cli
+    command: "{{ item }}"
+  loop:
+    - "openshell sandbox delete {{ e2e_sandbox }}"
+    - >-
+      openshell sandbox create --name {{ e2e_sandbox }} --from {{ e2e_agent_image }}
+      --policy /tmp/hermie-report-policy.updated.yaml --cpu 2 --memory 4Gi --no-tty -- true
+    - "openshell sandbox upload {{ e2e_sandbox }} /hermes /sandbox"
+    - "openshell sandbox exec --name {{ e2e_sandbox }} -- start-hermes"
+    - "openshell service expose {{ e2e_sandbox }} 8080 openai"
+  loop_control:
+    label: "{{ item.split(' ')[1:3] | join(' ') }}"
+  register: m4_recreate
+  changed_when: true
+  failed_when: m4_recreate.rc | default(0) != 0
+
+- name: "M4 | E2E-M4-04 — read the policy the new sandbox is running"
+  kubernetes.core.k8s_exec:
+    namespace: "{{ t_ns }}"
+    pod: "{{ e2e_bridge_pod }}"
+    container: cli
+    command: "openshell policy get {{ e2e_sandbox }} --full"
+  register: m4_policy_applied
+  changed_when: false
+  failed_when: false
+
+- name: "M4 | E2E-M4-04 — /reports and the network rules must both be live"
+  ansible.builtin.assert:
+    that:
+      - "'/reports' in (m4_policy_applied.stdout | default(''))"
+      - _missing_rules | length == 0
+    fail_msg: >-
+      E2E-M4-04 FAILED (module-04): the recreated sandbox is not running the
+      expected policy (/reports present:
+      {{ '/reports' in (m4_policy_applied.stdout | default('')) }};
+      missing network rules: {{ _missing_rules | join(', ') | default('none', true) }}).
+    success_msg: "E2E-M4-04 passed — recreated sandbox has /reports writable and all four network rules"
+  vars:
+    _missing_rules: >-
+      {{ ['keycloak_token', 'mcp_gateway', 'mlflow_tracing', 'model_endpoint']
+         | reject('in', m4_policy_applied.stdout | default('')) | list }}
+
+- name: "M4 | Wait for the recreated sandbox to serve"
+  ansible.builtin.include_tasks: wait-agent-ready.yml
+  vars:
+    wait_label: "M4 after sandbox recreate"
+
+# ── E2E-M4-05 — /reports is genuinely writable now ─────────────────────────
+
+# The deterministic half, checked by the sandbox rather than the model: the
+# policy change either made /reports writable or it did not.
+- name: "M4 | E2E-M4-05 — write and remove a probe file inside the sandbox"
+  kubernetes.core.k8s_exec:
+    namespace: "{{ t_ns }}"
+    pod: "{{ e2e_bridge_pod }}"
+    container: cli
+    command: >-
+      openshell sandbox exec --name {{ e2e_sandbox }} --
+      sh -c 'touch /reports/.e2e-probe && rm -f /reports/.e2e-probe && echo WRITABLE'
+  register: m4_probe
+  changed_when: true
+  failed_when: false
+
+- name: "M4 | E2E-M4-05 — /reports must be writable from inside the sandbox"
+  ansible.builtin.assert:
+    that: "'WRITABLE' in (m4_probe.stdout | default(''))"
+    fail_msg: >-
+      E2E-M4-05 FAILED (module-04): /reports is still not writable inside the
+      sandbox after adding it to filesystem_policy.read_write and recreating.
+      The module notes the image must also provision the directory with Linux
+      permissions the sandbox user can write — check both.
+      Output: {{ m4_probe.stdout | default('') }} {{ m4_probe.stderr | default('') }}
+    success_msg: "E2E-M4-05 passed — /reports is writable inside the sandbox"
+
+# ── E2E-M4-06 — the operator can get a report again ───────────────────────
+
+- name: "M4 | Ask for a report, with /reports writable"
+  ansible.builtin.include_tasks: e2e-m4-report-attempt.yml
+  loop: "{{ range(1, (e2e_m4_report_attempts | int) + 1) | list }}"
+  loop_control:
+    loop_var: m4_try
+  when: (m4_report_written | default([]) | length) == 0
+
+- name: "M4 | E2E-M4-06 — a report file must exist"
+  ansible.builtin.assert:
+    that: (m4_report_written | default([]) | length) > 0
+    fail_msg: >-
+      E2E-M4-06 FAILED (module-04): the agent did not save a report in
+      {{ e2e_m4_report_attempts }} attempt(s), although /reports is writable
+      (E2E-M4-05 passed) and the write-report skill is installed.
+
+      Seen on cluster-td5kk: the agent replies "the required tool to execute
+      the script (terminal) is not available in my current toolset" and stops.
+      It is wrong — the sandboxed agent does have execute_code, read_file and
+      patch — but the skill tells it to run `python3 .../save_report.py` as a
+      shell command, and it looks for a terminal tool by name. The same prompt
+      against unsandboxed hermes-plain writes the file every time.
+      Agent said: {{ ask_text | default('') | truncate(250) }}
+    success_msg: >-
+      E2E-M4-06 passed — report written: {{ m4_report_written | join(', ') | truncate(120) }}
+
+# ── The cleanup demonstration — driven, not asserted ───────────────────────
+
+- name: "M4 | Ambiguous cleanup request (reported, not asserted)"
+  when: e2e_m4_cleanup_demo | bool
+  block:
+    - name: "M4 | Send the routine-sounding cleanup request"
+      ansible.builtin.include_tasks: ask-agent.yml
+      vars:
+        ask_label: "E2E-M4-06 — ambiguous cleanup"
+        ask_url: "{{ t_sandboxed_url }}"
+        ask_prompt: "{{ e2e_prompt_cleanup }}"
+
+    - name: "M4 | List /reports after the cleanup request"
+      kubernetes.core.k8s_exec:
+        namespace: "{{ t_ns }}"
+        pod: "{{ e2e_bridge_pod }}"
+        container: cli
+        command: "openshell sandbox exec --name {{ e2e_sandbox }} -- ls -1 /reports"
+      register: m4_reports_cleanup
+      changed_when: false
+      failed_when: false
+
+    # Not asserted, on the module's own instruction: "if it asks a question or
+    # declines, inspect whether any deletion occurred rather than claiming the
+    # demonstration succeeded. A cautious response on one run does not mean
+    # filesystem deletion is prevented by policy."
+    - name: "M4 | E2E-M4-06 — cleanup outcome"
+      ansible.builtin.debug:
+        msg: >-
+          Reports before the cleanup request: {{ _before | join(', ') }}.
+          After: {{ _after | join(', ') | default('none', true) }}.
+          {{ 'Earlier reports were deleted — the broad write permission made the accidental harmful action possible, which is the module&apos;s point.'
+             if (_before | difference(_after) | length > 0)
+             else 'Nothing was deleted on this run. The module warns that a cautious response does not mean deletion is prevented by policy.' }}
+      vars:
+        _before: "{{ m4_report_written | default([]) }}"
+        _after: >-
+          {{ (m4_reports_cleanup.stdout | default('')).split('\n')
+             | map('trim') | select() | select('search', '\\.md$') | list }}
+
+- name: "M4 | Module 4 complete"
+  ansible.builtin.debug:
+    msg: >-
+      Module 4 passed for {{ t_user }}: the write-report skill was installed
+      but blocked, adding /reports to the filesystem policy and recreating the
+      sandbox restored report writing, and the four network rules survived the
+      recreate.
