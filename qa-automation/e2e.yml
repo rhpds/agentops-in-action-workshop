@@ -103,6 +103,11 @@
     # The report step is model-dependent — see e2e-m4-report-attempt.yml — so
     # it gets more than one try before being called a failure.
     e2e_m4_report_attempts: 2
+    # E2E-M4-06 asserts the module's headline outcome and currently fails on a
+    # fair share of runs against a known write-report skill defect. Set false
+    # to downgrade it to a reported warning while that fix is outstanding —
+    # everything else in module 4 still asserts normally.
+    e2e_m4_require_report: true
 
     e2e_m3_attack_roles:
       - "tool:emergency_shutdown"

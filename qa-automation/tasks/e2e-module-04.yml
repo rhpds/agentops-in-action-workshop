@@ -279,21 +279,52 @@
 
 - name: "M4 | E2E-M4-06 — a report file must exist"
   ansible.builtin.assert:
-    that: (m4_report_written | default([]) | length) > 0
+    # Honest by default: a participant cannot reliably finish this module, and
+    # suppressing that would hide the one finding that stops the lab. The
+    # toggle exists so the suite can still be used for regression detection
+    # while the skill fix is outstanding.
+    # No {{ }} — a bare expression. Wrapping a conditional in templating
+    # delimiters is deprecated and goes away in ansible-core 2.23.
+    that: >-
+      ((m4_report_written | default([]) | length) > 0)
+      or not (e2e_m4_require_report | bool)
     fail_msg: >-
       E2E-M4-06 FAILED (module-04): the agent did not save a report in
       {{ e2e_m4_report_attempts }} attempt(s), although /reports is writable
       (E2E-M4-05 passed) and the write-report skill is installed.
 
-      Seen reproducibly: the agent replies "the required tool to execute
-      the script (terminal) is not available in my current toolset" and stops.
-      It is wrong — the sandboxed agent does have execute_code, read_file and
-      patch — but the skill tells it to run `python3 .../save_report.py` as a
-      shell command, and it looks for a terminal tool by name. The same prompt
-      against unsandboxed hermes-plain writes the file every time.
+      KNOWN LAB DEFECT — this is the write-report skill, not your environment
+      and not this check. Everything this module controls passed: /reports is
+      writable, the policy change took, the network rules survived.
+
+      The sandboxed agent intermittently refuses, naming a tool it cannot
+      find — "the terminal tool required to run the report generation script
+      is not available", "the write-report tool is not available in the
+      current tool set". It is wrong: asked to enumerate its tools it lists
+      execute_code, read_file and patch. The skill tells it to run
+      `python3 .../save_report.py` as a shell command, so it hunts for a tool
+      by name and gives up. The same prompt against unsandboxed hermes-plain
+      writes the file every time, so the capability is in the image and only
+      the sandboxed toolset differs.
+
+      Intermittent, not constant: across runs it has written on the first
+      ask, written on the second, and refused both. Expect this red on a fair
+      share of runs until the skill is reworded — that is the agent
+      developers' file, so it is reported here rather than patched. Full
+      write-up and the fix that was trialled: E2E-M4-06 in
+      qa-automation/healthcheck-spec.yaml.
+
+      Set -e e2e_m4_require_report=false to downgrade this to a warning while
+      the fix is pending; it will still be reported, just not fatal.
+
       Agent said: {{ ask_text | default('') | truncate(250) }}
     success_msg: >-
-      E2E-M4-06 passed — report written: {{ m4_report_written | join(', ') | truncate(120) }}
+      {{ ((m4_report_written | default([]) | length) > 0)
+         | ternary('E2E-M4-06 passed — report written: '
+                   ~ (m4_report_written | default([]) | join(', ') | truncate(120)),
+                   'E2E-M4-06 WARNING (e2e_m4_require_report=false) — no report was'
+                   ~ ' written. The known write-report skill defect; see'
+                   ~ ' healthcheck-spec.yaml.') }}
 
 # Reported, not asserted. The module's completion check is "Hermie returns a
 # timestamped filename under /reports", and a filename that merely looks
