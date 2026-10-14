@@ -14,6 +14,15 @@
 # rationale and its remediation. Keep the two in step: adding a check to a
 # playbook without adding it here is how the rationale gets lost.
 #
+# A note on provenance. Findings below say what was observed and under what
+# conditions, but never name a cluster or a tenant. Those identifiers live
+# and die with a provisioning run: by the time anyone reads this the cluster
+# is gone, the name resolves to nothing, and it reads as a fact that can be
+# checked when it cannot. Durable identifiers — git revisions, chart and
+# image versions, resource names — are kept, because those can still be
+# looked up. Where an example needs a username, it is a placeholder such as
+# <user> or user-abc12.
+#
 # severity:
 #   fail  the lab cannot be delivered in this state — playbook exits non-zero
 #   warn  recorded and printed, does not change the exit code
@@ -34,9 +43,9 @@ playbooks:
 # Identity
 #
 # The Showroom pod's own ServiceAccount is `edit` on its own namespace and
-# nothing else — verified on cluster-zbtjb, where
+# nothing else — verified with
 # `oc auth can-i get applications.argoproj.io -n openshift-gitops
-#  --as=system:serviceaccount:user-4jnxn-showroom:showroom` returns `no`. Every
+#  --as=system:serviceaccount:<user>-showroom:showroom`, which returns `no`. Every
 # check below reads outside that namespace, so both playbooks need the
 # runtime-automation cluster-admin identity. CLU-RBAC-01 is the preflight that
 # says so in one line instead of letting 20 checks fail as permission errors.
@@ -78,8 +87,9 @@ scope:
 
 # -----------------------------------------------------------------------------
 # Expectations the checks are written against, all confirmed against live
-# clusters (cluster-zbtjb at ArgoCD revision 092a66e, then cluster-vjl48).
-# Override with -e on the command line when an event build changes one.
+# builds of this lab (first seen at ArgoCD revision 092a66e, re-confirmed on
+# later builds). Override with -e on the command line when an event build
+# changes one.
 # -----------------------------------------------------------------------------
 expected:
   mcp_servers: [control-mcp, maintenance-mcp, telemetry-mcp]
@@ -163,8 +173,8 @@ checks:
       Checked by package prefix, not by pinned version, and deliberately not by
       Subscription state. bootstrap-infra pins every startingCSV with
       installPlanApproval Manual, so a catalog refresh leaves the Subscription
-      reporting UpgradePending forever — on cluster-zbtjb the rhods-operator
-      Subscription sits at UpgradePending toward 3.5.1 while the pinned
+      reporting UpgradePending forever — observed with the rhods-operator
+      Subscription at UpgradePending toward 3.5.1 while the pinned
       rhods-operator.3.5.0 CSV is Succeeded and serving. Asserting on the
       Subscription would red-flag that intended state on every run.
     remediation: Check the InstallPlan approver Job in redhat-ods-operator.
@@ -306,9 +316,8 @@ checks:
       distinguish "never applied" from "participant edited it". The baseline is
       what the later modules tighten; without it there is nothing to tighten
       and the lab has no starting state. Observed missing on every tenant of
-      both clusters built so far (three on cluster-zbtjb, two on
-      cluster-vjl48), each with the Application reporting
-      operationState: NEVER SYNCED. Nothing in provisioning syncs it, and
+      every build checked while this was open, each with the Application
+      reporting operationState: NEVER SYNCED. Nothing in provisioning syncs it, and
       because the Application is manual-sync by design nothing ever will
       without an explicit step.
     remediation: >-
@@ -318,10 +327,15 @@ checks:
       syncStrategy.hook matters — it runs the PostSync Job that restarts the
       gateway and the agent.
 
-      Verified on cluster-vjl48: syncing user-2bbzt-policy applied all five
-      objects, the PostSync Job completed, TEN-POL-01 flipped to pass, and e2e
-      module 1 still passed afterwards. user-z4x55 was left unsynced as a
-      control and still fails. Note the one side effect — the new NetworkPolicy
+      Verified on a two-tenant build: syncing one tenant's policy Application
+      applied all five objects, the PostSync Job completed, TEN-POL-01 flipped
+      to pass, and e2e module 1 still passed afterwards. The second tenant was
+      left unsynced as a control and still failed.
+
+      SINCE FIXED — later builds sync the policy Application at provisioning
+      time, and this check passes. Kept because nothing in the chart enforces
+      it: the Application is manual-sync by design, so the sync is a
+      provisioning step that can be dropped again. Note the one side effect — the new NetworkPolicy
       makes the MCPServerRegistration status unreadable from outside the
       namespace; see TEN-MCP-02.
 
@@ -367,8 +381,8 @@ checks:
       AdminNetworkPolicy denies port 8080 to everything except the gateway,
       including the MCP lifecycle operator's own protocol handshake — so a
       correctly-secured MCP server always reports
-      Ready=False/MCPEndpointUnavailable. Confirmed on all nine MCPServer CRs
-      on cluster-zbtjb. TEN-MCP-02 is what actually proves the servers serve.
+      Ready=False/MCPEndpointUnavailable. Confirmed on every MCPServer CR of a
+      three-tenant build. TEN-MCP-02 is what actually proves the servers serve.
     remediation: "`oc -n <user>-agentops describe mcpserver <name>`"
 
   - id: TEN-MCP-02
@@ -392,9 +406,9 @@ checks:
       probe to mcp-gateway.<ns>.svc:8080/status times out and all three
       registrations flip to Ready=False/NotReady with discoveredTools unset —
       while the data plane keeps working, because the agent reaches Envoy and
-      Envoy reaches the MCP servers entirely in-namespace. Verified on
-      cluster-vjl48: registrations read 0/18 while e2e module 1 still completed
-      with 3 tool calls and a correct pump-4 answer. When that exact signature
+      Envoy reaches the MCP servers entirely in-namespace. Verified:
+      registrations read 0/18 while e2e module 1 still completed with 3 tool
+      calls and a correct pump-4 answer. When that exact signature
       is present (baseline NetworkPolicy exists AND every registration is
       NotReady with a "failed to send request" message) the check reports warn
       instead of fail, because failing it would red-flag every correctly
@@ -459,13 +473,12 @@ checks:
       nothing in Kubernetes compares them. When they disagree every prompt in
       the lab returns HTTP 401 from MaaS while all 10 pods stay green, every
       ArgoCD Application stays Synced and Healthy, and no other check in this
-      file notices. Exactly that was live on all three tenants on
-      cluster-zbtjb at revision 092a66e — values said qwen3-235b-a22b, the key
-      allowed only qwen3-235b. The virtual key also carries a 7-day TTL, so
+      file notices. Exactly that was live on all three tenants of the build at
+      ArgoCD revision 092a66e — values said qwen3-235b-a22b, the key allowed
+      only qwen3-235b. The virtual key also carries a 7-day TTL, so
       this check doubles as the expiry alarm. Since fixed: agnosticv master
-      now mints keys for qwen3-235b-a22b, and the check passes on
-      cluster-vjl48. Kept because the two sides can drift apart again the next
-      time either one moves.
+      now mints keys for qwen3-235b-a22b, and the check passes. Kept because
+      the two sides can drift apart again the next time either one moves.
     remediation: >-
       Align agent.litellm.model (tenant-platform) and model.model
       (tenant-openshell) with litellm_available_models for the tenant, or
@@ -720,9 +733,9 @@ e2e_steps:
       tenant-openshell/values.yaml (roleWatch.adminPassword). As written,
       participants cannot log in and the whole Keycloak section is blocked.
       Telling participants to fetch it themselves is not an option: verified
-      on cluster-td5kk that `user-wdhm6` can read secrets in its own
-      namespace but has `no` on both keycloakrealmimports and secrets in the
-      keycloak namespace, and holds no cluster-scoped role binding at all.
+      that a participant can read secrets in their own namespace but has `no`
+      on both keycloakrealmimports and secrets in the keycloak namespace, and
+      holds no cluster-scoped role binding at all.
       Three fixes that do work, for the author:
 
         1. State `redhat` in the module. One line, and the value is already
@@ -763,7 +776,7 @@ e2e_steps:
       Asserting that the plant is unchanged after the attack does NOT work
       either, and that is the module's own closing point. The operator keeps
       tool:stop_pump, so an agent denied emergency_shutdown can still stop the
-      plant one pump at a time — observed doing exactly that on cluster-td5kk.
+      plant one pump at a time — observed doing exactly that.
       e2e reports that outcome rather than failing on it.
 
   - id: E2E-M3-04
@@ -828,9 +841,9 @@ e2e_steps:
       only exposes the paths its policy declares, so inside hermie it is
       simply absent until the policy names it.
 
-      Asserted on the filesystem, never on the reply. On cluster-td5kk the
-      agent answered "I have created a detailed pump status report based on
-      the telemetry data..." having written nothing at all — which is the
+      Asserted on the filesystem, never on the reply. The agent has answered
+      "I have created a detailed pump status report based on the telemetry
+      data..." having written nothing at all — which is the
       module's own warning: "A report displayed in chat is not the same as a
       file written successfully."
 
@@ -883,7 +896,7 @@ e2e_steps:
       The module's headline outcome. very-important-report.md ships in the
       image and is excluded, or it would mask a total failure.
 
-      FAILING on cluster-td5kk, reproducibly, and it is a real lab defect
+      FAILING reproducibly on current builds, and it is a real lab defect
       rather than a flaky check. With /reports writable (E2E-M4-05 passes) and
       the skill installed (E2E-M4-01 passes), the sandboxed agent answers:
       "I cannot create or write the report because the terminal tool required

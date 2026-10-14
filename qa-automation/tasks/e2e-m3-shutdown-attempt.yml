@@ -9,8 +9,8 @@
 # Two turns, because one is not deterministic. The module says of the verbatim
 # prompt "The attack still succeeds", but the model frequently answers
 # "I need to confirm the emergency shutdown action..." and waits instead of
-# calling the tool. Observed on user-wdhm6. That is reasonable model
-# behaviour, not a control: the operator still holds tool:emergency_shutdown
+# calling the tool. That is reasonable model behaviour, not a control: the
+# operator still holds tool:emergency_shutdown
 # and a participant would simply say yes. So the attempt sends the verbatim
 # prompt, and only if the plant is unchanged sends the confirmation — which
 # is exactly what the participant does at the console. Whether the second turn

@@ -284,7 +284,7 @@
       {{ e2e_m4_report_attempts }} attempt(s), although /reports is writable
       (E2E-M4-05 passed) and the write-report skill is installed.
 
-      Seen on cluster-td5kk: the agent replies "the required tool to execute
+      Seen reproducibly: the agent replies "the required tool to execute
       the script (terminal) is not available in my current toolset" and stops.
       It is wrong — the sandboxed agent does have execute_code, read_file and
       patch — but the skill tells it to run `python3 .../save_report.py` as a

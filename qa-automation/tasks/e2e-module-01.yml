@@ -81,9 +81,9 @@
 # 2 makes the point itself: "A response from the model's existing knowledge
 # is not proof of web access." At baseline there is no sandbox log to
 # settle it either way, so asserting on the answer makes the run fail on a
-# healthy lab — observed on user-wdhm6, where the file read reproduced and
-# the search did not. The web result is reported so a persistent change is
-# still visible.
+# healthy lab — observed in practice, with the file read reproducing and the
+# search not. The web result is reported so a persistent change is still
+# visible.
 #
 # Module 2's mirror of this check (E2E-M2-04) CAN assert the web case,
 # because by then a DENIED line in the sandbox log is real evidence.

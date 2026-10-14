@@ -1,6 +1,6 @@
 ---
 # Per-participant checks. Included once per tenant with hc_tenant set to the
-# username (e.g. user-4jnxn). See healthcheck-spec.yaml for the rationale
+# username (e.g. user-abc12). See healthcheck-spec.yaml for the rationale
 # behind each TEN-* id.
 #
 # Same shape as cluster-checks.yml: every kind is LISTED once up front, and the
@@ -389,8 +389,8 @@
     # so its reconcile probe to mcp-gateway.<ns>.svc:8080/status times out and
     # every registration flips to Ready=False/NotReady with discoveredTools
     # unset — while the data plane keeps working, because the agent reaches
-    # Envoy and Envoy reaches the MCP servers entirely in-namespace. Verified
-    # on cluster-vjl48: registrations reported 0/18 while e2e module 1 still
+    # Envoy and Envoy reaches the MCP servers entirely in-namespace.
+    # Verified: registrations reported 0/18 while e2e module 1 still
     # completed with 3 tool calls.
     #
     # So this is reported, not failed, when that exact signature is present:

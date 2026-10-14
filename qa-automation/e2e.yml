@@ -4,7 +4,7 @@
 # Walks the learner's path through the content and fails on the first broken
 # step, naming the module.
 #
-#   ansible-playbook qa-automation/e2e.yml -e e2e_tenant=user-4jnxn
+#   ansible-playbook qa-automation/e2e.yml -e e2e_tenant=<username>
 #   curl -sk -N https://<showroom-host>/stream/qa/e2e
 #
 # IMPLEMENTATION STATUS
