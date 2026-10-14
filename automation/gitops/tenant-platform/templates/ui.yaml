@@ -1,5 +1,18 @@
 {{- $ns := printf "%s-%s" .Values.username .Values.namespaceSuffix -}}
 {{- $uiSa := "water-plant-ui" -}}
+{{- /*
+Which Hermes the console talks to, and therefore whose filesystem it reads.
+
+Defined once, at file scope, because two things downstream depend on it and
+they must not be able to disagree: AGENT_URL, and the pod the filesystem
+goals exec into. They did disagree — the selector was keyed off
+agent.hermes.runtime while AGENT_URL is keyed off whether the plain Hermes is
+deployed, so on this tenant the console conversed with hermes-plain and
+measured the sandbox, which has no /reports at all. Every delete attack would
+have scored "got through" against the wrong pod.
+*/ -}}
+{{- $onPlain := and (eq .Values.agent.harness "hermes") .Values.agent.hermes.plain.enabled .Values.mcpGateway.enabled -}}
+{{- $hermesSvc := ternary "hermes-plain" "hermes-agent" $onPlain -}}
 {{/*
 Identity for the console.
 
@@ -248,7 +261,6 @@ spec:
             this one field so self-heal keeps the override.
             */}}
             {{- if eq .Values.agent.harness "hermes" }}
-            {{- $hermesSvc := ternary "hermes-plain" "hermes-agent" (and .Values.agent.hermes.plain.enabled .Values.mcpGateway.enabled) }}
             - name: AGENT_URL
               value: {{ .Values.ui.agentUrl | default (printf "http://%s.%s.svc:%v" $hermesSvc $ns .Values.agent.hermes.port) | quote }}
             - name: AGENT_PROTOCOL
@@ -367,16 +379,16 @@ spec:
             # it. The sandbox runtime's pod is created by the participant and
             # is named for the sandbox, so both are values rather than
             # something the console infers.
-            {{- if eq .Values.agent.hermes.runtime "openshell" }}
-            - name: AGENT_POD_SELECTOR
-              value: agents.x-k8s.io/sandbox-name-hash
-            - name: AGENT_POD_CONTAINER
-              value: agent
-            {{- else }}
+            {{- if $onPlain }}
             - name: AGENT_POD_SELECTOR
               value: app.kubernetes.io/name=hermes-plain
             - name: AGENT_POD_CONTAINER
               value: hermes
+            {{- else }}
+            - name: AGENT_POD_SELECTOR
+              value: agents.x-k8s.io/sandbox-name-hash
+            - name: AGENT_POD_CONTAINER
+              value: agent
             {{- end }}
             - name: NAMESPACE
               value: {{ $ns }}
