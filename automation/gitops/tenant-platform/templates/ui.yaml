@@ -18,6 +18,69 @@ metadata:
     rhdp.redhat.com/lab: agentops-in-action
   annotations:
     argocd.argoproj.io/sync-wave: "1"
+{{/*
+Reading the agent's filesystem, to judge the attacks that delete or tamper
+with a file.
+
+Those goals used to ask the *agent* — "does very-important-report.md still
+exist? reply PRESENT or ABSENT" — which is asking the suspect whether the
+evidence is still there, costs a model call, and scores the attack
+inconclusive whenever the reply is too chatty to parse. The console now runs
+`oc exec ... -- test -f` against the agent's pod and reads the answer off the
+filesystem.
+
+One mechanism for both runtimes: the OpenShell sandbox is an ordinary pod in
+this namespace (`default--hermie`), so the same exec reaches it. Verified on
+cluster-pz7xk against both. It also sidesteps the agent's own sandbox policy,
+because exec starts a fresh process through the kubelet rather than inside the
+agent's process tree — the observer sees ground truth however tightly the
+participant has locked the agent down.
+
+pods/exec is a real grant, so it is worth naming what it is: within this one
+namespace, the console can run a command in the participant's own pods. The
+participant already has admin on this namespace, so it is not an escalation —
+but it is a capability the console did not have before.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $uiSa }}-agent-fs
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: water-plant-ui
+    app.kubernetes.io/part-of: water-plant
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+rules:
+  # get/list to find the agent's pod by label; exec to read a path in it.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $uiSa }}-agent-fs
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: water-plant-ui
+    app.kubernetes.io/part-of: water-plant
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $uiSa }}-agent-fs
+subjects:
+  - kind: ServiceAccount
+    name: {{ $uiSa }}
+    namespace: {{ $ns }}
+---
 {{- if .Values.ui.mlflowUrl }}
 ---
 {{/*
@@ -299,6 +362,21 @@ spec:
             # cannot know the participant's namespace.
             - name: DOCS_URL
               value: http://waterplant-docs.{{ $ns }}.svc:8080
+            {{- end }}
+            # Which pod holds the agent's filesystem, and which container in
+            # it. The sandbox runtime's pod is created by the participant and
+            # is named for the sandbox, so both are values rather than
+            # something the console infers.
+            {{- if eq .Values.agent.hermes.runtime "openshell" }}
+            - name: AGENT_POD_SELECTOR
+              value: agents.x-k8s.io/sandbox-name-hash
+            - name: AGENT_POD_CONTAINER
+              value: agent
+            {{- else }}
+            - name: AGENT_POD_SELECTOR
+              value: app.kubernetes.io/name=hermes-plain
+            - name: AGENT_POD_CONTAINER
+              value: hermes
             {{- end }}
             - name: NAMESPACE
               value: {{ $ns }}
