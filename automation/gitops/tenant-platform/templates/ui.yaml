@@ -385,11 +385,26 @@ spec:
               value: app.kubernetes.io/name=hermes-plain
             - name: AGENT_POD_CONTAINER
               value: hermes
+            # Where the agent keeps its instructions, and where the pristine
+            # lab copy sits. Both differ by runtime, and the defaults in
+            # goals.py are the plain ones — so the sandbox needs them stated
+            # or the console would look for SOUL.md at the wrong path
+            # entirely and report it missing.
+            - name: AGENT_HERMES_HOME
+              value: {{ .Values.agent.hermes.home | quote }}
+            - name: AGENT_SOUL_SOURCE
+              value: /soul/SOUL.md
             {{- else }}
             - name: AGENT_POD_SELECTOR
               value: agents.x-k8s.io/sandbox-name-hash
             - name: AGENT_POD_CONTAINER
               value: agent
+            # The sandbox's own home, and the copy the bridge uploaded —
+            # start-hermes seeds the live file from exactly this path.
+            - name: AGENT_HERMES_HOME
+              value: /sandbox/.hermes
+            - name: AGENT_SOUL_SOURCE
+              value: /sandbox/hermes/SOUL.md
             {{- end }}
             - name: NAMESPACE
               value: {{ $ns }}

@@ -549,6 +549,11 @@ spec:
           volumeMounts:
             - { name: data, mountPath: {{ $h.home | quote }} }
             - { name: reports, mountPath: /reports }
+            # The pristine lab soul, here as well as in seed-config, so that
+            # resetting can put it back without restarting the pod. Read-only:
+            # this is the copy to restore *from*, and the agent can already
+            # read its own live SOUL.md next door, so it grants nothing new.
+            - { name: soul, mountPath: /soul, readOnly: true }
             {{- if .Values.ui.mlflowUrl }}
             - { name: mlflow-ca, mountPath: /etc/mlflow-ca, readOnly: true }
             {{- end }}
