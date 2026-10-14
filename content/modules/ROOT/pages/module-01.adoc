@@ -36,7 +36,8 @@ image::agent-architecture.png["Participant browser through the operator console 
 
 === Get to know the console
 
-Open the operator console for Northgate Water Treatment Works.
+Open the https://water-plant-ui-{user}-agentops.{openshift_cluster_ingress_domain}/[operator console^]
+for Northgate Water Treatment Works.
 
 image::operator-console.png["The Northgate operator console with plant gauges, pump panels, safety checks, and the maintenance assistant",align=center]
 
@@ -102,6 +103,12 @@ Use the *MLflow traces* link bottom right to open MLflow. Select your {user} exp
 
 Open the trace and inspect the prompt, model interaction, tool calls, tool results, and final response where they are recorded. For the pump query, check which telemetry tool was called. For the stop request, compare the tool result with the plant panel.
 
+image::mlflow-trace-pump4.png["MLflow trace for the pump 4 query, showing the agent span tree, the telemetry tool call, and the recorded inputs and outputs",align=center]
+
+The trace for `What's the status of pump 4?` reads top to bottom. The *Trace breakdown* on the left is the span tree: an outer `agent` span wraps an `llm.qwen3-235b-a22b` span, which makes a first `api.qwen3-235b-a22b` model call to decide what to do, invokes `tool.mcp_gateway_telemetry_get_pump_status`, then makes a second `api.qwen3-235b-a22b` call to turn the tool result into an answer. On the right, *Inputs* is the operator's message and *Outputs* is Hermie's final reply with the live readings. The header records *Status* (`OK`), *Latency* (`3.52s`), token count, and the *Session ID* that ties this turn to its trace.
+
+The `api.*` spans are model behavior; the `tool.*` span is the runtime reaching a plant tool through the MCP Gateway. Keep that distinction in mind — later modules use it to tell a model's decision apart from what the platform actually enforced.
+
 === Explore access beyond the operator's needs
 
 Hermie can perform plant tasks. But what else can it do?
@@ -159,11 +166,15 @@ These are not as innocent. These are the kind of attacks you should protect Nort
 
 PS: Click *Reset plant* before continuing.
 
+image::console-footer.png["The console footer with the attack selector, Run attack, Run all evals, Reset plant, and MLflow traces controls",align=center]
+
 === Run an attack and read the notification
 
 The console can also send predefined attack prompts and check their effects.
 
 . In the footer, choose an available case from the attack selector. A held case includes a reason it cannot run; it is not evidence of a successful defense. You can also leave *Random attack* selected.
++
+image::attack-selector-footer.png["The console footer attack selector set to Random attack, with Run attack, Run all evals, Reset plant, and MLflow traces controls",align=center]
 
 . Click *Run attack* and wait for the *Attack in progress* notification to update.
 
