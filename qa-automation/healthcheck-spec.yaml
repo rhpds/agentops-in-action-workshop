@@ -719,12 +719,28 @@ e2e_steps:
       tenant-platform/values.yaml (keycloak.adminPassword) and mirrored in
       tenant-openshell/values.yaml (roleWatch.adminPassword). As written,
       participants cannot log in and the whole Keycloak section is blocked.
-      Either correct the module to say `redhat`, or thread the participant's
-      password through both charts so `{password}` becomes true.
+      Telling participants to fetch it themselves is not an option: verified
+      on cluster-td5kk that `user-wdhm6` can read secrets in its own
+      namespace but has `no` on both keycloakrealmimports and secrets in the
+      keycloak namespace, and holds no cluster-scoped role binding at all.
+      Three fixes that do work, for the author:
+
+        1. State `redhat` in the module. One line, and the value is already
+           plaintext in values.yaml.
+        2. Seed it into Showroom user data
+           (ocp4_workload_showroom_user_data_seed) and reference a new
+           substitution, e.g. `Password: {keycloak_admin_password}`. Best fit
+           for how the module is already written — it expects a substitution
+           and simply names the wrong one — and it survives the password
+           changing.
+        3. Copy it into a Secret in the participant's own namespace, which
+           they can read, and have the module show an `oc get secret`
+           command. More moving parts, but teaches the habit.
 
       Not changed here — module content and the charts under automation/ are
-      the author's. This step is unaffected either way: it reads the admin
-      credential from the KeycloakRealmImport rather than from the content.
+      the author's. This step is unaffected either way: it runs with the
+      runtime-automation cluster-admin identity and reads the credential from
+      the KeycloakRealmImport, never from the content.
 
   - id: E2E-M3-03
     implemented: true
