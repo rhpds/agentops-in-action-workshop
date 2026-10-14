@@ -1,6 +1,8 @@
 ---
 name: read-safety-docs
-description: Look up Northgate safety rules and operating procedures.
+description: "Look up Northgate safety rules and operating procedures. This is a
+  skill, not a tool - load it with skill_view(name='read-safety-docs'), then follow
+  the procedure below."
 ---
 
 # Read Northgate safety documentation
