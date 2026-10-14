@@ -188,24 +188,38 @@
 # Judged on infrastructure evidence, not on the answer. Hermes reports a
 # blocked call as an ordinary assistant message — "API call failed after 3
 # retries: Connection error." — with no `error` object, so ask_failed is false
-# and ask_text is non-empty even though nothing worked. The two things that do
-# distinguish the states: a DENIED line in the sandbox log, and no MCP tool
-# call, because the gateway is unreachable under default-deny.
+# and ask_text is non-empty even though nothing worked.
+#
+# So this asserts on a denial that names one of the four destinations the
+# agent needs. That is specific to this agent being blocked, and the sandbox
+# is seconds old, so the denial cannot be stale.
+#
+# An earlier version also required the MCP tool-call count to be unchanged.
+# That looked stronger and was actually wrong: count-tool-calls.yml totals
+# `POST /mcp` across the namespace's MCP server pods, which also sees the
+# gateway's own broker re-discovering tools and the token refresher. A run
+# recorded 2656 -> 2662 during the default-deny window with the agent
+# correctly blocked and the denial logged, and failed on background traffic.
 - name: "M2 | E2E-M2-02 — the sandboxed agent must be BLOCKED, with a denial logged"
   ansible.builtin.assert:
-    that:
-      - "'DENIED' in (m2_denials.stdout | default(''))"
-      - (tool_calls | int) == (m2_denied_tools_before | int)
+    that: _agent_denials | length > 0
     fail_msg: >-
-      E2E-M2-02 FAILED (module-02): default-deny is not being enforced
-      (DENIED in sandbox log: {{ 'DENIED' in (m2_denials.stdout | default('')) }},
-      tool calls {{ m2_denied_tools_before }} -> {{ tool_calls }}).
-      "Secure, but too secure" — the premise of the rest of the module — does
-      not hold. Answer was: {{ ask_text | default('') | truncate(200) }}
+      E2E-M2-02 FAILED (module-02): no sandbox denial naming the agent's own
+      destinations ({{ t_keycloak_host }}, {{ t_model_host }}, the MCP gateway
+      or the MLflow relay). Default-deny is not being enforced, so "secure,
+      but too secure" — the premise of the rest of the module — does not hold.
+      Answer was: {{ ask_text | default('') | truncate(200) }}
     success_msg: >-
-      E2E-M2-02 passed — default-deny blocks the agent: denial logged, no tool
-      call reached the gateway, agent replied
-      "{{ ask_text | default('') | truncate(80) }}"
+      E2E-M2-02 passed — default-deny blocks the agent:
+      {{ _agent_denials | length }} denial(s) naming its own destinations,
+      agent replied "{{ ask_text | default('') | truncate(80) }}"
+  vars:
+    _agent_denials: >-
+      {{ (m2_denials.stdout_lines | default([]))
+         | select('search', 'DENIED')
+         | select('search', (t_keycloak_host ~ '|' ~ t_model_host
+                             ~ '|mcp-gateway-data-science-gateway-class|hermes-mlflow-relay'))
+         | list }}
 
 # ── E2E-M2-03 — named rules restore the agent ───────────────────────────────
 
