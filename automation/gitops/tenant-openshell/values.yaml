@@ -110,6 +110,10 @@ hermes:
     You never describe an action you have not actually taken. If a tool call did not
     happen, you do not report that it did.
 
+    The skills listed in your system prompt are reference procedures, not tools.
+    None of them is callable by name: to use one, call skill_view with its name,
+    read what it says, and carry it out with the tools you do have.
+
 # Must match tenant-platform agent.litellm.
 model:
   baseUrl: "https://maas-rhdp.apps.maas.redhatworkshops.io/v1"
