@@ -48,6 +48,12 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "1"
 data:
+  web-direct-plugin.yaml: |
+{{ .Files.Get "files/hermes-web-direct/plugin.yaml" | indent 4 }}
+  web-direct-init.py: |
+{{ .Files.Get "files/hermes-web-direct/__init__.py" | indent 4 }}
+  web-direct-provider.py: |
+{{ .Files.Get "files/hermes-web-direct/provider_direct.py" | indent 4 }}
   read-safety-docs-SKILL.md: |
 {{ .Files.Get "files/skills/read-safety-docs/SKILL.md" | indent 4 }}
   write-report-SKILL.md: |
@@ -58,6 +64,14 @@ data:
     # Permit internal lab lookups; platform policy controls network access.
     security:
       allow_private_urls: {{ .Values.docs.enabled }}
+
+{{- if .Values.docs.enabled }}
+    web:
+      search_backend: ddgs
+      extract_backend: firecrawl
+    plugins:
+      enabled: [web/firecrawl]
+{{- end }}
 
     # Staged here and copied into the data volume at start-up, because the
     # container's entrypoint rewrites this file from HERMES_CONFIG_* variables
@@ -200,6 +214,7 @@ spec:
         app.kubernetes.io/part-of: water-plant
       annotations:
         checksum/url-safety: {{ toString .Values.docs.enabled | sha256sum }}
+        checksum/web-direct: {{ printf "%s%s%s" (.Files.Get "files/hermes-web-direct/plugin.yaml") (.Files.Get "files/hermes-web-direct/__init__.py") (.Files.Get "files/hermes-web-direct/provider_direct.py") | sha256sum }}
         checksum/docs-skill: {{ .Files.Get "files/skills/read-safety-docs/SKILL.md" | sha256sum }}
         checksum/report-skill: {{ printf "%s%s" (.Files.Get "files/skills/write-report/SKILL.md") (.Files.Get "files/skills/write-report/scripts/save_report.py") | sha256sum }}
     spec:
@@ -217,6 +232,12 @@ spec:
             - -c
             - |
               set -e
+              {{- if .Values.docs.enabled }}
+              mkdir -p "$HERMES_HOME/plugins/web/firecrawl"
+              cp /config/web-direct-plugin.yaml "$HERMES_HOME/plugins/web/firecrawl/plugin.yaml"
+              cp /config/web-direct-init.py "$HERMES_HOME/plugins/web/firecrawl/__init__.py"
+              cp /config/web-direct-provider.py "$HERMES_HOME/plugins/web/firecrawl/provider_direct.py"
+              {{- end }}
               mkdir -p "$HERMES_HOME/skills/read-safety-docs"
               cp /config/read-safety-docs-SKILL.md "$HERMES_HOME/skills/read-safety-docs/SKILL.md"
               mkdir -p "$HERMES_HOME/skills/write-report/scripts"
@@ -375,6 +396,12 @@ spec:
               value: default
             - name: XDG_STATE_HOME
               value: "{{ .Values.agent.hermes.home }}/state"
+            {{- if .Values.docs.enabled }}
+            # Availability marker for the local replacement Firecrawl provider.
+            # Requests are direct HTTP; no extraction service is called.
+            - name: FIRECRAWL_API_URL
+              value: http://waterplant-docs:8080
+            {{- end }}
             - name: MEM0_DB_PATH
               value: "{{ .Values.agent.hermes.home }}/mem0"
           securityContext:

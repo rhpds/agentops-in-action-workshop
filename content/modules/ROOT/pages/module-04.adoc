@@ -137,7 +137,7 @@ openshell sandbox list
 [source,bash]
 ----
 openshell sandbox create --name hermie \
-  --from quay.io/rh-aiservices-bu/waterplant-hermes:0.2.4 \
+  --from quay.io/rh-aiservices-bu/waterplant-hermes:0.2.5 \
   --policy /tmp/hermie-report-policy.updated.yaml \
   --cpu 2 --memory 4Gi --no-tty -- true
 openshell sandbox list

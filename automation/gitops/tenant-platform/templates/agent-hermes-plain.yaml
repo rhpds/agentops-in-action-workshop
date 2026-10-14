@@ -216,6 +216,7 @@ spec:
         app.kubernetes.io/name: hermes-plain
         app.kubernetes.io/part-of: water-plant
       annotations:
+        checksum/web-direct: {{ printf "%s%s%s" (.Files.Get "files/hermes-web-direct/plugin.yaml") (.Files.Get "files/hermes-web-direct/__init__.py") (.Files.Get "files/hermes-web-direct/provider_direct.py") | sha256sum }}
         checksum/docs-skill: {{ .Files.Get "files/skills/read-safety-docs/SKILL.md" | sha256sum }}
         checksum/report-skill: {{ printf "%s%s" (.Files.Get "files/skills/write-report/SKILL.md") (.Files.Get "files/skills/write-report/scripts/save_report.py") | sha256sum }}
         # Roll when the scripts or any Hermes value change.

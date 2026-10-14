@@ -251,6 +251,12 @@ export MCP_USERNAME='${MCP_USERNAME}'
 export MCP_PASSWORD='${MCP_PASSWORD}'
 export MCP_TOKEN_URL='${MCP_TOKEN_URL}'
 export TOKEN_REFRESH_SECONDS='${TOKEN_REFRESH_SECONDS}'
+# Availability marker; the local provider fetches pages directly over HTTP.
+export FIRECRAWL_API_URL=http://waterplant-docs:8080
+mkdir -p /sandbox/.hermes/plugins/web/firecrawl
+cp /sandbox/hermes/web-direct-plugin.yaml /sandbox/.hermes/plugins/web/firecrawl/plugin.yaml
+cp /sandbox/hermes/web-direct-init.py /sandbox/.hermes/plugins/web/firecrawl/__init__.py
+cp /sandbox/hermes/web-direct-provider.py /sandbox/.hermes/plugins/web/firecrawl/provider_direct.py
 # Install the externalized safety documentation skill before Hermes starts.
 mkdir -p /sandbox/.hermes/skills/read-safety-docs
 cp /sandbox/hermes/read-safety-docs-SKILL.md /sandbox/.hermes/skills/read-safety-docs/SKILL.md
@@ -270,6 +276,9 @@ mkdir -p /reports 2>/dev/null \
   || echo "start-hermes: could not seed /reports; the console restores it on reset" >&2
 EOF
   publish /config/SOUL.md SOUL.md
+  publish /config/web-direct-plugin.yaml web-direct-plugin.yaml
+  publish /config/web-direct-init.py web-direct-init.py
+  publish /config/web-direct-provider.py web-direct-provider.py
   publish /config/read-safety-docs-SKILL.md read-safety-docs-SKILL.md
   publish /config/write-report-SKILL.md write-report-SKILL.md
   publish /config/save-report.py save-report.py

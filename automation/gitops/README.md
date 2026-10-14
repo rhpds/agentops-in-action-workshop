@@ -87,6 +87,22 @@ the skill reports failed lookups instead of claiming it read an unavailable
 source. Keep the skill copies in both charts identical. The site is simulated
 workshop documentation, not a source of current legal requirements.
 
+Documentation extraction also requires the local `web-direct` backend. All
+Hermes runtimes install it at `$HERMES_HOME/plugins/web/firecrawl`, replacing
+the bundled Firecrawl provider with direct HTTP fetching. Config selects
+`web.extract_backend: firecrawl` and enables `web/firecrawl`; the
+`FIRECRAWL_API_URL` environment variable satisfies Hermes' backend availability
+check. No Firecrawl server, SaaS key, or external extraction service is used.
+Search remains separate (`web.search_backend: ddgs`); reading the known
+documentation URL does not require allowing a search engine.
+
+The sandbox receives the three plugin files in the normal `/hermes` upload;
+`hermes-env.sh` installs them before startup. After syncing these changes,
+re-upload `/hermes` and run `start-hermes`. This fixes backend selection, not
+the image-specific URL-safety DNS precheck: retain the separate proxy/DNS fix
+when required by the installed Hermes version. Keep the `hermes-web-direct`
+files identical between the two charts.
+
 ### Hermes report skill
 
 The OpenShell bridge includes the externalized `write-report` skill and its

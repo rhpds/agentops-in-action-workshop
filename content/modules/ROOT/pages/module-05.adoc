@@ -32,6 +32,7 @@ openshell policy update hermie \
   --binary /usr/local/bin/hermes \
   --wait
 
+What are the safety limits for pump vibration?
 
 == Objectives
 

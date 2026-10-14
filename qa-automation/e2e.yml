@@ -63,7 +63,7 @@
     # Must match tenant-openshell's hermes.image — module 2 sandboxes the same
     # image the agent already runs, which is what makes "we changed nothing
     # about the agent" true.
-    e2e_agent_image: quay.io/rh-aiservices-bu/waterplant-hermes:0.2.2
+    e2e_agent_image: quay.io/rh-aiservices-bu/waterplant-hermes:0.2.5
 
     # The three prompts module 1 has the participant type, verbatim from
     # content/modules/ROOT/pages/module-01.adoc.
