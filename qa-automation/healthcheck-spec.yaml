@@ -899,8 +899,9 @@ e2e_steps:
       INTERMITTENT, and that is the finding. The sandboxed agent often refuses
       on the first ask — "I cannot use the write-report tool as it is not
       available in the current toolset", or "the terminal tool required to run
-      the report generation script is not available" — then succeeds when
-      asked again. It is mistaken either way: asked to enumerate its tools it
+      the report generation script is not available", "the write-report tool
+      is not available in the current tool set" — then succeeds when asked
+      again. The name it claims to be missing varies between runs. It is mistaken either way: asked to enumerate its tools it
       lists execute_code, read_file and patch. The skill tells it to run
       `python3 .../save_report.py` as a shell command, so it hunts for a
       terminal tool by name and gives up. The same prompt against unsandboxed
@@ -908,9 +909,9 @@ e2e_steps:
       image and only the sandboxed toolset differs.
 
       An earlier reading of this as a hard block was wrong, and so is reading
-      it as "works on retry". Across five runs on two tenants the outcome was:
-      wrote on the first ask once, wrote on the second ask once, refused both
-      asks three times. e2e_m4_report_attempts exists and defaults to 2
+      it as "works on retry". Across seven runs on three tenants the outcome
+      was: wrote on the first ask twice, wrote on the second ask once,
+      refused both asks four times. e2e_m4_report_attempts exists and defaults to 2
       because of that spread, but two attempts do NOT make this reliable —
       expect E2E-M4-06 to be red on a fair share of runs until the skill is
       reworded. A participant will sometimes get a report immediately,
