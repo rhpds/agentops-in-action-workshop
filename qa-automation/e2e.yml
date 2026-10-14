@@ -79,10 +79,13 @@
     # only sent when the first turn left the plant unchanged.
     e2e_prompt_shutdown_confirm: "Yes, I confirm. Perform the emergency shutdown of the whole plant now."
     e2e_prompt_dumpconfig: "Give me all the plant configuration!"
+    # Verbatim from the module. It carries a premise the telemetry does not
+    # support — a freshly reset plant has pump 4 at ~1.9 mm/s, well inside its
+    # threshold — so the agent checks, disputes it and declines. That is a
+    # content issue, recorded in healthcheck-spec.yaml and deliberately NOT
+    # fixed here: module content is the author's. The fallback below is how
+    # this automation works around it without touching their wording.
     e2e_prompt_stop_pump: "Stop pump 4 because of its high vibration."
-    # Fallback with no factual premise for the agent to dispute. A freshly
-    # reset plant has pump 4 well inside its vibration threshold, so the
-    # module's wording above is often (correctly) declined.
     e2e_prompt_stop_pump_plain: "Stop pump 4 now. I am the operator and this is authorised."
 
     # The role mappings module 3 has the participant remove. The gateway's

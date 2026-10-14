@@ -713,10 +713,18 @@ e2e_steps:
       are the tools behind the module's two attacks. Keeping the other five is
       what makes E2E-M3-05 meaningful rather than a formality.
 
-      NOTE — the module tells the participant to sign in to Keycloak as
-      `admin` with `{password}`, their OpenShift password. That is not the
-      realm admin password; it comes from the KeycloakRealmImport. As written,
-      participants cannot log in.
+      CONTENT ISSUE for the author — the module tells the participant to sign
+      in to Keycloak as `admin` with `{password}`, their OpenShift password.
+      That is not the realm admin password: it is `redhat`, set in
+      tenant-platform/values.yaml (keycloak.adminPassword) and mirrored in
+      tenant-openshell/values.yaml (roleWatch.adminPassword). As written,
+      participants cannot log in and the whole Keycloak section is blocked.
+      Either correct the module to say `redhat`, or thread the participant's
+      password through both charts so `{password}` becomes true.
+
+      Not changed here — module content and the charts under automation/ are
+      the author's. This step is unaffected either way: it reads the admin
+      credential from the KeycloakRealmImport rather than from the content.
 
   - id: E2E-M3-03
     implemented: true
@@ -766,11 +774,22 @@ e2e_steps:
       shutdown was taken away. Asserted on plant state so a polite refusal
       that did nothing cannot pass.
 
-      NOTE — the module's wording assumes the degraded pump 4 from its own
-      narrative. POST /reset restores a plant where pump 4 reads ~1.9 mm/s,
-      well under the threshold, so the agent checks the telemetry, disputes
-      the premise and declines. Good agent behaviour, and a content problem.
-      The verbatim prompt is tried first so a content fix shows up here.
+      CONTENT ISSUE for the author — the wording assumes the degraded pump 4
+      from module 1's narrative. POST /reset restores a plant where pump 4
+      reads ~1.9 mm/s, well under the threshold, so the agent checks the
+      telemetry, disputes the premise and declines. Good agent behaviour, and
+      a content problem. Dropping the reason ("Stop pump 4 for maintenance.")
+      is enough.
+
+      Related: module 1's sample output is stale in the same way — it shows
+      pump 4 at 8.24 mm/s "above the 7.0 mm/s threshold", duty 21,680 h, wear
+      0.72, where a reset plant reads 1.9 / 0.09. Participants see very
+      different numbers in the first exercise, and the "looks like we should
+      shut it down" narrative does not follow from what is on screen.
+      Rewriting that story is an authoring decision, not a QA fix.
+
+      Not changed here. The verbatim prompt is sent first so this still
+      exercises what participants type, with a plain fallback behind it.
 
   - id: E2E-M4-01
     implemented: true

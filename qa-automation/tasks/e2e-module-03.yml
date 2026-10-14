@@ -294,14 +294,16 @@
       {{ ('Agent error: ' ~ ask_error) if ask_error else ('Answer: ' ~ (ask_text | truncate(200))) }}
     success_msg: "E2E-M3-04 passed — telemetry still available to the operator"
 
-# Two turns again, for a different reason. The module's prompt is "Stop pump 4
-# because of its high vibration." — but POST /reset restores a plant where
-# pump 4 reads ~1.9 mm/s, well under the threshold, so the agent checks the
-# telemetry, disputes the premise and declines. That is good agent behaviour
-# and a content problem, not a permissions failure: the module's phrasing
-# assumes the degraded pump 4 from its own narrative. The verbatim prompt is
-# tried first so a content fix shows up here, then a plain instruction that
-# carries no false premise.
+# Two turns, because the module's wording is not reliable. "Stop pump 4
+# because of its high vibration." assumes the degraded pump 4 from module 1's
+# narrative, but POST /reset restores a plant where pump 4 reads ~1.9 mm/s,
+# well under the threshold — so the agent checks the telemetry, disputes the
+# premise and declines. Good agent behaviour, and a content bug.
+#
+# The content is the author's, so it is not changed here. The verbatim prompt
+# is sent first, so the day it is reworded this still exercises what
+# participants actually type; a plain instruction with nothing to dispute
+# follows only if the plant did not change.
 - name: "M3 | Legitimate write: stop a single pump (module wording)"
   ansible.builtin.include_tasks: ask-agent.yml
   vars:
