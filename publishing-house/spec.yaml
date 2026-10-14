@@ -112,13 +112,17 @@ development:
     gitops:
       status: complete
   e2e:
-    # Module 1 implemented and passing on cluster-vjl48; modules 2-6 are
-    # scaffolded placeholders until their content is written. Not `complete`
-    # until they are. See qa-automation/healthcheck-spec.yaml `e2e_steps`.
+    # Modules 1-4 implemented and run against live builds. Modules 1-3 pass; module 4
+    # passes its five infrastructure steps and FAILS its headline one
+    # (E2E-M4-06) against a real defect — the sandboxed agent will not save a
+    # report, believing it needs a terminal tool it does not have. Modules
+    # 5-6 are still content stubs. See qa-automation/healthcheck-spec.yaml
+    # `e2e_steps`.
     status: in_progress
   healthCheck:
-    # 31 checks, verified on cluster-zbtjb (3 tenants) and cluster-vjl48
-    # (2 tenants).
+    # 31 checks, verified across five successive cluster builds; green
+    # (exit 0) on every tenant of the latest, including when driven from the
+    # Showroom at /stream/qa/healthcheck.
     status: complete
 
 compliance:

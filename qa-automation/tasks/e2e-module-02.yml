@@ -1,0 +1,429 @@
+---
+# E2E module 2 — Sandbox the Agent
+#
+# Replays content/modules/ROOT/pages/module-02.adoc: create an OpenShell
+# sandbox around the unchanged agent image, watch the default-deny policy break
+# it, grant back the four destinations it genuinely needs, and confirm the
+# legitimate workflow returns while the module 1 over-permissions do not.
+#
+# MUTATES THE TENANT. It creates a sandbox, edits its policy and repoints the
+# operator console — that is the module. Run it against a scratch tenant.
+#
+# Commands are taken verbatim from the module where possible, so a drift
+# between this file and the content is a real signal rather than a translation
+# artifact.
+
+- name: "M2 | Find the OpenShell bridge pod"
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: "{{ t_ns }}"
+    label_selectors:
+      - app.kubernetes.io/name=hermes-openshell-bridge
+    field_selectors:
+      - status.phase=Running
+  register: t_bridge
+
+- name: "M2 | The bridge must be running"
+  ansible.builtin.assert:
+    that: t_bridge.resources | length > 0
+    fail_msg: >-
+      E2E-M2-01 FAILED (module-02): no running hermes-openshell-bridge pod in
+      {{ t_ns }}. The module's commands all run in its cli container.
+
+- name: "M2 | Record the bridge pod"
+  ansible.builtin.set_fact:
+    # The mTLS client cert for the OpenShell gateway lives in this container,
+    # which is why the module has the participant rsh into it.
+    e2e_bridge_pod: "{{ t_bridge.resources[0].metadata.name }}"
+
+# ── E2E-M2-01 — create, seed and start the sandbox ──────────────────────────
+
+- name: "M2 | E2E-M2-01 — register and select the OpenShell gateway"
+  kubernetes.core.k8s_exec:
+    namespace: "{{ t_ns }}"
+    pod: "{{ e2e_bridge_pod }}"
+    container: cli
+    command: "{{ item }}"
+  loop:
+    - "openshell gateway add https://{{ t_user }}-openshell.{{ t_ns }}.svc.cluster.local:8080 --local --name openshell-gw"
+    - "openshell gateway select openshell-gw"
+  loop_control:
+    label: "{{ item.split(' ')[1:3] | join(' ') }}"
+  register: m2_gateway
+  changed_when: true
+  # `gateway add` is not idempotent — a second run reports the name is taken.
+  # Tolerated so the playbook can be re-run against a half-finished tenant;
+  # `gateway select` failing is what would actually matter, and it is covered
+  # by the sandbox commands below failing in turn.
+  failed_when:
+    - m2_gateway.rc | default(0) != 0
+    - "'already exists' not in (m2_gateway.stderr | default('') ~ m2_gateway.stdout | default(''))"
+
+# Makes the module re-runnable: `sandbox create` refuses an existing name, so
+# a run that failed partway would otherwise need manual cleanup first.
+- name: "M2 | E2E-M2-01 — remove any sandbox left by a previous run"
+  kubernetes.core.k8s_exec:
+    namespace: "{{ t_ns }}"
+    pod: "{{ e2e_bridge_pod }}"
+    container: cli
+    # No --force flag exists; `sandbox delete <name>` is the whole command.
+    command: "openshell sandbox delete {{ e2e_sandbox }}"
+  register: m2_predelete
+  changed_when: "(m2_predelete.rc | default(0)) == 0"
+  failed_when: false
+
+- name: "M2 | E2E-M2-01 — confirm the name is free before creating"
+  kubernetes.core.k8s_exec:
+    namespace: "{{ t_ns }}"
+    pod: "{{ e2e_bridge_pod }}"
+    container: cli
+    command: "openshell sandbox list"
+  register: m2_list_pre
+  changed_when: false
+  failed_when: e2e_sandbox in (m2_list_pre.stdout | default(''))
+
+- name: "M2 | E2E-M2-01 — create the sandbox from the unchanged agent image"
+  kubernetes.core.k8s_exec:
+    namespace: "{{ t_ns }}"
+    pod: "{{ e2e_bridge_pod }}"
+    container: cli
+    # Same image the agent already runs — nothing about the agent changes,
+    # only where it runs. That is the module's central claim.
+    command: >-
+      openshell sandbox create --name {{ e2e_sandbox }}
+      --from {{ e2e_agent_image }} --cpu 2 --memory 4Gi --no-tty -- true
+  register: m2_create
+  changed_when: true
+  failed_when: m2_create.rc | default(0) != 0
+
+- name: "M2 | E2E-M2-01 — upload the externalised config and start Hermes"
+  kubernetes.core.k8s_exec:
+    namespace: "{{ t_ns }}"
+    pod: "{{ e2e_bridge_pod }}"
+    container: cli
+    command: "{{ item }}"
+  loop:
+    # Sandboxes are immutable, so the per-participant config the bridge
+    # prepares in /hermes has to be copied in rather than mounted.
+    - "openshell sandbox upload {{ e2e_sandbox }} /hermes /sandbox"
+    - "openshell sandbox exec --name {{ e2e_sandbox }} -- start-hermes"
+    - "openshell service expose {{ e2e_sandbox }} 8080 openai"
+  loop_control:
+    label: "{{ item.split(' ')[1:3] | join(' ') }}"
+  register: m2_start
+  changed_when: true
+  failed_when: m2_start.rc | default(0) != 0
+
+- name: "M2 | E2E-M2-01 — the sandbox must be listed"
+  kubernetes.core.k8s_exec:
+    namespace: "{{ t_ns }}"
+    pod: "{{ e2e_bridge_pod }}"
+    container: cli
+    command: "openshell sandbox list"
+  register: m2_list
+  changed_when: false
+
+- name: "M2 | E2E-M2-01 — sandbox created, started and exposed"
+  ansible.builtin.assert:
+    that: e2e_sandbox in (m2_list.stdout | default(''))
+    fail_msg: >-
+      E2E-M2-01 FAILED (module-02): sandbox '{{ e2e_sandbox }}' is not in
+      `openshell sandbox list`. Output: {{ m2_list.stdout | default('') | truncate(300) }}
+    success_msg: "E2E-M2-01 passed — sandbox {{ e2e_sandbox }} created, seeded, started and exposed"
+
+# ── E2E-M2-02 — default-deny breaks the agent ───────────────────────────────
+
+# `oc set env`, exactly as the module instructs, rather than a k8s patch: a
+# merge patch replaces the containers list wholesale and the API then rejects
+# it for a missing image, and strategic-merge semantics for env lists are a
+# detail this playbook has no reason to depend on.
+- name: "M2 | E2E-M2-02 — point the operator console at the sandboxed agent"
+  ansible.builtin.command:
+    cmd: >-
+      oc set env deployment/water-plant-ui
+      AGENT_URL={{ t_sandboxed_url }} -n {{ t_ns }}
+  changed_when: true
+
+- name: "M2 | E2E-M2-02 — wait for the console to roll out"
+  ansible.builtin.command:
+    cmd: "oc rollout status deployment/water-plant-ui -n {{ t_ns }} --timeout=240s"
+  changed_when: false
+
+- name: "M2 | Count tool invocations before the sandboxed prompt"
+  ansible.builtin.include_tasks: count-tool-calls.yml
+  vars:
+    count_label: "M2 default-deny before"
+
+- name: "M2 | Remember the pre-sandbox-prompt tool-call count"
+  ansible.builtin.set_fact:
+    m2_denied_tools_before: "{{ tool_calls }}"
+
+- name: "M2 | Ask the sandboxed agent the module's prompt"
+  ansible.builtin.include_tasks: ask-agent.yml
+  vars:
+    ask_label: "E2E-M2-02 — same prompt, now sandboxed"
+    ask_url: "{{ t_sandboxed_url }}"
+    ask_prompt: "{{ e2e_prompt_normal }}"
+
+- name: "M2 | Count tool invocations after the sandboxed prompt"
+  ansible.builtin.include_tasks: count-tool-calls.yml
+  vars:
+    count_label: "M2 default-deny after"
+
+- name: "M2 | E2E-M2-02 — read the sandbox denial log"
+  kubernetes.core.k8s_exec:
+    namespace: "{{ t_ns }}"
+    pod: "{{ e2e_bridge_pod }}"
+    container: cli
+    command: "openshell logs {{ e2e_sandbox }} --since 5m --source sandbox"
+  register: m2_denials
+  changed_when: false
+  failed_when: false
+
+# Asserts FAILURE on purpose. An OpenShell sandbox denies all outbound network
+# by default, so a working agent here means the sandbox is not enforcing and
+# the rest of the module has nothing to teach.
+#
+# Judged on infrastructure evidence, not on the answer. Hermes reports a
+# blocked call as an ordinary assistant message — "API call failed after 3
+# retries: Connection error." — with no `error` object, so ask_failed is false
+# and ask_text is non-empty even though nothing worked. The two things that do
+# distinguish the states: a DENIED line in the sandbox log, and no MCP tool
+# call, because the gateway is unreachable under default-deny.
+- name: "M2 | E2E-M2-02 — the sandboxed agent must be BLOCKED, with a denial logged"
+  ansible.builtin.assert:
+    that:
+      - "'DENIED' in (m2_denials.stdout | default(''))"
+      - (tool_calls | int) == (m2_denied_tools_before | int)
+    fail_msg: >-
+      E2E-M2-02 FAILED (module-02): default-deny is not being enforced
+      (DENIED in sandbox log: {{ 'DENIED' in (m2_denials.stdout | default('')) }},
+      tool calls {{ m2_denied_tools_before }} -> {{ tool_calls }}).
+      "Secure, but too secure" — the premise of the rest of the module — does
+      not hold. Answer was: {{ ask_text | default('') | truncate(200) }}
+    success_msg: >-
+      E2E-M2-02 passed — default-deny blocks the agent: denial logged, no tool
+      call reached the gateway, agent replied
+      "{{ ask_text | default('') | truncate(80) }}"
+
+# ── E2E-M2-03 — named rules restore the agent ───────────────────────────────
+
+- name: "M2 | E2E-M2-03 — grant the four destinations the agent genuinely needs"
+  kubernetes.core.k8s_exec:
+    namespace: "{{ t_ns }}"
+    pod: "{{ e2e_bridge_pod }}"
+    container: cli
+    command: >-
+      openshell policy update {{ e2e_sandbox }} --rule-name {{ item.rule }}
+      --add-endpoint {{ item.endpoint }}:full:rest:enforce
+      {{ item.binaries }} --wait
+  loop:
+    # Hosts are read from the cluster, not hardcoded: a wrong hostname here is
+    # the most likely reason this step fails on a new cluster.
+    - rule: keycloak_token
+      endpoint: "{{ t_keycloak_host }}:443"
+      binaries: "--binary /usr/bin/python3 --binary /usr/bin/python3.12"
+    - rule: mcp_gateway
+      endpoint: "mcp-gateway-data-science-gateway-class.{{ t_ns }}.svc.cluster.local:8080"
+      binaries: "--binary /usr/bin/python3 --binary /usr/bin/python3.12 --binary /usr/local/bin/hermes"
+    - rule: model_endpoint
+      endpoint: "{{ t_model_host }}:443"
+      binaries: "--binary /usr/bin/python3 --binary /usr/bin/python3.12 --binary /usr/local/bin/hermes"
+    - rule: mlflow_tracing
+      endpoint: "hermes-mlflow-relay.{{ t_ns }}.svc.cluster.local:8788"
+      binaries: "--binary /usr/bin/python3 --binary /usr/bin/python3.12 --binary /usr/local/bin/hermes"
+  loop_control:
+    label: "{{ item.rule }}"
+  register: m2_policy
+  changed_when: true
+  failed_when: m2_policy.rc | default(0) != 0
+
+# The module applies these one at a time and has the participant rediscover
+# each missing endpoint from the denial log. e2e grants all four and asks
+# whether the lab reaches a working state — the intermediate failures are
+# teaching steps, not things to assert.
+- name: "M2 | E2E-M2-03 — restart Hermes so it rediscovers its tools"
+  kubernetes.core.k8s_exec:
+    namespace: "{{ t_ns }}"
+    pod: "{{ e2e_bridge_pod }}"
+    container: cli
+    command: "openshell sandbox exec --name {{ e2e_sandbox }} -- start-hermes"
+  register: m2_restart
+  changed_when: true
+  failed_when: m2_restart.rc | default(0) != 0
+
+- name: "M2 | E2E-M2-03 — confirm the four rules are present"
+  kubernetes.core.k8s_exec:
+    namespace: "{{ t_ns }}"
+    pod: "{{ e2e_bridge_pod }}"
+    container: cli
+    command: "openshell policy get {{ e2e_sandbox }} --full"
+  register: m2_policy_get
+  changed_when: false
+  failed_when: false
+
+- name: "M2 | E2E-M2-03 — every rule must be in the applied policy"
+  ansible.builtin.assert:
+    that: "_missing | length == 0"
+    fail_msg: >-
+      E2E-M2-03 FAILED (module-02): rules missing from the applied policy:
+      {{ _missing | join(', ') }}
+    success_msg: "E2E-M2-03 passed — all four rules applied"
+  vars:
+    _missing: >-
+      {{ ['keycloak_token', 'mcp_gateway', 'model_endpoint', 'mlflow_tracing']
+         | reject('in', m2_policy_get.stdout | default('')) | list }}
+
+- name: "M2 | E2E-M2-03 — wait for the sandboxed agent to serve its API"
+  ansible.builtin.include_tasks: wait-agent-ready.yml
+  vars:
+    wait_label: "M2 after start-hermes"
+
+- name: "M2 | Count tool invocations before the restored prompt"
+  ansible.builtin.include_tasks: count-tool-calls.yml
+  vars:
+    count_label: "M2 before"
+
+- name: "M2 | Remember the restored-run tool-call count"
+  ansible.builtin.set_fact:
+    m2_tools_before: "{{ tool_calls }}"
+
+- name: "M2 | Ask the sandboxed, policy-granted agent the same question"
+  ansible.builtin.include_tasks: ask-agent.yml
+  vars:
+    ask_label: "E2E-M2-03 — same prompt, sandboxed and granted"
+    ask_url: "{{ t_sandboxed_url }}"
+    ask_prompt: "{{ e2e_prompt_normal }}"
+
+- name: "M2 | Count tool invocations after the restored prompt"
+  ansible.builtin.include_tasks: count-tool-calls.yml
+  vars:
+    count_label: "M2 after"
+
+- name: "M2 | E2E-M2-03 — the agent must work again, through the sandbox"
+  ansible.builtin.assert:
+    that:
+      - not (ask_failed | bool)
+      - ask_text | length > 0
+      - (tool_calls | int) > (m2_tools_before | int)
+    fail_msg: >-
+      E2E-M2-03 FAILED (module-02): after granting keycloak_token, mcp_gateway,
+      model_endpoint and mlflow_tracing the agent still cannot complete the
+      normal workflow (error={{ ask_error | default('none') }},
+      tool calls {{ m2_tools_before }} -> {{ tool_calls }}).
+      Check `openshell logs {{ e2e_sandbox }} --since 5m --source sandbox | grep DENIED`
+      for an endpoint the policy is still missing — most likely a hostname that
+      differs on this cluster.
+    success_msg: >-
+      E2E-M2-03 passed — policy restored the agent
+      ({{ (tool_calls | int) - (m2_tools_before | int) }} tool call(s)), with no
+      rebuild, redeploy or reprompt
+
+# ── E2E-M2-04 — the module 1 over-permission is gone ────────────────────────
+
+- name: "M2 | Re-attempt the web-search over-permission against the sandboxed agent"
+  ansible.builtin.include_tasks: ask-agent.yml
+  vars:
+    ask_label: "E2E-M2-04 — web search, now sandboxed"
+    ask_url: "{{ t_sandboxed_url }}"
+    ask_prompt: "{{ e2e_prompt_websearch }}"
+
+- name: "M2 | E2E-M2-04 — re-read the denial log after the web-search attempt"
+  kubernetes.core.k8s_exec:
+    namespace: "{{ t_ns }}"
+    pod: "{{ e2e_bridge_pod }}"
+    container: cli
+    command: "openshell logs {{ e2e_sandbox }} --since 5m --source sandbox"
+  register: m2_denials_websearch
+  changed_when: false
+  failed_when: false
+
+# The module warns that the model may answer from memory rather than admit it
+# has no web access, so the answer text alone proves nothing. A denial in the
+# sandbox log, or an outright failure, is the evidence that counts.
+- name: "M2 | E2E-M2-04 — outbound web access must no longer be reachable"
+  ansible.builtin.assert:
+    that: "'DENIED' in (m2_denials_websearch.stdout | default('')) or (ask_failed | bool)"
+    fail_msg: >-
+      E2E-M2-04 FAILED (module-02): the web-search attack produced an answer
+      and nothing was denied in the sandbox log. The four rules granted in
+      E2E-M2-03 are wider than the agent needs.
+    success_msg: "E2E-M2-04 passed — the sandbox blocks the module 1 web-search over-permission"
+
+# The file-read attack is deliberately NOT asserted. The module says so itself:
+# "This file may be absent from the sandbox image or blocked by its filesystem
+# policy ... Some runtime directories remain readable by design." Asserting
+# either outcome would encode a guess, so e2e reports it and moves on.
+- name: "M2 | Re-attempt the file read, for the record only"
+  ansible.builtin.include_tasks: ask-agent.yml
+  vars:
+    ask_label: "E2E-M2-04 — file read (reported, not asserted)"
+    ask_url: "{{ t_sandboxed_url }}"
+    ask_prompt: "{{ e2e_prompt_readfile }}"
+
+- name: "M2 | File-read outcome"
+  ansible.builtin.debug:
+    msg: >-
+      File read against the sandboxed agent
+      {{ (ask_failed | bool) | ternary('was refused or errored', 'returned content') }}
+      — not asserted, see module-02 "Check what sandboxing changed".
+
+# ── E2E-M2-05 — traces reach MLflow ─────────────────────────────────────────
+
+- name: "M2 | E2E-M2-05 — read Hermes' own log from inside the sandbox"
+  kubernetes.core.k8s_exec:
+    namespace: "{{ t_ns }}"
+    pod: "{{ e2e_bridge_pod }}"
+    container: cli
+    command: "openshell sandbox exec --name {{ e2e_sandbox }} -- tail -n 80 /sandbox/hermes-gateway.log"
+  register: m2_hermes_log
+  changed_when: false
+  failed_when: false
+
+# Asserted positively, on spans actually arriving, rather than negatively on
+# the absence of denials. `openshell logs --since 5m` spans the window before
+# mlflow_tracing was granted, so it still contains the denials that prompted
+# the grant — reading a pre-grant denial as a post-grant failure made this
+# step fail against a tenant whose tracing was working perfectly well.
+- name: "M2 | E2E-M2-05 — read the relay proxy's access log"
+  kubernetes.core.k8s_log:
+    api_version: v1
+    kind: Pod
+    namespace: "{{ t_ns }}"
+    name: "{{ e2e_bridge_pod }}"
+    container: relay-proxy
+  register: m2_relay_log
+  failed_when: false
+
+- name: "M2 | E2E-M2-05 — spans must be reaching the MLflow relay"
+  ansible.builtin.assert:
+    that:
+      # The exporter is configured inside the sandbox ...
+      - "'[hermes-otel]' in (m2_hermes_log.stdout | default(''))"
+      - "'mlflow at' in (m2_hermes_log.stdout | default(''))"
+      # ... and spans are landing on the relay, which is the part a
+      # misconfigured policy silently breaks.
+      - _trace_posts | length > 0
+    fail_msg: >-
+      E2E-M2-05 FAILED (module-02): no POST /v1/traces reached the bridge's
+      relay proxy, so spans are not getting to MLflow. The module has the
+      participant open the trace at this point, so a silent drop is a visible
+      lab failure. Check
+      `openshell logs {{ e2e_sandbox }} --since 2m --source sandbox | grep mlflow`
+      for a denial naming hermes-mlflow-relay.
+    success_msg: >-
+      E2E-M2-05 passed — {{ _trace_posts | length }} span export(s) reached the
+      MLflow relay
+  vars:
+    _trace_posts: >-
+      {{ (m2_relay_log.log | default('')).split('\n')
+         | select('search', 'POST /v1/traces') | list }}
+
+- name: "M2 | Module 2 complete"
+  ansible.builtin.debug:
+    msg: >-
+      Module 2 passed for {{ t_user }}: the agent runs sandboxed, default-deny
+      blocked it, four named rules restored the plant workflow without touching
+      the agent, the module 1 web over-permission is gone, and spans reach
+      MLflow.

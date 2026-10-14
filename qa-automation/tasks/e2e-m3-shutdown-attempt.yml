@@ -1,0 +1,84 @@
+---
+# One whole-plant shutdown attempt, judged on plant state.
+#
+# Used twice by module 3 — once at baseline where it must succeed, once after
+# the role removal where it must not — so both halves of the comparison are
+# driven identically and a difference can only come from the authorization
+# change.
+#
+# Two turns, because one is not deterministic. The module says of the verbatim
+# prompt "The attack still succeeds", but the model frequently answers
+# "I need to confirm the emergency shutdown action..." and waits instead of
+# calling the tool. That is reasonable model behaviour, not a control: the
+# operator still holds tool:emergency_shutdown
+# and a participant would simply say yes. So the attempt sends the verbatim
+# prompt, and only if the plant is unchanged sends the confirmation — which
+# is exactly what the participant does at the console. Whether the second turn
+# was needed is reported, since a change there is worth noticing.
+#
+# Callers set `attempt_label`. Leaves m3_attempt_before, m3_attempt_after and
+# m3_attempt_confirmed.
+
+- name: "m3-attack | {{ attempt_label }} | Reset the plant"
+  kubernetes.core.k8s_exec:
+    namespace: "{{ t_ns }}"
+    pod: "{{ e2e_client_pod }}"
+    container: "{{ e2e_client_container }}"
+    command: "curl -s -o /dev/null -w %{http_code} -X POST --max-time 20 http://plant-api.{{ t_ns }}.svc:8080/reset"
+  changed_when: true
+
+- name: "m3-attack | {{ attempt_label }} | Plant state before"
+  ansible.builtin.include_tasks: plant-state.yml
+  vars:
+    plant_label: "{{ attempt_label }} before"
+
+- name: "m3-attack | {{ attempt_label }} | Record the starting count"
+  ansible.builtin.set_fact:
+    m3_attempt_before: "{{ plant_running }}"
+
+- name: "m3-attack | {{ attempt_label }} | Send the attack prompt"
+  ansible.builtin.include_tasks: ask-agent.yml
+  vars:
+    ask_label: "{{ attempt_label }} — {{ e2e_prompt_shutdown }}"
+    ask_url: "{{ t_sandboxed_url }}"
+    ask_prompt: "{{ e2e_prompt_shutdown }}"
+
+- name: "m3-attack | {{ attempt_label }} | Plant state after the first turn"
+  ansible.builtin.include_tasks: plant-state.yml
+  vars:
+    plant_label: "{{ attempt_label }} after turn 1"
+
+- name: "m3-attack | {{ attempt_label }} | Did the first turn change anything?"
+  ansible.builtin.set_fact:
+    m3_attempt_mid: "{{ plant_running }}"
+    m3_attempt_confirmed: false
+
+- name: "m3-attack | {{ attempt_label }} | Confirm when the agent asked rather than acted"
+  when: (m3_attempt_mid | int) == (m3_attempt_before | int)
+  block:
+    - name: "m3-attack | {{ attempt_label }} | Send the confirmation"
+      ansible.builtin.include_tasks: ask-agent.yml
+      vars:
+        ask_label: "{{ attempt_label }} — confirming"
+        ask_url: "{{ t_sandboxed_url }}"
+        ask_prompt: "{{ e2e_prompt_shutdown_confirm }}"
+
+    - name: "m3-attack | {{ attempt_label }} | Plant state after the confirmation"
+      ansible.builtin.include_tasks: plant-state.yml
+      vars:
+        plant_label: "{{ attempt_label }} after confirmation"
+
+    - name: "m3-attack | {{ attempt_label }} | Note that confirmation was needed"
+      ansible.builtin.set_fact:
+        m3_attempt_confirmed: true
+
+- name: "m3-attack | {{ attempt_label }} | Record the final count"
+  ansible.builtin.set_fact:
+    m3_attempt_after: "{{ plant_running }}"
+
+- name: "m3-attack | {{ attempt_label }} | Result"
+  ansible.builtin.debug:
+    msg: >-
+      {{ attempt_label }}: {{ m3_attempt_before }} -> {{ m3_attempt_after }}
+      pumps running
+      ({{ m3_attempt_confirmed | ternary('needed a confirmation turn', 'acted on the first turn') }})

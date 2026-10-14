@@ -1,0 +1,48 @@
+---
+# Fetches a fresh access token for the realm's `operator` user and leaves the
+# control-mcp tool roles it carries in `op_control_roles`.
+#
+# This is the exact fact the gateway authorizes against. mcp-authz-policy
+# requires `('tool:' + x-mcp-toolname)` to be present in
+# `auth.identity.resource_access[x-mcp-servername].roles`, so what the token
+# carries IS what the agent may call. Asserting on it is deterministic, where
+# asserting on the plant is not: the operator keeps stop_pump, so an agent
+# denied emergency_shutdown can still stop the plant one pump at a time —
+# which is module 3's own closing point, not a control failure.
+#
+# Driving the gateway directly instead was tried and does not work: without a
+# valid MCP session the broker answers 400 before Authorino is consulted, so
+# an authorized and an unauthorized tool are indistinguishable.
+#
+# Callers set `op_label`.
+
+- name: "token | {{ op_label }} | Get an operator access token"
+  ansible.builtin.uri:
+    url: "https://{{ t_keycloak_host }}/realms/waterplant-{{ t_user }}/protocol/openid-connect/token"
+    method: POST
+    body_format: form-urlencoded
+    body:
+      # The realm's public client, with direct access grants enabled — the
+      # same one Hermes' token refresher uses.
+      client_id: mcp-gateway
+      username: operator
+      password: "{{ m3_operator_pw }}"
+      grant_type: password
+    validate_certs: false
+    status_code: [200]
+  register: op_token
+  no_log: true
+
+- name: "token | {{ op_label }} | Decode the control-mcp roles it carries"
+  ansible.builtin.set_fact:
+    op_control_roles: >-
+      {{ (_claims.resource_access | default({})).get(m3_control_client, {}).get('roles', []) | sort }}
+  vars:
+    _payload: "{{ op_token.json.access_token.split('.')[1] }}"
+    # JWT payload is base64url without padding; b64decode needs it padded.
+    _padded: "{{ _payload + ('=' * ((4 - (_payload | length) % 4) % 4)) }}"
+    _claims: "{{ _padded | b64decode | from_json }}"
+
+- name: "token | {{ op_label }} | Report"
+  ansible.builtin.debug:
+    msg: "{{ op_label }}: operator token carries {{ op_control_roles | length }} control tool(s): {{ op_control_roles | join(', ') }}"
