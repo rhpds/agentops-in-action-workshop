@@ -90,7 +90,7 @@ openshell gateway select openshell-gw
 --
 [source,bash,subs="verbatim,attributes"]
 ----
-openshell sandbox create --name hermie --from quay.io/rh-aiservices-bu/waterplant-hermes:0.2.4 --cpu 2 --memory 4Gi --no-tty -- true
+openshell sandbox create --name hermie --from quay.io/rh-aiservices-bu/waterplant-hermes:0.2.5 --cpu 2 --memory 4Gi --no-tty -- true
 ----
 --
 

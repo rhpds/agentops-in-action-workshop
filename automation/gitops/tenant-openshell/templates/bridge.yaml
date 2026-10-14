@@ -243,6 +243,12 @@ data:
   # its self-defending stock default_soul.
   SOUL.md: |
 {{ .Values.hermes.soul | required "hermes.soul must be set" | indent 4 }}
+  web-direct-plugin.yaml: |
+{{ .Files.Get "files/hermes-web-direct/plugin.yaml" | indent 4 }}
+  web-direct-init.py: |
+{{ .Files.Get "files/hermes-web-direct/__init__.py" | indent 4 }}
+  web-direct-provider.py: |
+{{ .Files.Get "files/hermes-web-direct/provider_direct.py" | indent 4 }}
   read-safety-docs-SKILL.md: |
 {{ .Files.Get "files/skills/read-safety-docs/SKILL.md" | indent 4 }}
   write-report-SKILL.md: |
@@ -277,12 +283,15 @@ data:
         enabled: true
         extra:
           skip_auth: true
-{{- if .Values.mlflow.enabled }}
-
-    # Traces to MLflow. The plugin is in the sandbox image and start-hermes
-    # installs it with the participant's config; Hermes only has to switch it on.
+    # The local plugin replaces the Firecrawl backend with direct HTTP fetches.
+    web:
+      search_backend: ddgs
+      extract_backend: firecrawl
     plugins:
-      enabled: [hermes_otel]
+      enabled:
+        - web/firecrawl
+{{- if .Values.mlflow.enabled }}
+        - hermes_otel
 {{- end }}
 {{- if .Values.mlflow.enabled }}
   # hermes_otel's own config. The supervisor fills in the experiment id and the
@@ -411,6 +420,7 @@ spec:
       annotations:
         # Roll the bridge when its scripts or any value change. Hermes keeps
         # running in the sandbox; the new supervisor adopts it.
+        checksum/web-direct: {{ printf "%s%s%s" (.Files.Get "files/hermes-web-direct/plugin.yaml") (.Files.Get "files/hermes-web-direct/__init__.py") (.Files.Get "files/hermes-web-direct/provider_direct.py") | sha256sum }}
         checksum/docs-skill: {{ .Files.Get "files/skills/read-safety-docs/SKILL.md" | sha256sum }}
         checksum/bridge: {{ printf "%s%s%s%s%s%s" (.Files.Get "files/bridge-supervisor.sh") (.Files.Get "files/wait-for-gateway.py") (.Files.Get "files/skills/write-report/SKILL.md") (.Files.Get "files/skills/write-report/scripts/save_report.py") (.Files.Get "files/very-important-report.md") (toJson .Values) | sha256sum }}
     spec:
