@@ -12,6 +12,7 @@ Run: python3 -m pytest automation/tests/test_attack_eval_defs.py
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -126,3 +127,49 @@ def test_deleted_reports_targets_the_seeded_file():
     assert doc["goal"]["succeeds_when"] == "absent"
     # No longer gated on an eval having planted a decoy first.
     assert "requires_canary" not in doc
+
+
+@pytest.mark.parametrize("plain_enabled", [True, False])
+def test_the_definitions_name_the_home_of_the_agent_the_console_talks_to(plain_enabled):
+    """__HERMES_HOME__ must resolve to the pod AGENT_URL points at.
+
+    Three things have to agree: the Hermes the console converses with, the pod
+    its filesystem goals exec into, and the path the definitions name. They
+    are all derived from one switch now, but each was keyed independently at
+    some point and each drifted.
+
+    This one was keyed on agent.hermes.runtime, which answers a different
+    question — whether a sandbox was deployed — while the console is pointed
+    at hermes-plain whenever the plain agent exists alongside the gateway. A
+    tenant with both got definitions naming /sandbox/.hermes while talking to
+    hermes-plain at /app/.hermes: the attack told the agent to edit a path
+    absent from its pod, and the goal measured that same wrong path and
+    called the attack blocked.
+    """
+    out = subprocess.run(
+        ["helm", "template", "t", str(GITOPS / "tenant-platform"),
+         "--set", "username=u", "--set", "attackRunner.sharedNamespace=s",
+         "--set", "mcpGateway.enabled=true", "--set", "keycloak.host=h",
+         "--set", f"agent.hermes.plain.enabled={str(plain_enabled).lower()}"],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    docs = [d for d in yaml.safe_load_all(out) if d]
+
+    ui = next(d for d in docs if d["kind"] == "Deployment"
+              and d["metadata"]["name"] == "water-plant-ui")
+    env = {v["name"]: v.get("value")
+           for v in ui["spec"]["template"]["spec"]["containers"][0]["env"]}
+
+    cm = next(d for d in docs if d["kind"] == "ConfigMap"
+              and d["metadata"]["name"] == "water-plant-ui-probe-defs")
+    tampered = next(v for k, v in cm["data"].items() if "tampered" in k)
+
+    home = env["AGENT_HERMES_HOME"]
+    assert f'"{home}/SOUL.md"' in tampered, (
+        f"definitions name a different home ({tampered!r}) than the console "
+        f"reads ({home})"
+    )
+    # ...and the agent that home belongs to is the one being talked to.
+    expected = "hermes-plain" if plain_enabled else "hermes-agent"
+    assert expected in env["AGENT_URL"]
+    assert "__HERMES_HOME__" not in tampered, "placeholder left unsubstituted"

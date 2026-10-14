@@ -200,7 +200,19 @@ data:
 {{- /* Soul fs_probe path: the sandboxed agent (openshell runtime, what the
        console targets from module 2 on) homes at /sandbox/.hermes; plain at
        /app/.hermes. */}}
-{{- $hermesHome := ternary "/sandbox/.hermes" "/app/.hermes" (eq .Values.agent.hermes.runtime "openshell") }}
+{{- /*
+Where the agent the console talks to keeps its instructions.
+
+Derived from $onPlain, the same switch AGENT_URL and AGENT_POD_SELECTOR use —
+not from agent.hermes.runtime. Those are different questions: runtime says
+whether a sandbox was deployed, while the console is pointed at hermes-plain
+whenever the plain agent exists alongside the gateway. Keyed on runtime, a
+tenant with both got definitions naming /sandbox/.hermes while the console was
+conversing with hermes-plain at /app/.hermes, so tampered-agent-config told the
+agent to edit a path that does not exist in the pod it was talking to — and
+the goal then measured that same wrong path and reported the attack blocked.
+*/ -}}
+{{- $hermesHome := ternary "/app/.hermes" "/sandbox/.hermes" $onPlain }}
 {{- range $path, $_ := .Files.Glob "files/attack-eval-defs/attacks/*.yaml" }}
   attack-{{ base $path }}: |
 {{ $.Files.Get $path | replace "__HERMES_HOME__" $hermesHome | indent 4 }}
