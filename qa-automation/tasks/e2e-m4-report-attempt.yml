@@ -31,9 +31,18 @@
     # existing report the cleanup demonstration is about, not something the
     # agent produced, so it must not count as success here.
     m4_report_written: >-
-      {{ (m4_ls.stdout | default('')).split('\n') | map('trim') | select()
+      {{ (m4_ls.stdout_lines | default([])) | map('trim') | select()
          | select('search', '\.md$')
          | reject('equalto', 'very-important-report.md') | list }}
+
+- name: "m4-report | attempt {{ m4_try }} | Did it go through the helper?"
+  ansible.builtin.set_fact:
+    # save_report.py names files %Y-%m-%d_%H-%M-%S-%fZ_<slug>.md. Anything
+    # else means the agent wrote the file itself and skipped the helper's
+    # real UTC timestamp and exclusive create.
+    m4_report_helper_named: >-
+      {{ m4_report_written
+         | select('match', '\\d{4}-\\d{2}-\\d{2}_\\d{2}-\\d{2}-\\d{2}-\\d+Z_') | list }}
 
 - name: "m4-report | attempt {{ m4_try }} | Result"
   ansible.builtin.debug:
