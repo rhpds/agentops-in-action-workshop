@@ -1,3 +1,5 @@
 # Antora build output
 www/
 .cache/
+ui-bundle
+ui-bundle.zip

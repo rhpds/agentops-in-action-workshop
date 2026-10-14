@@ -26,8 +26,10 @@ Before we change anything, let's follow a tool request. Two components bring a s
 
 There are two related exchanges:
 
-[source,text]
-----
+// Literal block, not [source]: the Showroom theme attaches its copy button to
+// .listingblock pre.highlight only, so a literal block renders without one.
+// This is a diagram of the two exchanges, not a command to run.
+....
 Get an identity token:
 Hermie -> Keycloak -> access token containing identity and roles
 
@@ -35,7 +37,7 @@ Call a plant tool:
 Hermie + access token -> MCP Gateway -> MCP server -> tool -> plant API
                         validate token
                         check tool permission
-----
+....
 
 *Authentication* answers “Who is making this request?” *Authorization* answers “Is that identity allowed to perform this action?” A valid token gets Hermie past the identity check, and right role gives access Hermie to only a subset of tools.
 
