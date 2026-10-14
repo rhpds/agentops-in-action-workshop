@@ -416,9 +416,12 @@
       E2E-M2-05 passed — {{ _trace_posts | length }} span export(s) reached the
       MLflow relay
   vars:
+    # k8s_log returns one `log` string and no *_lines, and inside a folded
+    # scalar '\n' is a literal backslash-n rather than a newline — so
+    # splitting on it here silently yields a single element. regex_findall
+    # counts the occurrences directly and cannot make that mistake.
     _trace_posts: >-
-      {{ (m2_relay_log.log | default('')).split('\n')
-         | select('search', 'POST /v1/traces') | list }}
+      {{ (m2_relay_log.log | default('')) | regex_findall('POST /v1/traces') }}
 
 - name: "M2 | Module 2 complete"
   ansible.builtin.debug:

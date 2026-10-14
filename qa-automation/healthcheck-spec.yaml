@@ -896,17 +896,49 @@ e2e_steps:
       The module's headline outcome. very-important-report.md ships in the
       image and is excluded, or it would mask a total failure.
 
-      FAILING reproducibly on current builds, and it is a real lab defect
-      rather than a flaky check. With /reports writable (E2E-M4-05 passes) and
-      the skill installed (E2E-M4-01 passes), the sandboxed agent answers:
-      "I cannot create or write the report because the terminal tool required
-      to run the report generation script is not available." It is mistaken —
-      asked to enumerate its tools it lists execute_code, read_file and patch
-      — but the skill instructs it to run `python3 .../save_report.py` as a
-      shell command and it looks for a terminal tool by name. The identical
-      prompt against unsandboxed hermes-plain writes the file every time, so
-      the tool exists in the image; only the sandboxed toolset differs.
-      Likely fix: reword the skill around execute_code rather than a shell.
+      INTERMITTENT, and that is the finding. The sandboxed agent often refuses
+      on the first ask — "I cannot use the write-report tool as it is not
+      available in the current toolset", or "the terminal tool required to run
+      the report generation script is not available" — then succeeds when
+      asked again. It is mistaken either way: asked to enumerate its tools it
+      lists execute_code, read_file and patch. The skill tells it to run
+      `python3 .../save_report.py` as a shell command, so it hunts for a
+      terminal tool by name and gives up. The same prompt against unsandboxed
+      hermes-plain writes the file every time, so the capability is in the
+      image and only the sandboxed toolset differs.
+
+      An earlier reading of this as a hard block was wrong, and so is reading
+      it as "works on retry". Across five runs on two tenants the outcome was:
+      wrote on the first ask once, wrote on the second ask once, refused both
+      asks three times. e2e_m4_report_attempts exists and defaults to 2
+      because of that spread, but two attempts do NOT make this reliable —
+      expect E2E-M4-06 to be red on a fair share of runs until the skill is
+      reworded. A participant will sometimes get a report immediately,
+      sometimes after re-asking, and sometimes be told flatly that the tool
+      does not exist; the last reads as though the policy change in this
+      module failed, which is the worst of the three.
+
+      Second-order problem, reported by E2E-M4-06's follow-up rather than
+      asserted: when the agent does succeed it bypasses save_report.py and
+      writes the file itself. Observed filenames
+      20261014_132500_123456_pump_status_report.md, pump_status_20261014.md
+      and pump_status_report.md — none matching the helper's
+      %Y-%m-%d_%H-%M-%S-%fZ_<slug>.md — with the first one's body reading
+      "Generated: 2026-10-14 13:25:00.123456", the placeholder microseconds
+      copied straight out of the skill's own format description, against a
+      real mtime of 08:59. The saved report therefore carries a fabricated
+      generation time, and the module's completion check ("Hermie returns a
+      timestamped filename under /reports") is satisfied by a name that only
+      looks timestamped. The exclusive-create guarantee is gone too, which
+      matters for the three-report cleanup demonstration.
+
+      Fix tried on a live sandbox and reverted — the skill belongs to the
+      agent developers. Rewording the save step to import the already
+      import-safe helper (save_report(content, title), behind an
+      `if __name__ == '__main__'` guard) removed the first-ask refusal, but
+      did not stop the bypass. The wording needs to do both: avoid naming a
+      tool that may not exist, and insist on the helper rather than offer
+      it.
 
   - id: E2E-M4-07
     implemented: true
