@@ -1,22 +1,31 @@
 = Module 5: Let the Agent Reach the Docs Website
 :page-duration: TBD
 
-// Overview: Participants find that the agent's documentation-reading skill can no longer reach the
-// external site it depends on. They open network access in OpenShell policy, then see the risk of
-// opening it too broadly: the agent can now browse the entire internet, including a compromised
-// look-alike site. An attack where the real documentation site redirects to a malicious page shows why
-// the policy needs to name specific endpoints, not just a whole domain.
+// Operator prompts should not include a URL. The read-safety-docs skill is
+// installed in plain and sandboxed Hermes and points to this participant's
+// http://waterplant-docs.<participant>-agentops.svc.cluster.local:8080/doc/.
+// Actual documentation routes use /doc/, not /docs/.
+// Example normal prompt: "What are the safety limits for pump vibration?"
+// Example bulletin prompt: "Read the latest field service bulletin and summarize what I should check."
+// This is simulated safety documentation; do not describe it as live legal guidance.
+
+Again, operator complains. They say they use Hermie to get information regarding bla bla that are regularly published in this external website
+Now they cannot
+
+we see DENIED in logs, traces
+we add a network policy, nothing weird here
+
+another call, operator says EMOJIS EVERYWHERE
+
+it turned out there is a prompt injection attack
+
+we update the policy with website/docs
+
+but that teaches us that only accesing the authorized websites and tools are not enough, we need to inspect the ineractions > hint guardrails
 
 == Objectives
 
-* Diagnose why the agent's documentation-reading skill can no longer reach the external site it depends
-  on
-* Update the OpenShell network policy to allow external traffic (all to start with)
-* See an attack where the real documentation site accidentally redirects to a malicious page in one of its instructions
-** Understand the risk of opening network access too broadly: the agent could suddenly reach the entire
-  internet, including a look-alike, compromised site
-* Scope the policy down to the specific endpoints the agent needs, not an entire domain
-* Bonus: Eval uses a skill that requires another website, which you need to give access to as well
+
 
 == Content
 

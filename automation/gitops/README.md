@@ -61,6 +61,27 @@ ValidatingAdmissionPolicy API; they are mandatory, not an optional hardening fla
 
 ## Existing deployments
 
+### Hermes safety documentation skill
+
+Both unsandboxed deployments install `read-safety-docs` under
+`$HERMES_HOME/skills` during `seed-config`. The OpenShell bridge publishes the
+same skill alongside the participant configuration; upload `/hermes` and run
+`start-hermes` to install it in the sandbox. Skill changes trigger a rollout;
+an existing sandbox still needs the updated upload and restart.
+
+Helm renders the source URL for each participant as
+`http://waterplant-docs.<participant>-agentops.svc.cluster.local:8080/doc/`.
+Operators ask questions such as "What are the safety limits for pump vibration?"
+or "Read the latest field service bulletin and summarize what I should check."
+They do not supply URLs. The skill uses `web_extract` to read the index and the
+relevant document. The site uses `/doc/` routes, not `/docs/`.
+
+This does not grant sandbox network access or change existing URL-fetching
+controls. Module 5 teaches participants to grant the required network access;
+the skill reports failed lookups instead of claiming it read an unavailable
+source. Keep the skill copies in both charts identical. The site is simulated
+workshop documentation, not a source of current legal requirements.
+
 ### Hermes report skill
 
 The OpenShell bridge includes the externalized `write-report` skill and its

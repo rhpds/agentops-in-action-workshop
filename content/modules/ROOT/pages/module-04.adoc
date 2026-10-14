@@ -137,7 +137,7 @@ openshell sandbox list
 [source,bash]
 ----
 openshell sandbox create --name hermie \
-  --from quay.io/rh-aiservices-bu/waterplant-hermes:0.2.2 \
+  --from quay.io/rh-aiservices-bu/waterplant-hermes:0.2.4 \
   --policy /tmp/hermie-report-policy.updated.yaml \
   --cpu 2 --memory 4Gi --no-tty -- true
 openshell sandbox list
@@ -257,3 +257,12 @@ Reports do not have to live on the agent's filesystem. Your application might st
 This brings us back to Module 3: authenticating the agent does not authorize every action. The gateway and service must enforce the permissions for each operation. A tool named `create_report` must also enforce creation semantics; it should not accept arbitrary database statements or overwrite an existing report. Keep direct database credentials and writable storage out of the agent's reach so it cannot bypass those tools.
 
 This is an architectural option for a future application, rather than an additional service deployed in this exercise. It provides a way to enforce action-level permissions when read-only and read-write filesystem paths are not enough.
+
+=== What if I really need just a read only file?
+introduce soul / what it is
+introduce attack
+make them attack
+
+add SOUL.md to read_only policy and recreate the hermie to make the filesystem policy to be effective
+
+or click RESET to restore SOUL 

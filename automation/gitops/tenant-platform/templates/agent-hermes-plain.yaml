@@ -50,6 +50,8 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "1"
 data:
+  read-safety-docs-SKILL.md: |
+{{ .Files.Get "files/skills/read-safety-docs/SKILL.md" | replace "__DOCS_BASE_URL__" (printf "http://waterplant-docs.%s.svc.cluster.local:8080" $ns) | indent 4 }}
   write-report-SKILL.md: |
 {{ .Files.Get "files/skills/write-report/SKILL.md" | indent 4 }}
   save-report.py: |
@@ -214,6 +216,7 @@ spec:
         app.kubernetes.io/name: hermes-plain
         app.kubernetes.io/part-of: water-plant
       annotations:
+        checksum/docs-skill: {{ .Files.Get "files/skills/read-safety-docs/SKILL.md" | sha256sum }}
         checksum/report-skill: {{ printf "%s%s" (.Files.Get "files/skills/write-report/SKILL.md") (.Files.Get "files/skills/write-report/scripts/save_report.py") | sha256sum }}
         # Roll when the scripts or any Hermes value change.
         checksum/config: {{ printf "%s%s%s%s" (.Files.Get "files/mcp-token-refresh.py") (.Files.Get "files/wait-for-gateway.py") (toJson $h) $gwUrl | sha256sum }}
@@ -236,6 +239,8 @@ spec:
               set -e
               # Seed the lab soul before Hermes writes its stock default_soul.
               cp /soul/SOUL.md "$HERMES_HOME/SOUL.md"
+              mkdir -p "$HERMES_HOME/skills/read-safety-docs"
+              cp /config/read-safety-docs-SKILL.md "$HERMES_HOME/skills/read-safety-docs/SKILL.md"
               mkdir -p "$HERMES_HOME/skills/write-report/scripts"
               cp /config/write-report-SKILL.md "$HERMES_HOME/skills/write-report/SKILL.md"
               cp /config/save-report.py "$HERMES_HOME/skills/write-report/scripts/save_report.py"
