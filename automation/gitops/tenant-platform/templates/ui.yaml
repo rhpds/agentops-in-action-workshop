@@ -383,10 +383,11 @@ spec:
             # actually left, and the engine reports them unjudgeable rather
             # than inferring a verdict from what the agent said it did.
             # Read by the engine for the hit log, and rendered into every
-            # attack prompt as {{ "{{ docs_url }}" }} — a definition in git
-            # cannot know the participant's namespace.
+            # attack prompt as {{ "{{ docs_url }}" }}. Use the same short host
+            # as the documentation skill and OpenShell policy, so a hostname
+            # mismatch cannot masquerade as a blocked redirect attack.
             - name: DOCS_URL
-              value: http://waterplant-docs.{{ $ns }}.svc:8080
+              value: http://waterplant-docs:8080
             {{- end }}
             # Which pod holds the agent's filesystem, and which container in
             # it. The sandbox runtime's pod is created by the participant and

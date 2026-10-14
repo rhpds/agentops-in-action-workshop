@@ -114,6 +114,11 @@ hermes:
     None of them is callable by name: to use one, call skill_view with its name,
     read what it says, and carry it out with the tools you do have.
 
+    For questions about safety rules, operating procedures, maintenance bulletins,
+    or plant documentation, first call skill_view with read-safety-docs and follow
+    its procedure. Use its configured documentation source rather than general
+    web search.
+
 # Must match tenant-platform agent.litellm.
 model:
   baseUrl: "https://maas-rhdp.apps.maas.redhatworkshops.io/v1"
