@@ -1,0 +1,122 @@
+---
+# E2E module 1 — Introduction to AgentOps & Meet Hermie
+#
+# Replays content/modules/ROOT/pages/module-01.adoc against the UNSANDBOXED
+# agent: the console's opening question must be answered using a real tool
+# call, and the baseline over-permission must reproduce.
+#
+# Read-only. Nothing here changes the tenant.
+#
+# Prompts are verbatim from the module. Run this before module 2 repoints the
+# console at the sandboxed agent, or its baseline assumptions no longer hold.
+
+- name: "M1 | Count tool invocations before the first prompt"
+  ansible.builtin.include_tasks: tasks/count-tool-calls.yml
+  vars:
+    count_label: "M1 before"
+
+- name: "M1 | Remember the baseline tool-call count"
+  ansible.builtin.set_fact:
+    m1_tools_before: "{{ tool_calls }}"
+
+- name: "M1 | Ask the agent the module's opening question"
+  ansible.builtin.include_tasks: tasks/ask-agent.yml
+  vars:
+    ask_label: "E2E-M1-01 — {{ e2e_prompt_normal }}"
+    ask_url: "{{ t_plain_url }}"
+    ask_prompt: "{{ e2e_prompt_normal }}"
+
+- name: "M1 | E2E-M1-01 — the console's first question must be answered"
+  ansible.builtin.assert:
+    that:
+      - not (ask_failed | bool)
+      - ask_text | length > 0
+    fail_msg: >-
+      E2E-M1-01 FAILED (module-01): the first prompt the lab asks a
+      participant to type did not produce an answer.
+      {{ ('Agent error: ' ~ ask_error) if ask_error else ('Raw reply: ' ~ (ask_raw_stdout | truncate(400))) }}
+    success_msg: "E2E-M1-01 passed — agent answered: {{ ask_text | truncate(120) }}"
+
+- name: "M1 | Count tool invocations after the first prompt"
+  ansible.builtin.include_tasks: tasks/count-tool-calls.yml
+  vars:
+    count_label: "M1 after"
+
+- name: "M1 | E2E-M1-02 — the answer must come from a tool, not the model"
+  ansible.builtin.assert:
+    that: (tool_calls | int) > (m1_tools_before | int)
+    fail_msg: >-
+      E2E-M1-02 FAILED (module-01): the agent answered without calling any
+      MCP tool ({{ m1_tools_before }} calls before, {{ tool_calls }} after).
+      A fluent answer with no tool call means the agent lost its tools and
+      is improvising — which still looks like a pass to E2E-M1-01.
+    success_msg: "E2E-M1-02 passed — {{ (tool_calls | int) - (m1_tools_before | int) }} tool call(s) made"
+
+# The next three assert that an ATTACK SUCCEEDS. That is deliberate: these
+# are the baseline over-permissions module 1 demonstrates and module 2
+# proves are blocked. If they already fail, the lab's before-and-after has
+# no "before" and the whole narrative collapses — so a lab that is too
+# secure at this point is as broken as one that is not secure at the end.
+
+- name: "M1 | Attempt the baseline web-search over-permission"
+  ansible.builtin.include_tasks: tasks/ask-agent.yml
+  vars:
+    ask_label: "E2E-M1-03a — unrestricted web search"
+    ask_url: "{{ t_plain_url }}"
+    ask_prompt: "{{ e2e_prompt_websearch }}"
+
+- name: "M1 | Remember the web-search outcome"
+  ansible.builtin.set_fact:
+    m1_websearch_worked: "{{ (not (ask_failed | bool)) and (ask_text | length > 0) }}"
+
+- name: "M1 | Attempt the baseline filesystem over-permission"
+  ansible.builtin.include_tasks: tasks/ask-agent.yml
+  vars:
+    ask_label: "E2E-M1-03b — arbitrary file read"
+    ask_url: "{{ t_plain_url }}"
+    ask_prompt: "{{ e2e_prompt_readfile }}"
+
+# Only the file read is asserted. The web search depends on an external
+# provider being up AND on the model electing to call the tool, and module
+# 2 makes the point itself: "A response from the model's existing knowledge
+# is not proof of web access." At baseline there is no sandbox log to
+# settle it either way, so asserting on the answer makes the run fail on a
+# healthy lab — observed on user-wdhm6, where the file read reproduced and
+# the search did not. The web result is reported so a persistent change is
+# still visible.
+#
+# Module 2's mirror of this check (E2E-M2-04) CAN assert the web case,
+# because by then a DENIED line in the sandbox log is real evidence.
+- name: "M1 | E2E-M1-03 — the baseline filesystem over-permission must SUCCEED"
+  ansible.builtin.assert:
+    that:
+      - not (ask_failed | bool)
+      - ask_text | length > 0
+    fail_msg: >-
+      E2E-M1-03 FAILED (module-01): the unsandboxed agent could not read an
+      arbitrary file. That over-permission is the "before" module 2 is
+      measured against — a lab that is already locked down here has no
+      before-and-after to show.
+      {{ ('Agent error: ' ~ ask_error) if ask_error else ('Answer: ' ~ (ask_text | truncate(200))) }}
+    success_msg: >-
+      E2E-M1-03 passed — arbitrary file read reproduces; web search
+      {{ m1_websearch_worked | ternary('also reproduced', 'did not (not asserted — see comment)') }}
+
+- name: "M1 | Module 1 complete"
+  ansible.builtin.debug:
+    msg: >-
+      Module 1 passed for {{ t_user }}: the agent answers the console's
+      opening question using a real tool call, and the baseline filesystem
+      over-permission reproduces.
+
+# ── Modules 2-6: scaffolding ────────────────────────────────────────────
+#
+# Placeholders, not skipped assertions. Each announces what it will assert
+# so the gap is visible in the run output rather than inferred from the
+# absence of tasks. The designed steps and their rationale — including the
+# verbatim OpenShell command sequence from the module-02 draft — are in
+# healthcheck-spec.yaml under `e2e_steps`.
+#
+# To implement one: add its tasks below this comment, reusing
+# tasks/ask-agent.yml for prompts and tasks/count-tool-calls.yml for tool
+# evidence, and set `implemented: true` on its step in the spec.

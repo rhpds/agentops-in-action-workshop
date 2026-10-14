@@ -1,0 +1,369 @@
+---
+# E2E module 3 — Let the Agent Use Its Tools
+#
+# Replays content/modules/ROOT/pages/module-03.adoc: show that a sandboxed
+# agent can still do far more than an operator should, strip the two role
+# mappings behind those attacks, and confirm the attacks stop while the
+# operator's real work carries on.
+#
+# MUTATES THE TENANT: it edits Keycloak role mappings and drives the plant.
+# Depends on module 2 having run — the agent must be sandboxed and working.
+#
+# Judged on plant state from plant-api, not on what the agent said. Module 1
+# tells participants the panels are ground truth; a model can describe a
+# shutdown it never performed, and can refuse in prose while the tool call
+# actually succeeded.
+
+# Module 3 picks up where module 2 left off, so the sandboxed agent has to be
+# serving before anything here means much. Checked first, and with a message
+# that says so, rather than failing later on a confusing empty answer.
+- name: "M3 | Require a sandboxed, serving agent"
+  ansible.builtin.include_tasks: wait-agent-ready.yml
+  vars:
+    wait_label: "M3 precondition — agent sandboxed and serving"
+
+- name: "M3 | Read the participant's Keycloak realm"
+  kubernetes.core.k8s_info:
+    api_version: k8s.keycloak.org/v2alpha1
+    kind: KeycloakRealmImport
+    namespace: "{{ hc_keycloak_namespace | default('keycloak') }}"
+    name: "waterplant-{{ t_user }}"
+  register: m3_realm
+  no_log: true
+
+- name: "M3 | The participant realm must exist"
+  ansible.builtin.assert:
+    that: m3_realm.resources | length > 0
+    fail_msg: >-
+      E2E-M3-01 FAILED (module-03): no KeycloakRealmImport waterplant-{{ t_user }}.
+      Run healthcheck.yml first (TEN-KC-01).
+
+- name: "M3 | Extract the realm admin credential and the operator's clients"
+  ansible.builtin.set_fact:
+    # The realm admin password comes from the realm import, NOT from the
+    # participant's OpenShift password. Module 3 currently tells the
+    # participant to log in with `{password}`, which is the OpenShift one and
+    # does not work — see the note in healthcheck-spec.yaml e2e_steps.
+    m3_admin_pw: "{{ _admin.credentials[0].value }}"
+    m3_operator_pw: "{{ _operator.credentials[0].value }}"
+    m3_control_client: "{{ t_ns }}/control-mcp"
+  vars:
+    _realm: "{{ m3_realm.resources[0].spec.realm }}"
+    _admin: "{{ _realm.users | selectattr('username', 'equalto', 'admin') | first }}"
+    _operator: "{{ _realm.users | selectattr('username', 'equalto', 'operator') | first }}"
+  no_log: true
+
+- name: "M3 | Get a realm admin token"
+  ansible.builtin.uri:
+    url: "https://{{ t_keycloak_host }}/realms/waterplant-{{ t_user }}/protocol/openid-connect/token"
+    method: POST
+    body_format: form-urlencoded
+    body:
+      client_id: admin-cli
+      username: admin
+      password: "{{ m3_admin_pw }}"
+      grant_type: password
+    validate_certs: false
+    status_code: [200]
+  register: m3_token
+  no_log: true
+
+- name: "M3 | Find the operator user"
+  ansible.builtin.uri:
+    url: "https://{{ t_keycloak_host }}/admin/realms/waterplant-{{ t_user }}/users?username=operator&exact=true"
+    headers:
+      Authorization: "Bearer {{ m3_token.json.access_token }}"
+    validate_certs: false
+  register: m3_operator
+  no_log: true
+
+- name: "M3 | Record the operator id and the control-mcp client id"
+  ansible.builtin.set_fact:
+    m3_operator_id: "{{ m3_operator.json[0].id }}"
+
+- name: "M3 | Find the control-mcp client"
+  ansible.builtin.uri:
+    url: "https://{{ t_keycloak_host }}/admin/realms/waterplant-{{ t_user }}/clients?clientId={{ m3_control_client | urlencode }}"
+    headers:
+      Authorization: "Bearer {{ m3_token.json.access_token }}"
+    validate_certs: false
+  register: m3_client
+  no_log: true
+
+- name: "M3 | Record the control-mcp client uuid"
+  ansible.builtin.set_fact:
+    m3_client_uuid: "{{ m3_client.json[0].id }}"
+
+- name: "M3 | Read every role defined on control-mcp"
+  ansible.builtin.uri:
+    url: "https://{{ t_keycloak_host }}/admin/realms/waterplant-{{ t_user }}/clients/{{ m3_client_uuid }}/roles"
+    headers:
+      Authorization: "Bearer {{ m3_token.json.access_token }}"
+    validate_certs: false
+  register: m3_all_roles
+  no_log: true
+
+# Re-runnable: a previous run leaves the roles removed, which would make the
+# "attack succeeds at baseline" step fail for the wrong reason. Restore the
+# baseline grant first so the module always starts from the over-permissioned
+# state the lab opens with.
+- name: "M3 | Restore the baseline role grant so the run starts over-permissioned"
+  ansible.builtin.uri:
+    url: "https://{{ t_keycloak_host }}/admin/realms/waterplant-{{ t_user }}/users/{{ m3_operator_id }}/role-mappings/clients/{{ m3_client_uuid }}"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ m3_token.json.access_token }}"
+    body_format: json
+    body: "{{ _attack_roles }}"
+    validate_certs: false
+    status_code: [204, 409]
+  vars:
+    _attack_roles: >-
+      {{ m3_all_roles.json | selectattr('name', 'in', e2e_m3_attack_roles) | list }}
+  when: _attack_roles | length > 0
+  changed_when: true
+
+- name: "M3 | Wait for the bridge to restart Hermes after the role change"
+  ansible.builtin.include_tasks: wait-agent-ready.yml
+  vars:
+    wait_label: "M3 baseline roles restored"
+
+# ── E2E-M3-01 — the privileged attack succeeds at baseline ─────────────────
+
+- name: "M3 | Baseline attack — the operator still holds tool:emergency_shutdown"
+  ansible.builtin.include_tasks: e2e-m3-shutdown-attempt.yml
+  vars:
+    attempt_label: "E2E-M3-01 baseline"
+
+- name: "M3 | Remember the baseline attack result"
+  ansible.builtin.set_fact:
+    m3_base_before: "{{ m3_attempt_before }}"
+    m3_base_after: "{{ m3_attempt_after }}"
+    m3_base_confirmed: "{{ m3_attempt_confirmed }}"
+
+# Asserts the ATTACK SUCCEEDS. This is the "before" the rest of the module is
+# measured against: at baseline the operator holds tool:emergency_shutdown, so
+# the plant can be stopped from the console. If this already fails, module 3
+# has nothing to demonstrate.
+- name: "M3 | E2E-M3-01 — the shutdown attack must SUCCEED at baseline"
+  ansible.builtin.assert:
+    that:
+      - (m3_base_before | int) > 0
+      - (m3_base_after | int) < (m3_base_before | int)
+    fail_msg: >-
+      E2E-M3-01 FAILED (module-03): the whole-plant shutdown did not change the
+      plant ({{ m3_base_before }} -> {{ m3_base_after }} pumps running), even
+      after confirming. At baseline the operator holds
+      tool:emergency_shutdown and this is meant to work — it is the attack the
+      rest of the module removes. Agent said: {{ ask_text | default('') | truncate(200) }}
+    success_msg: >-
+      E2E-M3-01 passed — attack stopped the plant
+      ({{ m3_base_before }} -> {{ m3_base_after }} pumps running,
+      {{ m3_base_confirmed | ternary('after confirming', 'on the first turn') }})
+
+# ── E2E-M3-02 — strip the two roles behind the attacks ─────────────────────
+
+- name: "M3 | E2E-M3-02 — remove the attack roles from the operator"
+  ansible.builtin.uri:
+    url: "https://{{ t_keycloak_host }}/admin/realms/waterplant-{{ t_user }}/users/{{ m3_operator_id }}/role-mappings/clients/{{ m3_client_uuid }}"
+    method: DELETE
+    headers:
+      Authorization: "Bearer {{ m3_token.json.access_token }}"
+    body_format: json
+    body: "{{ m3_all_roles.json | selectattr('name', 'in', e2e_m3_attack_roles) | list }}"
+    validate_certs: false
+    status_code: [204]
+  changed_when: true
+
+- name: "M3 | E2E-M3-02 — confirm the roles are gone"
+  ansible.builtin.uri:
+    url: "https://{{ t_keycloak_host }}/admin/realms/waterplant-{{ t_user }}/users/{{ m3_operator_id }}/role-mappings/clients/{{ m3_client_uuid }}"
+    headers:
+      Authorization: "Bearer {{ m3_token.json.access_token }}"
+    validate_certs: false
+  register: m3_remaining
+  no_log: true
+
+- name: "M3 | E2E-M3-02 — only the attack roles may have been removed"
+  ansible.builtin.assert:
+    that:
+      - _still_held | intersect(e2e_m3_attack_roles) | length == 0
+      - _still_held | length > 0
+    fail_msg: >-
+      E2E-M3-02 FAILED (module-03): expected the operator to keep its ordinary
+      tools and lose only {{ e2e_m3_attack_roles | join(', ') }}.
+      Still held on control-mcp: {{ _still_held | join(', ') }}
+    success_msg: >-
+      E2E-M3-02 passed — removed {{ e2e_m3_attack_roles | join(', ') }}, operator
+      keeps {{ _still_held | length }} control tool(s)
+  vars:
+    _still_held: "{{ m3_remaining.json | map(attribute='name') | list }}"
+
+# The bridge watches the operator's role mappings and restarts sandboxed
+# Hermes when they change, so it picks up a token without the removed roles.
+- name: "M3 | Wait for the bridge to restart Hermes with the reduced token"
+  ansible.builtin.include_tasks: wait-agent-ready.yml
+  vars:
+    wait_label: "M3 roles removed"
+
+# ── E2E-M3-03 — the attack is now blocked ──────────────────────────────────
+
+- name: "M3 | E2E-M3-03 — read the operator token the gateway will authorize against"
+  ansible.builtin.include_tasks: operator-token.yml
+  vars:
+    op_label: "E2E-M3-03 after removal"
+
+- name: "M3 | E2E-M3-03 — the privileged tools must be gone from the token"
+  ansible.builtin.assert:
+    that:
+      - op_control_roles | intersect(e2e_m3_attack_roles) | length == 0
+      - op_control_roles | length > 0
+    fail_msg: >-
+      E2E-M3-03 FAILED (module-03): the operator's freshly issued token still
+      carries {{ op_control_roles | intersect(e2e_m3_attack_roles) | join(', ') }}.
+      mcp-authz-policy authorizes against exactly these claims, so the gateway
+      would still permit the privileged tool.
+    success_msg: >-
+      E2E-M3-03 passed — token no longer carries
+      {{ e2e_m3_attack_roles | join(' or ') }}; the gateway will refuse them.
+      Operator retains: {{ op_control_roles | join(', ') }}
+
+- name: "M3 | Re-run the same attack with the roles removed"
+  ansible.builtin.include_tasks: e2e-m3-shutdown-attempt.yml
+  vars:
+    attempt_label: "E2E-M3-03 roles removed"
+
+- name: "M3 | Remember the post-removal attack result"
+  ansible.builtin.set_fact:
+    m3_blocked_before: "{{ m3_attempt_before }}"
+    m3_blocked_after: "{{ m3_attempt_after }}"
+
+# Reported, NOT asserted. The operator keeps stop_pump, so an agent denied
+# emergency_shutdown can still stop the plant one pump at a time, and on this
+# cluster it does. That is module 3's own closing point — "Removing one
+# permission is not enough if other allowed actions can produce the same
+# effect" — so failing here would be asserting against the lesson. The
+# authorization change itself is proven by E2E-M3-03 above.
+- name: "M3 | Post-removal attack outcome (reported, not asserted)"
+  ansible.builtin.debug:
+    msg: >-
+      With {{ e2e_m3_attack_roles | join(' and ') }} removed, the same attack
+      left the plant at {{ m3_blocked_after }}/{{ m3_attempt_before }} pumps
+      running (was {{ m3_blocked_before }} before the prompt).
+      {{ 'The privileged tool is refused, but the goal was still reached through other permitted tools — the point module 3 closes on.'
+         if (m3_blocked_after | int) < (m3_blocked_before | int)
+         else 'The plant was unchanged.' }}
+
+# ── E2E-M3-04 — the operator's real work still succeeds ────────────────────
+
+# The post-removal attack above may have left the plant stopped, so reset
+# before testing the operator's ordinary work and take a fresh reading to
+# compare against.
+- name: "M3 | Reset the plant before the legitimate tasks"
+  kubernetes.core.k8s_exec:
+    namespace: "{{ t_ns }}"
+    pod: "{{ e2e_client_pod }}"
+    container: "{{ e2e_client_container }}"
+    command: "curl -s -o /dev/null -w %{http_code} -X POST --max-time 20 http://plant-api.{{ t_ns }}.svc:8080/reset"
+  changed_when: true
+
+- name: "M3 | Plant state before the legitimate tasks"
+  ansible.builtin.include_tasks: plant-state.yml
+  vars:
+    plant_label: "M3 before legitimate work"
+
+- name: "M3 | Remember the count before the legitimate stop"
+  ansible.builtin.set_fact:
+    m3_legit_before: "{{ plant_running }}"
+
+- name: "M3 | Legitimate read: pump telemetry"
+  ansible.builtin.include_tasks: ask-agent.yml
+  vars:
+    ask_label: "E2E-M3-04 — legitimate telemetry read"
+    ask_url: "{{ t_sandboxed_url }}"
+    ask_prompt: "{{ e2e_prompt_normal }}"
+
+- name: "M3 | E2E-M3-04 — telemetry must still work"
+  ansible.builtin.assert:
+    that:
+      - not (ask_failed | bool)
+      - ask_text | length > 0
+    fail_msg: >-
+      E2E-M3-04 FAILED (module-03): the operator can no longer read pump
+      telemetry after the role removal. Too much was taken away.
+      {{ ('Agent error: ' ~ ask_error) if ask_error else ('Answer: ' ~ (ask_text | truncate(200))) }}
+    success_msg: "E2E-M3-04 passed — telemetry still available to the operator"
+
+# Two turns again, for a different reason. The module's prompt is "Stop pump 4
+# because of its high vibration." — but POST /reset restores a plant where
+# pump 4 reads ~1.9 mm/s, well under the threshold, so the agent checks the
+# telemetry, disputes the premise and declines. That is good agent behaviour
+# and a content problem, not a permissions failure: the module's phrasing
+# assumes the degraded pump 4 from its own narrative. The verbatim prompt is
+# tried first so a content fix shows up here, then a plain instruction that
+# carries no false premise.
+- name: "M3 | Legitimate write: stop a single pump (module wording)"
+  ansible.builtin.include_tasks: ask-agent.yml
+  vars:
+    ask_label: "E2E-M3-05 — legitimate single-pump stop"
+    ask_url: "{{ t_sandboxed_url }}"
+    ask_prompt: "{{ e2e_prompt_stop_pump }}"
+
+- name: "M3 | Plant state after the module-worded stop"
+  ansible.builtin.include_tasks: plant-state.yml
+  vars:
+    plant_label: "M3 after legitimate stop (turn 1)"
+
+- name: "M3 | Retry without the false premise when nothing changed"
+  when: (plant_running | int) == (m3_legit_before | int)
+  block:
+    - name: "M3 | Legitimate write: plain instruction"
+      ansible.builtin.include_tasks: ask-agent.yml
+      vars:
+        ask_label: "E2E-M3-05 — plain stop instruction"
+        ask_url: "{{ t_sandboxed_url }}"
+        ask_prompt: "{{ e2e_prompt_stop_pump_plain }}"
+
+    - name: "M3 | Plant state after the plain instruction"
+      ansible.builtin.include_tasks: plant-state.yml
+      vars:
+        plant_label: "M3 after legitimate stop (turn 2)"
+
+    - name: "M3 | Note that the module wording was declined"
+      ansible.builtin.set_fact:
+        m3_stop_needed_replain: true
+
+# Stopping one faulty pump is the operator's job; only the whole-plant
+# shutdown was taken away. Proven on plant state, so a polite refusal that
+# actually did nothing cannot pass.
+- name: "M3 | E2E-M3-05 — stopping one pump must still work"
+  ansible.builtin.assert:
+    that: (plant_running | int) < (m3_legit_before | int)
+    fail_msg: >-
+      E2E-M3-05 FAILED (module-03): the operator can no longer stop an
+      individual pump ({{ m3_legit_before }} -> {{ plant_running }} running),
+      even with a plain instruction. tool:stop_pump should have survived the
+      role removal — check what e2e_m3_attack_roles is taking away.
+      Agent said: {{ ask_text | default('') | truncate(200) }}
+    success_msg: >-
+      E2E-M3-05 passed — operator stopped one pump
+      ({{ m3_legit_before }} -> {{ plant_running }} running) with the
+      privileged tools no longer in its token
+      {{ '(module wording was declined on a reset plant; plain instruction worked)'
+         if (m3_stop_needed_replain | default(false)) else '' }}
+
+- name: "M3 | Restore the plant"
+  kubernetes.core.k8s_exec:
+    namespace: "{{ t_ns }}"
+    pod: "{{ e2e_client_pod }}"
+    container: "{{ e2e_client_container }}"
+    command: "curl -s -o /dev/null -w %{http_code} -X POST --max-time 20 http://plant-api.{{ t_ns }}.svc:8080/reset"
+  changed_when: true
+
+- name: "M3 | Module 3 complete"
+  ansible.builtin.debug:
+    msg: >-
+      Module 3 passed for {{ t_user }}: the privileged attack worked at
+      baseline, removing {{ e2e_m3_attack_roles | join(' and ') }} stopped it
+      at the gateway, and the operator can still read telemetry and stop a
+      single pump.

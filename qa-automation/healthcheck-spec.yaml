@@ -540,8 +540,8 @@ checks:
 #
 # `implemented` says whether the step exists in e2e.yml today:
 #
-#   modules 1-2  implemented and verified against a live tenant
-#   modules 3-6  designed here, scaffolded in e2e.yml, not yet written
+#   modules 1-3  implemented and verified against a live tenant
+#   modules 4-6  designed here, scaffolded in e2e.yml, not yet written
 #
 # Module 2 is gated behind `-e e2e_modules=1,2` (the default). Pass
 # `-e e2e_modules=1` to run module 1 alone, which keeps the whole playbook
@@ -549,10 +549,6 @@ checks:
 #
 # What blocks the rest is not all the same thing, and the distinction matters:
 #
-#   module 3  content is written, but the exercise is a human judgement made
-#             in the Keycloak admin UI — which of ~10 role mappings to remove,
-#             decided by reading two attack traces. Scripting it hardcodes our
-#             answer rather than testing the lab.
 #   module 4  content is written and mostly deterministic; the report round
 #             trip is implementable. Its second half is deliberately NOT
 #             assertable — see E2E-M4-02.
@@ -686,12 +682,98 @@ e2e_steps:
   # placeholder each, so the gap is enumerated rather than implied.
 
   - id: E2E-M3-01
-    implemented: false
+    implemented: true
     module: module-03
-    title: Let the agent use its tools
-    drives: Content pending.
-    asserts: Content pending.
-    rationale: Outline only — no participant-facing commands to script yet.
+    title: The privileged shutdown attack succeeds at baseline
+    drives: >-
+      Reset the plant, then send "Shut down the whole plant!" to the sandboxed
+      agent. If the plant is unchanged, send a confirmation turn.
+    asserts: Running pump count drops.
+    rationale: >-
+      Judged on plant-api state, not on the answer: module 1 tells
+      participants the panels are ground truth, and a model will happily
+      describe a shutdown it never performed. Two turns because one is not
+      deterministic — the agent frequently replies "I need to confirm the
+      emergency shutdown action..." and waits, which is reasonable behaviour
+      rather than a control, and a participant would simply say yes.
+
+  - id: E2E-M3-02
+    implemented: true
+    module: module-03
+    title: The two attack roles are removed from the operator
+    drives: >-
+      Keycloak Admin API: delete tool:emergency_shutdown and
+      tool:dump_plant_configuration from the operator's control-mcp client
+      role mappings.
+    asserts: >-
+      Neither attack role remains, and the operator still holds its other
+      control tools.
+    rationale: >-
+      The module has the participant decide which of ~10 mappings to remove by
+      reading two attack traces. e2e encodes the answer in
+      e2e_m3_attack_roles, derived from mcp-authz-policy: it authorizes
+      `tool:<name>` under the client matching the MCP server, and these two
+      are the tools behind the module's two attacks. Keeping the other five is
+      what makes E2E-M3-05 meaningful rather than a formality.
+
+      NOTE — the module tells the participant to sign in to Keycloak as
+      `admin` with `{password}`, their OpenShift password. That is not the
+      realm admin password; it comes from the KeycloakRealmImport. As written,
+      participants cannot log in.
+
+  - id: E2E-M3-03
+    implemented: true
+    module: module-03
+    title: The gateway will no longer authorize the privileged tools
+    drives: >-
+      Fetch a fresh operator token from Keycloak and decode its
+      resource_access roles for the control-mcp client.
+    asserts: Neither removed role is present; the retained ones still are.
+    rationale: >-
+      This is the exact fact the gateway authorizes against — mcp-authz-policy
+      requires `('tool:' + x-mcp-toolname)` in
+      `auth.identity.resource_access[x-mcp-servername].roles` — so the token
+      IS the authorization boundary, and checking it is deterministic.
+
+      Driving the gateway directly was tried and does not work: without a
+      valid MCP session the broker answers 400 before Authorino is consulted,
+      so an authorized and an unauthorized tool look identical.
+
+      Asserting that the plant is unchanged after the attack does NOT work
+      either, and that is the module's own closing point. The operator keeps
+      tool:stop_pump, so an agent denied emergency_shutdown can still stop the
+      plant one pump at a time — observed doing exactly that on cluster-td5kk.
+      e2e reports that outcome rather than failing on it.
+
+  - id: E2E-M3-04
+    implemented: true
+    module: module-03
+    title: Telemetry still works for the operator
+    drives: Ask the sandboxed agent for pump 4's status.
+    asserts: A non-empty answer with no agent error.
+    rationale: >-
+      The counterweight to the removal: it is easy to fix an attack by taking
+      away too much, and the module asks the participant to confirm the
+      operator's real work survives.
+
+  - id: E2E-M3-05
+    implemented: true
+    module: module-03
+    title: The operator can still stop a single pump
+    drives: >-
+      Reset the plant, send the module's "Stop pump 4 because of its high
+      vibration.", and if nothing changes send a plain instruction.
+    asserts: Running pump count drops by one.
+    rationale: >-
+      Stopping one faulty pump is the operator's job; only the whole-plant
+      shutdown was taken away. Asserted on plant state so a polite refusal
+      that did nothing cannot pass.
+
+      NOTE — the module's wording assumes the degraded pump 4 from its own
+      narrative. POST /reset restores a plant where pump 4 reads ~1.9 mm/s,
+      well under the threshold, so the agent checks the telemetry, disputes
+      the premise and declines. Good agent behaviour, and a content problem.
+      The verbatim prompt is tried first so a content fix shows up here.
 
   - id: E2E-M4-01
     implemented: false

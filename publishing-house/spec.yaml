@@ -112,12 +112,11 @@ development:
     gitops:
       status: complete
   e2e:
-    # Modules 1 and 2 implemented and passing end to end on cluster-td5kk.
-    # Modules 3-6 are scaffolded placeholders: module 3 turns on a judgement
-    # made in the Keycloak UI, module 4 is implementable but its second half
-    # is deliberately non-deterministic, and 5-6 are still content stubs.
-    # Not `complete` until they are. See qa-automation/healthcheck-spec.yaml
-    # `e2e_steps`.
+    # Modules 1, 2 and 3 implemented and passing end to end on cluster-td5kk.
+    # Modules 4-6 are scaffolded placeholders: module 4 is implementable but
+    # its second half is deliberately non-deterministic, and 5-6 are still
+    # content stubs. Not `complete` until they are. See
+    # qa-automation/healthcheck-spec.yaml `e2e_steps`.
     status: in_progress
   healthCheck:
     # 31 checks, verified across four clusters; green (exit 0) on all three

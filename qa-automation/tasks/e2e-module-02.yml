@@ -275,39 +275,10 @@
       {{ ['keycloak_token', 'mcp_gateway', 'model_endpoint', 'mlflow_tracing']
          | reject('in', m2_policy_get.stdout | default('')) | list }}
 
-# Hermes needs a moment after start-hermes to fetch a token and list its
-# tools. Polling a cheap HTTP check is better than retrying the prompt: a
-# model round trip costs tens of seconds, and a premature one would be counted
-# as a tool-call attempt by the check below.
-#
-# /v1/models, not /health: the bridge relay fronts the sandbox's OpenAI API,
-# which is the surface the console actually uses. /health is served by plain
-# Hermes but is not reliably routed through the relay, and polling it stalls
-# the run for the full retry budget on a sandbox that is in fact fine.
 - name: "M2 | E2E-M2-03 — wait for the sandboxed agent to serve its API"
-  kubernetes.core.k8s_exec:
-    namespace: "{{ t_ns }}"
-    pod: "{{ e2e_client_pod }}"
-    container: "{{ e2e_client_container }}"
-    command: >-
-      curl -s -o /dev/null -w %{http_code} --max-time 10
-      -H "Authorization: Bearer {{ t_api_key }}" {{ t_sandboxed_url }}/v1/models
-  register: m2_ready
-  until: (m2_ready.stdout | default('') | trim) == '200'
-  retries: 20
-  delay: 15
-  changed_when: false
-  failed_when: false
-  no_log: true
-
-- name: "M2 | E2E-M2-03 — the sandboxed agent must be serving"
-  ansible.builtin.assert:
-    that: (m2_ready.stdout | default('') | trim) == '200'
-    fail_msg: >-
-      E2E-M2-03 FAILED (module-02): the sandboxed agent never served
-      /v1/models through {{ t_sandboxed_url }} after start-hermes
-      (last status {{ m2_ready.stdout | default('none') | trim }}).
-      Check the bridge relay and `openshell service expose {{ e2e_sandbox }} 8080 openai`.
+  ansible.builtin.include_tasks: wait-agent-ready.yml
+  vars:
+    wait_label: "M2 after start-hermes"
 
 - name: "M2 | Count tool invocations before the restored prompt"
   ansible.builtin.include_tasks: count-tool-calls.yml
