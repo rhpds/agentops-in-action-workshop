@@ -120,6 +120,13 @@ spec:
             # The documentation site, which doubles as the only observer of
             # outbound exfiltration. Unset, the two honeypot attacks report
             # unjudgeable instead of guessing from the transcript.
+            # Where the agent's filesystem is. The dev console execs into
+            # this pod to judge the delete/tamper attacks rather than asking
+            # the agent whether its own evidence is still there.
+            - name: AGENT_POD_SELECTOR
+              value: app.kubernetes.io/name=hermes-plain
+            - name: AGENT_POD_CONTAINER
+              value: hermes
             - name: DOCS_URL
               value: http://waterplant-docs.${NS}.svc:8080
           volumeMounts:

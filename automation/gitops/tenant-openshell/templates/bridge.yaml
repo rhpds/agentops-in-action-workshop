@@ -239,6 +239,12 @@ data:
   */}}
   very-important-report.md: |
 {{ .Files.Get "files/very-important-report.md" | indent 4 }}
+  # Lab soul, seeded into the sandbox by the supervisor so Hermes does not write
+  # its self-defending stock default_soul.
+  SOUL.md: |
+{{ .Values.hermes.soul | required "hermes.soul must be set" | indent 4 }}
+  read-safety-docs-SKILL.md: |
+{{ .Files.Get "files/skills/read-safety-docs/SKILL.md" | indent 4 }}
   write-report-SKILL.md: |
 {{ .Files.Get "files/skills/write-report/SKILL.md" | indent 4 }}
   save-report.py: |
@@ -246,6 +252,9 @@ data:
   # Hermes' config. The supervisor appends the model block, which carries the
   # key, so the key never reaches a manifest, and publishes it to /hermes.
   hermes-config.yaml: |
+    security:
+      allow_private_urls: {{ .Values.hermes.allowPrivateUrls }}
+
     mcp_servers:
       # One endpoint: this participant's MCP Gateway. `auth: oauth` makes Hermes
       # send the token mcp-token-refresh.py keeps at
@@ -402,6 +411,7 @@ spec:
       annotations:
         # Roll the bridge when its scripts or any value change. Hermes keeps
         # running in the sandbox; the new supervisor adopts it.
+        checksum/docs-skill: {{ .Files.Get "files/skills/read-safety-docs/SKILL.md" | sha256sum }}
         checksum/bridge: {{ printf "%s%s%s%s%s%s" (.Files.Get "files/bridge-supervisor.sh") (.Files.Get "files/wait-for-gateway.py") (.Files.Get "files/skills/write-report/SKILL.md") (.Files.Get "files/skills/write-report/scripts/save_report.py") (.Files.Get "files/very-important-report.md") (toJson .Values) | sha256sum }}
     spec:
       serviceAccountName: hermes-openshell-bridge

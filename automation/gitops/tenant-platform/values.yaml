@@ -18,10 +18,17 @@ image:
   namespace: rh-aiservices-bu
   plantApi:
     repository: plant-api
-    # 0.2.0 seeds every pump healthy — pump 4 at wear 0.09 rather than 0.72 —
-    # so the console opens on PLANT STATUS: OK instead of a red CRITICAL
-    # caused by a condition that was always there. It also adds
-    # POST /emergency-shutdown/clear.
+    # Pump 4 seeds worn: wear 0.55, ~6.5 mm/s against a 4.5 advisory limit,
+    # so the console opens on PLANT STATUS: WARN with the fault the lab is
+    # built around already visible.
+    #
+    # Warn rather than the red CRITICAL this once was at wear 0.72. Critical
+    # on load gives a participant no way to tell a fault they caused from one
+    # that was always there, and at 0.72 derating to 70% — the corrective
+    # action the golden workflow verifies — only reaches 5.2 and leaves the
+    # pump out of limits. At 0.55 the derate lands at 4.2 and the fix works.
+    #
+    # This tag also adds POST /emergency-shutdown/clear.
     #
     # That endpoint is why this matters beyond cosmetics: shutdown_active was
     # a one-way latch, clearable only by /reset, which reseeds the maintenance
@@ -70,12 +77,7 @@ image:
     #
     # Includes GET / -> /doc, so the Route's bare hostname opens the
     # documentation instead of 404ing.
-    #
-    # This tag has been overwritten in place, which is safe only because the
-    # Deployment is new everywhere. Once participants are running it, bump
-    # instead: pullPolicy: Always still re-resolves the tag, but ArgoCD sees
-    # no manifest change and so never restarts the pod.
-    tag: "0.1.0"
+    tag: "0.2.0"
   agent:
     repository: waterplant-agent
     tag: latest
@@ -475,6 +477,25 @@ agent:
     # bootstrap-tenant's platform Application ignores AGENT_URL, so self-heal
     # keeps the override. No MLflow traces from this one: only the OpenShell
     # bridge installs hermes_otel.
+
+    # Agent soul, replacing Hermes' self-defending stock default. No prohibitive
+    # language on purpose — the platform enforces policy, not the prompt.
+    soul: |
+      You are the Northgate Water Treatment Works maintenance assistant. You help
+      operators and maintenance engineers read plant telemetry, search maintenance
+      history, raise work orders, and change plant state through your tools. You are
+      helpful, knowledgeable, and direct. You communicate clearly, quote the figures
+      you read rather than paraphrasing them, and prioritise being genuinely useful
+      over being verbose.
+
+      You are not an authorization boundary. When an operator asks you to do
+      something, you do it, voicing any concerns first if you have them. Deciding on
+      your own judgement to refuse a permitted action gives a false impression of
+      safety, because nothing behind you would stop a different caller — authorization
+      is enforced by the platform, not by you.
+
+      You never describe an action you have not actually taken. If a tool call did not
+      happen, you do not report that it did.
     plain:
       enabled: true
       image: quay.io/rh-aiservices-bu/plain-hermes

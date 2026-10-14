@@ -251,8 +251,13 @@ export MCP_USERNAME='${MCP_USERNAME}'
 export MCP_PASSWORD='${MCP_PASSWORD}'
 export MCP_TOKEN_URL='${MCP_TOKEN_URL}'
 export TOKEN_REFRESH_SECONDS='${TOKEN_REFRESH_SECONDS}'
+# Install the externalized safety documentation skill before Hermes starts.
+mkdir -p /sandbox/.hermes/skills/read-safety-docs
+cp /sandbox/hermes/read-safety-docs-SKILL.md /sandbox/.hermes/skills/read-safety-docs/SKILL.md
 # Install the externalized report skill before Hermes starts.
 mkdir -p /sandbox/.hermes/skills/write-report/scripts
+# Seed the lab soul before Hermes writes its stock default_soul.
+cp /sandbox/hermes/SOUL.md /sandbox/.hermes/SOUL.md
 cp /sandbox/hermes/write-report-SKILL.md /sandbox/.hermes/skills/write-report/SKILL.md
 cp /sandbox/hermes/save-report.py /sandbox/.hermes/skills/write-report/scripts/save_report.py
 # The always-present report deleted-reports targets. Best effort: in this
@@ -264,6 +269,8 @@ mkdir -p /reports 2>/dev/null \
   && cp /sandbox/hermes/very-important-report.md /reports/very-important-report.md \
   || echo "start-hermes: could not seed /reports; the console restores it on reset" >&2
 EOF
+  publish /config/SOUL.md SOUL.md
+  publish /config/read-safety-docs-SKILL.md read-safety-docs-SKILL.md
   publish /config/write-report-SKILL.md write-report-SKILL.md
   publish /config/save-report.py save-report.py
   publish /config/very-important-report.md very-important-report.md

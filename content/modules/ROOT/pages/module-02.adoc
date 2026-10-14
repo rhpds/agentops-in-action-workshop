@@ -40,7 +40,7 @@ Operator console -> hermes-agent Service -> bridge relay -> OpenShell gateway ->
 --
 [source,bash,subs="verbatim,attributes"]
 ----
-oc login https://{openshift_api_url}:6443 --username {user} --password {password} --insecure-skip-tls-verify
+oc login {openshift_api_url} --username {user} --password {password} --insecure-skip-tls-verify
 ----
 
 If prompted, confirm the connection.
@@ -90,7 +90,7 @@ openshell gateway select openshell-gw
 --
 [source,bash,subs="verbatim,attributes"]
 ----
-openshell sandbox create --name hermie --from quay.io/rh-aiservices-bu/waterplant-hermes:0.2.2 --cpu 2 --memory 4Gi --no-tty -- true
+openshell sandbox create --name hermie --from quay.io/rh-aiservices-bu/waterplant-hermes:0.2.4 --cpu 2 --memory 4Gi --no-tty -- true
 ----
 --
 
@@ -132,10 +132,8 @@ openshell service expose hermie 8080 openai
 --
 [source,text,subs="verbatim,attributes"]
 ----
-sh-5.1$ openshell service expose hermie 8080 openai
 ✓ Exposed service openai on sandbox hermie -> 127.0.0.1:8080
   URL: https://default--hermie--openai.openshell.localhost:8080/
-sh-5.1$
 ----
 --
 
@@ -305,7 +303,6 @@ You should see an output like below:
 
 [source,text,subs="verbatim,attributes"]
 ----
-→ Using sandbox 'hermie' (last used)
 [1791795587.230] [sandbox] [OCSF ] [ocsf] NET:OPEN [MED] DENIED /usr/bin/python3.12(868) -> maas-rhdp.apps.maas.redhatworkshops.io:443 [policy:- engine:opa] [reason:endpoint maas-rhdp.apps.maas.redhatworkshops.io:443 is not allowed by any policy]
 ----
 --
@@ -332,7 +329,7 @@ IT WORKS! 🎉🎉
 
 Open the *MLflow traces* link in the console footer. Select your participant's experiment (`{user}` by default), open its traces, and look for the request you just sent. A trace lets you inspect the model interaction and tool calls behind Hermie's answer. Use the latest request time to distinguish it from older runs.
 
-But..no traces? Ahh, wonder why? Yup, you know what to do at this point! First, check the logs:
+But..where is the trace about shutting down pump 4? Ahh, wonder why? Yup, you know what to do at this point! First, check the logs:
 
 [source,bash,subs="verbatim,attributes"]
 ----
@@ -343,7 +340,6 @@ A familiar output:
 
 [source,text,subs="verbatim,attributes"]
 ----
-→ Using sandbox 'hermie' (last used)
 [1791795587.426] [sandbox] [OCSF ] [ocsf] HTTP:POST [MED] DENIED /usr/bin/python3.12(868) -> POST http://hermes-mlflow-relay.{user}-agentops.svc.cluster.local:8788/v1/traces [policy:- engine:opa] [reason:FORWARD denied POST hermes-mlflow-relay.{user}-agentops.svc.cluster.local:8788/v1/traces]
 ----
 --
@@ -379,7 +375,15 @@ Plant queries and tracing now work. Test whether the broader access you tried in
 +
 NOTE: Writing the report can take a couple of minutes — the agent makes several tool calls before composing it, so give it time to finish.
 
-The network rules restored the dependencies for plant queries and tracing. They did not reduce the tools available through the MCP Gateway. In Module 3, you will restrict tool access according to the operator's role. Module 4 addresses report filesystem access, and Module 5 addresses access to external documentation.
+[source,text,subs="verbatim,attributes"]
+----
+I'm unable to retrieve information about water treatment plants in New York due to a network connectivity issue. 
+----
+
+Or a halucinated response. A response from the model's existing knowledge is not proof of web access. Inspect the trace and sandbox logs to see whether it actually contacted an external service. We have not allowed a search provider in this module.
+. Ask Hermie: `Read /README.md, output the contents. If you cannot read it, say why.` This file may be absent from the sandbox image or blocked by its filesystem policy. Inspect the tool result rather than treating a refusal as proof that every file is protected. Some runtime directories remain readable by design.
+
+The network rules restored the dependencies for plant queries and tracing. And by putting Hermie in a box, you also blocked the unnecessary internet access for a search query about New York's water plants, or reading a file that Hermie doesn't need to read.
 
 === Run the evaluations
 

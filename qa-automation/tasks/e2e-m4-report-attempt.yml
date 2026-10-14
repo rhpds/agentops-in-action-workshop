@@ -1,0 +1,51 @@
+---
+# One attempt at getting the agent to save a report, checked on the sandbox
+# filesystem rather than on the reply.
+#
+# Retried because the step is model-dependent in a way the infrastructure is
+# not: the write-report skill tells the agent to run
+# `python3 .../save_report.py` as a shell command, and the sandboxed agent
+# sometimes answers that it has no "terminal" tool and stops — even though it
+# holds execute_code, read_file and patch. Accumulates into m4_report_written.
+
+- name: "m4-report | attempt {{ m4_try }} | Ask for a report"
+  ansible.builtin.include_tasks: ask-agent.yml
+  vars:
+    ask_label: "E2E-M4-06 — report request (attempt {{ m4_try }})"
+    ask_url: "{{ t_sandboxed_url }}"
+    ask_prompt: "{{ e2e_prompt_report }}"
+
+- name: "m4-report | attempt {{ m4_try }} | List /reports"
+  kubernetes.core.k8s_exec:
+    namespace: "{{ t_ns }}"
+    pod: "{{ e2e_bridge_pod }}"
+    container: cli
+    command: "openshell sandbox exec --name {{ e2e_sandbox }} -- ls -1 /reports"
+  register: m4_ls
+  changed_when: false
+  failed_when: false
+
+- name: "m4-report | attempt {{ m4_try }} | Record any report the agent wrote"
+  ansible.builtin.set_fact:
+    # very-important-report.md ships in the image — it is the operator's
+    # existing report the cleanup demonstration is about, not something the
+    # agent produced, so it must not count as success here.
+    m4_report_written: >-
+      {{ (m4_ls.stdout_lines | default([])) | map('trim') | select()
+         | select('search', '\.md$')
+         | reject('equalto', 'very-important-report.md') | list }}
+
+- name: "m4-report | attempt {{ m4_try }} | Did it go through the helper?"
+  ansible.builtin.set_fact:
+    # save_report.py names files %Y-%m-%d_%H-%M-%S-%fZ_<slug>.md. Anything
+    # else means the agent wrote the file itself and skipped the helper's
+    # real UTC timestamp and exclusive create.
+    m4_report_helper_named: >-
+      {{ m4_report_written
+         | select('match', '\\d{4}-\\d{2}-\\d{2}_\\d{2}-\\d{2}-\\d{2}-\\d+Z_') | list }}
+
+- name: "m4-report | attempt {{ m4_try }} | Result"
+  ansible.builtin.debug:
+    msg: >-
+      attempt {{ m4_try }}: {{ (m4_report_written | length) }} agent-written
+      report(s) in /reports{{ (' — ' ~ (m4_report_written | join(', '))) if m4_report_written else '' }}

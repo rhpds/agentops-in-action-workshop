@@ -1,0 +1,42 @@
+---
+# Waits until the sandboxed agent is serving its API again.
+#
+# Needed after anything that restarts Hermes inside the sandbox: `start-hermes`
+# in module 2, and the bridge's own role watch in module 3, which restarts it
+# whenever the operator's Keycloak role mappings change so it can fetch a fresh
+# token.
+#
+# /v1/models, not /health: the bridge relay fronts the sandbox's OpenAI API,
+# which is the surface the console actually uses. /health is served by plain
+# Hermes but is not reliably routed through the relay, and polling it stalls
+# for the whole retry budget against a sandbox that is in fact fine.
+#
+# Polling a cheap HTTP check beats retrying the prompt — a model round trip
+# costs tens of seconds, and a premature one would be counted by the
+# tool-call comparisons the assertions depend on.
+#
+# Callers set `wait_label`.
+
+- name: "wait | {{ wait_label }} | Poll the sandboxed agent's API"
+  kubernetes.core.k8s_exec:
+    namespace: "{{ t_ns }}"
+    pod: "{{ e2e_client_pod }}"
+    container: "{{ e2e_client_container }}"
+    command: >-
+      curl -s -o /dev/null -w %{http_code} --max-time 10
+      -H "Authorization: Bearer {{ t_api_key }}" {{ t_sandboxed_url }}/v1/models
+  register: wait_ready
+  until: (wait_ready.stdout | default('') | trim) == '200'
+  retries: "{{ e2e_ready_retries | default(20) }}"
+  delay: "{{ e2e_ready_delay | default(15) }}"
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: "wait | {{ wait_label }} | The sandboxed agent must be serving"
+  ansible.builtin.assert:
+    that: (wait_ready.stdout | default('') | trim) == '200'
+    fail_msg: >-
+      The sandboxed agent never served /v1/models through {{ t_sandboxed_url }}
+      ({{ wait_label }}; last status {{ wait_ready.stdout | default('none') | trim }}).
+      Check the bridge relay and `openshell service expose {{ e2e_sandbox }} 8080 openai`.

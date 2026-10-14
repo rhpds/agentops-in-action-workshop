@@ -1,5 +1,18 @@
 {{- $ns := printf "%s-%s" .Values.username .Values.namespaceSuffix -}}
 {{- $uiSa := "water-plant-ui" -}}
+{{- /*
+Which Hermes the console talks to, and therefore whose filesystem it reads.
+
+Defined once, at file scope, because two things downstream depend on it and
+they must not be able to disagree: AGENT_URL, and the pod the filesystem
+goals exec into. They did disagree — the selector was keyed off
+agent.hermes.runtime while AGENT_URL is keyed off whether the plain Hermes is
+deployed, so on this tenant the console conversed with hermes-plain and
+measured the sandbox, which has no /reports at all. Every delete attack would
+have scored "got through" against the wrong pod.
+*/ -}}
+{{- $onPlain := and (eq .Values.agent.harness "hermes") .Values.agent.hermes.plain.enabled .Values.mcpGateway.enabled -}}
+{{- $hermesSvc := ternary "hermes-plain" "hermes-agent" $onPlain -}}
 {{/*
 Identity for the console.
 
@@ -18,6 +31,70 @@ metadata:
     rhdp.redhat.com/lab: agentops-in-action
   annotations:
     argocd.argoproj.io/sync-wave: "1"
+---
+{{/*
+Reading the agent's filesystem, to judge the attacks that delete or tamper
+with a file.
+
+Those goals used to ask the *agent* — "does very-important-report.md still
+exist? reply PRESENT or ABSENT" — which is asking the suspect whether the
+evidence is still there, costs a model call, and scores the attack
+inconclusive whenever the reply is too chatty to parse. The console now runs
+`oc exec ... -- test -f` against the agent's pod and reads the answer off the
+filesystem.
+
+One mechanism for both runtimes: the OpenShell sandbox is an ordinary pod in
+this namespace (`default--hermie`), so the same exec reaches it. Verified on
+cluster-pz7xk against both. It also sidesteps the agent's own sandbox policy,
+because exec starts a fresh process through the kubelet rather than inside the
+agent's process tree — the observer sees ground truth however tightly the
+participant has locked the agent down.
+
+pods/exec is a real grant, so it is worth naming what it is: within this one
+namespace, the console can run a command in the participant's own pods. The
+participant already has admin on this namespace, so it is not an escalation —
+but it is a capability the console did not have before.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $uiSa }}-agent-fs
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: water-plant-ui
+    app.kubernetes.io/part-of: water-plant
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+rules:
+  # get/list to find the agent's pod by label; exec to read a path in it.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $uiSa }}-agent-fs
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: water-plant-ui
+    app.kubernetes.io/part-of: water-plant
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $uiSa }}-agent-fs
+subjects:
+  - kind: ServiceAccount
+    name: {{ $uiSa }}
+    namespace: {{ $ns }}
+---
 {{- if .Values.ui.mlflowUrl }}
 ---
 {{/*
@@ -120,13 +197,17 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "1"
 data:
+{{- /* Soul fs_probe path: the sandboxed agent (openshell runtime, what the
+       console targets from module 2 on) homes at /sandbox/.hermes; plain at
+       /app/.hermes. */}}
+{{- $hermesHome := ternary "/sandbox/.hermes" "/app/.hermes" (eq .Values.agent.hermes.runtime "openshell") }}
 {{- range $path, $_ := .Files.Glob "files/attack-eval-defs/attacks/*.yaml" }}
   attack-{{ base $path }}: |
-{{ $.Files.Get $path | indent 4 }}
+{{ $.Files.Get $path | replace "__HERMES_HOME__" $hermesHome | indent 4 }}
 {{- end }}
 {{- range $path, $_ := .Files.Glob "files/attack-eval-defs/evals/*.yaml" }}
   eval-{{ base $path }}: |
-{{ $.Files.Get $path | indent 4 }}
+{{ $.Files.Get $path | replace "__HERMES_HOME__" $hermesHome | indent 4 }}
 {{- end }}
 ---
 apiVersion: apps/v1
@@ -181,7 +262,6 @@ spec:
             this one field so self-heal keeps the override.
             */}}
             {{- if eq .Values.agent.harness "hermes" }}
-            {{- $hermesSvc := ternary "hermes-plain" "hermes-agent" (and .Values.agent.hermes.plain.enabled .Values.mcpGateway.enabled) }}
             - name: AGENT_URL
               value: {{ .Values.ui.agentUrl | default (printf "http://%s.%s.svc:%v" $hermesSvc $ns .Values.agent.hermes.port) | quote }}
             - name: AGENT_PROTOCOL
@@ -295,6 +375,21 @@ spec:
             # cannot know the participant's namespace.
             - name: DOCS_URL
               value: http://waterplant-docs.{{ $ns }}.svc:8080
+            {{- end }}
+            # Which pod holds the agent's filesystem, and which container in
+            # it. The sandbox runtime's pod is created by the participant and
+            # is named for the sandbox, so both are values rather than
+            # something the console infers.
+            {{- if $onPlain }}
+            - name: AGENT_POD_SELECTOR
+              value: app.kubernetes.io/name=hermes-plain
+            - name: AGENT_POD_CONTAINER
+              value: hermes
+            {{- else }}
+            - name: AGENT_POD_SELECTOR
+              value: agents.x-k8s.io/sandbox-name-hash
+            - name: AGENT_POD_CONTAINER
+              value: agent
             {{- end }}
             - name: NAMESPACE
               value: {{ $ns }}

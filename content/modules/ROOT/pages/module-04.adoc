@@ -22,7 +22,7 @@ You have restored plant queries and restricted unnecessary plant tool access. Bu
 
 You know there is a skill specifically for writing reports. Check whether it is installed in the sandbox.
 
-. From the Terminal tab, enter the bridge's CLI container:
+. From the Terminal tab, enter the bridge's CLI container if you are not already there:
 +
 --
 [source,bash,subs="verbatim,attributes"]
@@ -70,19 +70,17 @@ Check Hermie logs as well:
 openshell sandbox exec --name hermie -- tail -n 80 /sandbox/hermes-gateway.log
 ----
 
-Look for denials. Use the request's trace for the tool error too; a denied file operation may be visible there even when it is not clearly reported in Hermie's logs.
+Look for denials. Use the request's trace for the tool error too; a denied file operation may be visible there even when it is not clearly reported in logs.
 
-A missing directory, ordinary Linux permissions, and an OpenShell denial are different problems. A skill explains what the agent should do, but it cannot grant filesystem access. The policy also cannot grant Linux ownership or directory permissions. The sandbox image must provision `/reports` with Linux permissions allowing the sandbox user to write there. Then the OpenShell policy should allow the agent to take file operations under the folder.
+A skill explains what the agent should do, but it cannot grant filesystem access. The policy also cannot grant Linux ownership or directory permissions. The sandbox image must provision `/reports` with Linux permissions allowing the sandbox user to write there. Then the OpenShell policy should allow the agent to take file operations under the folder.
 
 === Restore report writing
 
-Let's create a custom filesystem policy that allows access to that directory rather than opening the entire system.
+Let's create a custom filesystem policy that allows report writing in `/reports`.
 
-You have not created a policy file yet. When you created `hermie` without one, OpenShell applied its default restrictions. In Module 2, you added network rules directly through the CLI by using `openshell policy update` command. However OpenShell doesn't support adding filesystem paths the same way.
+When you created `hermie` without a policy file, OpenShell applied its default restrictions. In Module 2, you added network rules through `openshell policy update`. That command supports incremental network changes, but it does not add filesystem paths. For `/reports`, we need to change `filesystem_policy.read_write` in a complete YAML policy.
 
-For `/reports`, we need to change `filesystem_policy.read_write`.
-
-. OpenShell requires a complete YAML policy applied with `openshell policy set`. And we also need to preserve network rules. Therefore, first, dump existing policies into a temp file:
+. Create a policy file from the sandbox's current settings:
 +
 --
 [source,bash]
@@ -90,8 +88,19 @@ For `/reports`, we need to change `filesystem_policy.read_write`.
 openshell sandbox get hermie --policy-only > /tmp/hermie-report-policy.yaml
 ----
 
-Add `/reports` to the writable paths with the following copy-and-paste command. You do not need to open an editor. The quoted `EOF` markers pass the lines between them to `sed`, which inserts the new path before the first existing writable path and preserves the rest of the policy.
+Inspect it:
 
+[source,bash]
+----
+cat /tmp/hermie-report-policy.yaml
+----
+
+Find `filesystem_policy` at the top, and `read_write` under it. We will preserve the network settings and add `/reports` folder as a writable path.
+--
+
+. Create an updated file that adds `/reports` to the writable paths:
++
+--
 [source,bash]
 ----
 sed -f /dev/stdin /tmp/hermie-report-policy.yaml <<'EOF' > /tmp/hermie-report-policy.updated.yaml
@@ -101,29 +110,76 @@ sed -f /dev/stdin /tmp/hermie-report-policy.yaml <<'EOF' > /tmp/hermie-report-po
 &#
 }
 EOF
-mv /tmp/hermie-report-policy.updated.yaml /tmp/hermie-report-policy.yaml
-cat /tmp/hermie-report-policy.yaml
+cat /tmp/hermie-report-policy.updated.yaml
 ----
 
-Check that `/reports` appears under `filesystem_policy.read_write` alongside the original writable paths, and that the network rules are still present.
 
+Check that `/reports` appears under `filesystem_policy.read_write`.
 --
+[source,bash]
+----
+cat /tmp/hermie-report-policy.updated.yaml
+----
 
-. Apply your new policy file and inspect the result:
+. Delete the old sandbox so the new filesystem restrictions can take effect:
 +
 --
 [source,bash]
 ----
-openshell policy set hermie --policy /tmp/hermie-report-policy.yaml --wait
+openshell sandbox delete hermie
+openshell sandbox list
+----
+--
+
+. Recreate Hermie with the updated policy supplied at creation time:
++
+--
+[source,bash]
+----
+openshell sandbox create --name hermie \
+  --from quay.io/rh-aiservices-bu/waterplant-hermes:0.2.4 \
+  --policy /tmp/hermie-report-policy.updated.yaml \
+  --cpu 2 --memory 4Gi --no-tty -- true
+openshell sandbox list
+----
+
+The sandbox should be `Ready`. Passing `--policy` here applies the filesystem settings before Hermie starts. Creating it with the defaults and restarting Hermes afterward would not change the existing kernel filesystem restrictions.
+--
+
+. Upload the configuration, start Hermie, and expose its API again, as in Module 2:
++
+--
+[source,bash]
+----
+openshell sandbox upload hermie /hermes /sandbox
+openshell sandbox exec --name hermie -- start-hermes
+openshell service expose hermie 8080 openai
+----
+
+The water plant assistant console still targets the sandboxed agent through the bridge, so you do not need to change its `AGENT_URL` again.
+--
+
+. Inspect the policy applied to the new sandbox:
++
+--
+[source,bash]
+----
 openshell policy get hermie --full
 ----
 
-Filesystem changes depend on the OpenShell version and may require sandbox recreation. If this change is rejected as a static-policy change, recreate `hermie` with the edited policy supplied through `--policy /tmp/hermie-report-policy.yaml`, then repeat Module 2's configuration upload, startup, and service exposure steps. Restarting Hermes alone does not change an already-applied kernel filesystem restriction. Sandbox recreation also removes files from the previous sandbox.
-
-See the https://docs.nvidia.com/openshell/dev/how-it-works/policies/manage-policies[OpenShell policy management documentation] for policy export, replacement, and how changes take effect.
+Policy inspection alone is not enough; test the report task next.
 --
 
-. Repeat the report request in the operator console. Check that Hermie returns a timestamped path under `/reports` and successfully reads the report back.
+. In the operator console, repeat the request:
++
+--
+[source,text]
+----
+Write a report on the current pump status. If you cannot create or read it, say why.
+----
+
+Check that Hermie returns a timestamped filename under `/reports` and reads the saved report back successfully. If it still fails, inspect the new tool error and logs before broadening access.
+--
 
 The operator can generate reports again. But what did the permission actually allow?
 
@@ -131,7 +187,36 @@ The operator can generate reports again. But what did the permission actually al
 
 The operator creates a few reports during the day. Later, they ask Hermie to tidy up. They are not trying to attack the plant; they expect the assistant to leave their useful reports alone.
 
-. Generate at least three reports with separate prompts. Ask Hermie to list the reports it has saved, and record the filenames before testing cleanup.
+. Generate three reports by sending these prompts one at a time. Wait for each report to be saved before sending the next prompt:
++
+--
+[source,text]
+----
+Write a report on the current status of all pumps.
+----
+
+[source,text]
+----
+Write a report on pump 4's condition and recommend maintenance actions. Do not change the plant state.
+----
+
+[source,text]
+----
+Write a shift handover report summarizing the current pump status and any issues the next operator should monitor.
+----
+
+Hermie should generate a different timestamped filename for each report.
+--
+
+. Ask Hermie to list the saved reports:
++
+--
+[source,text]
+----
+List the reports you have saved, including their filenames.
+----
+--
+
 . Send this routine-sounding request:
 +
 --
@@ -155,8 +240,6 @@ The operator needs to create and read reports. Routine report generation does no
 
 OpenShell's current filesystem policy exposes read-only and read-write paths; it does not provide a create-only setting. Adding a rule that mentions `touch` or `mkdir` would not by itself stop deletion through Python or another tool.
 
-Record the gap you have identified: the operator needs report creation and reading, but the granted filesystem permission also permits modification and deletion. The path restriction protects locations outside `/reports`; it does not protect the reports from every action inside that directory. 
-
 === Verify useful behavior and review the evidence
 
 Generate another pump status report and confirm that it is saved and readable. Click *Run all evals* and compare the results with your earlier runs.
@@ -174,3 +257,12 @@ Reports do not have to live on the agent's filesystem. Your application might st
 This brings us back to Module 3: authenticating the agent does not authorize every action. The gateway and service must enforce the permissions for each operation. A tool named `create_report` must also enforce creation semantics; it should not accept arbitrary database statements or overwrite an existing report. Keep direct database credentials and writable storage out of the agent's reach so it cannot bypass those tools.
 
 This is an architectural option for a future application, rather than an additional service deployed in this exercise. It provides a way to enforce action-level permissions when read-only and read-write filesystem paths are not enough.
+
+=== What if I really need just a read only file?
+introduce soul / what it is
+introduce attack
+make them attack
+
+add SOUL.md to read_only policy and recreate the hermie to make the filesystem policy to be effective
+
+or click RESET to restore SOUL 

@@ -22,7 +22,7 @@ Your investigation continues. The next step is to find out which tool permission
 Before we change anything, let's follow a tool request. Two components bring a security layer to this path: *Keycloak* and the *MCP Gateway*.
 
 * *Keycloak* is the identity provider. Hermie authenticates using the lab's `operator` account and obtains an access token. The token is a signed JWT containing identity information and roles assigned to that account.
-* *MCP Gateway* connects Hermie to the plant's MCP servers. Its authentication policy validates the token, and its authorization policy checks whether the token carries the role required for the requested tool. The gateway then routes an allowed request to the appropriate MCP server.
+* *MCP Gateway* connects Hermie to the plant's MCP servers. Its authentication policy validates the token, and its authorization policy checks whether the token carries the role required for the requested tool. Both happens through Keycloak. The gateway then routes an allowed request to the appropriate MCP server.
 
 There are two related exchanges:
 
@@ -37,11 +37,9 @@ Hermie + access token -> MCP Gateway -> MCP server -> tool -> plant API
                         check tool permission
 ----
 
-Keycloak does not sit between Hermie and the gateway for every tool call. It issues the token; the gateway's policies use that token when evaluating requests.
+*Authentication* answers “Who is making this request?” *Authorization* answers “Is that identity allowed to perform this action?” A valid token gets Hermie past the identity check, and right role gives access Hermie to only a subset of tools.
 
-*Authentication* answers “Who is making this request?” *Authorization* answers “Is that identity allowed to perform this action?” A valid token gets Hermie past the identity check, but it should not give Hermie permission to use every tool.
-
-That is also why these components alone are not enough. If the operator has roles for powerful tools, the gateway can correctly authenticate and authorize a request that exceeds the operator's intended duties. We need to give the identity the right permissions, then verify that the gateway enforces them.
+If the operator has roles for powerful tools, the gateway can correctly authenticate and authorize a request that exceeds the operator's intended duties. We need to give the identity the right permissions, then verify that the gateway enforces them.
 
 === Reproduce the remaining attacks
 
@@ -75,7 +73,7 @@ Stopping one faulty pump can be part of an operator's work. Shutting down the wh
 
 Put your admin hat back on and open Keycloak using the supplied URL and credentials:
 
-URL: https://sso.{openshift_cluster_ingress_domain}/realms/waterplant-{user}/
+URL: https://sso.{openshift_cluster_ingress_domain}/admin/waterplant-{user}/console
 
 Username: `admin`
 
