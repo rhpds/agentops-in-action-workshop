@@ -25,7 +25,7 @@ You know there is a skill specifically for writing reports. Check whether it is 
 . From the Terminal tab, enter the bridge's CLI container if you are not already there:
 +
 --
-[source,bash,subs="verbatim,attributes"]
+[source,bash,role="execute send-to-wetty",subs="verbatim,attributes"]
 ----
 POD=$(oc get pod -l app.kubernetes.io/name=hermes-openshell-bridge -o name -n {user}-agentops)
 oc rsh -n {user}-agentops -c cli "$POD"
@@ -35,7 +35,7 @@ oc rsh -n {user}-agentops -c cli "$POD"
 . Read the installed skill:
 +
 --
-[source,bash]
+[source,bash,role="execute send-to-wetty"]
 ----
 openshell sandbox exec --name hermie -- cat /sandbox/.hermes/skills/write-report/SKILL.md
 ----
@@ -58,14 +58,14 @@ Check the answer and tool result. Can Hermie retrieve pump telemetry but fail wh
 
 Return to the bridge CLI container and inspect the evidence:
 
-[source,bash]
+[source,bash,role="execute send-to-wetty"]
 ----
 openshell logs hermie --since 5m --source sandbox
 ----
 
 Check Hermie logs as well:
 
-[source,bash]
+[source,bash,role="execute send-to-wetty"]
 ----
 openshell sandbox exec --name hermie -- tail -n 80 /sandbox/hermes-gateway.log
 ----
@@ -83,14 +83,14 @@ When you created `hermie` without a policy file, OpenShell applied its default r
 . Create a policy file from the sandbox's current settings:
 +
 --
-[source,bash]
+[source,bash,role="execute send-to-wetty"]
 ----
 openshell sandbox get hermie --policy-only > /tmp/hermie-report-policy.yaml
 ----
 
 Inspect it:
 
-[source,bash]
+[source,bash,role="execute send-to-wetty"]
 ----
 cat /tmp/hermie-report-policy.yaml
 ----
@@ -101,7 +101,7 @@ Find `filesystem_policy` at the top, and `read_write` under it. We will preserve
 . Create an updated file that adds `/reports` to the writable paths:
 +
 --
-[source,bash]
+[source,bash,role="execute send-to-wetty"]
 ----
 sed -f /dev/stdin /tmp/hermie-report-policy.yaml <<'EOF' > /tmp/hermie-report-policy.updated.yaml
 /^[[:space:]]*read_write:[[:space:]]*$/ {
@@ -116,7 +116,7 @@ cat /tmp/hermie-report-policy.updated.yaml
 
 Check that `/reports` appears under `filesystem_policy.read_write`.
 --
-[source,bash]
+[source,bash,role="execute send-to-wetty"]
 ----
 cat /tmp/hermie-report-policy.updated.yaml
 ----
@@ -124,7 +124,7 @@ cat /tmp/hermie-report-policy.updated.yaml
 . Delete the old sandbox so the new filesystem restrictions can take effect:
 +
 --
-[source,bash]
+[source,bash,role="execute send-to-wetty"]
 ----
 openshell sandbox delete hermie
 openshell sandbox list
@@ -134,7 +134,7 @@ openshell sandbox list
 . Recreate Hermie with the updated policy supplied at creation time:
 +
 --
-[source,bash]
+[source,bash,role="execute send-to-wetty"]
 ----
 openshell sandbox create --name hermie \
   --from quay.io/rh-aiservices-bu/waterplant-hermes:0.2.5 \
@@ -149,7 +149,7 @@ The sandbox should be `Ready`. Passing `--policy` here applies the filesystem se
 . Upload the configuration, start Hermie, and expose its API again, as in Module 2:
 +
 --
-[source,bash]
+[source,bash,role="execute send-to-wetty"]
 ----
 openshell sandbox upload hermie /hermes /sandbox
 openshell sandbox exec --name hermie -- start-hermes
@@ -162,7 +162,7 @@ The water plant assistant console still targets the sandboxed agent through the 
 . Inspect the policy applied to the new sandbox:
 +
 --
-[source,bash]
+[source,bash,role="execute send-to-wetty"]
 ----
 openshell policy get hermie --full
 ----

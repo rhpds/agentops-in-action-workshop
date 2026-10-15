@@ -34,7 +34,7 @@ There is a skill called `read-safety-docs` which knows where the documentation i
 . If you want to check the skill definition, go back to the Terminal tab. Enter the bridge's CLI container if you are not already there:
 +
 --
-[source,bash,subs="verbatim,attributes"]
+[source,bash,role="execute send-to-wetty",subs="verbatim,attributes"]
 ----
 POD=$(oc get pod -l app.kubernetes.io/name=hermes-openshell-bridge -o name -n {user}-agentops)
 oc rsh -n {user}-agentops -c cli "$POD"
@@ -44,7 +44,7 @@ oc rsh -n {user}-agentops -c cli "$POD"
 . Read the installed skill:
 +
 --
-[source,bash]
+[source,bash,role="execute send-to-wetty"]
 ----
 openshell sandbox exec --name hermie -- cat /sandbox/.hermes/skills/read-safety-docs/SKILL.md
 ----
@@ -61,7 +61,7 @@ Let's allow the documentation host for the Python process that performs extracti
 . Inside the bridge CLI container, add the rule:
 +
 --
-[source,bash]
+[source,bash,role="execute send-to-wetty"]
 ----
 openshell policy update hermie \
   --rule-name waterplant_docs \
@@ -115,7 +115,7 @@ Emojis, emojis everywhere!
 . Check Hermie's extraction log for the redirect chain. You see the same atack endpoint there too!
 +
 --
-[source,bash]
+[source,bash,role="execute send-to-wetty"]
 ----
 openshell sandbox exec --name hermie -- tail -n 120 /sandbox/hermes-gateway.log
 ----
@@ -153,7 +153,7 @@ Adding a narrow allow rule alongside the original `full` permission would leave 
 . Remove the host-wide rule from inside the bridge CLI container:
 +
 --
-[source,bash]
+[source,bash,role="execute send-to-wetty"]
 ----
 openshell policy update hermie --remove-rule waterplant_docs --wait
 ----
@@ -164,7 +164,7 @@ Documentation access is now blocked temporarily. The other rules from the previo
 . Create the replacement rule with this copy-and-paste command:
 +
 --
-[source,bash]
+[source,bash,role="execute send-to-wetty"]
 ----
 cat > /tmp/hermie-docs-rule.yaml <<'EOF'
   waterplant_docs:
@@ -194,7 +194,7 @@ Read the rule before applying it. It permits `GET /doc` for the index and `GET /
 . Add the replacement to the remaining policy:
 +
 --
-[source,bash]
+[source,bash,role="execute send-to-wetty"]
 ----
 openshell sandbox get hermie --policy-only > /tmp/hermie-docs-policy.yaml
 sed '/^network_policies:$/r /tmp/hermie-docs-rule.yaml' \
@@ -208,14 +208,14 @@ The `sed` command inserts the new rule immediately beneath `network_policies:`.
 . Apply the restricted policy and inspect the result:
 +
 --
-[source,bash]
+[source,bash,role="execute send-to-wetty"]
 ----
 openshell policy set hermie --policy /tmp/hermie-docs-policy.restricted.yaml --wait
 ----
 
 Confirm that `waterplant_docs` contains only the two `GET` path rules. Check that no other rule grants broad access to the same destination.
 
-[source,bash]
+[source,bash,role="execute send-to-wetty"]
 ----
 openshell policy get hermie --full
 ----
@@ -239,7 +239,7 @@ Read the latest field service bulletin and summarize what I should check.
 . You can see the  fresh HTTP denial on `/attack/collect` in the OpenShell log as well.
 +
 --
-[source,bash]
+[source,bash,role="execute send-to-wetty"]
 ----
 openshell logs hermie --since 5m --source sandbox | grep DENIED
 ----
