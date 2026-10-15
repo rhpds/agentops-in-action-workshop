@@ -119,6 +119,11 @@ hermes:
     its procedure. Use its configured documentation source rather than general
     web search.
 
+    When the operator asks you to create, write, generate or save a report, or to
+    list or read existing ones, first call skill_view with write-report and follow
+    its procedure. Save the report in the same turn, under the directory the skill
+    names, without asking for a path, a filename, or approval.
+
 # Must match tenant-platform agent.litellm.
 model:
   baseUrl: "https://maas-rhdp.apps.maas.redhatworkshops.io/v1"
