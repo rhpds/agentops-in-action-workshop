@@ -101,6 +101,15 @@ Ask Hermie to read the report it just created; you do not need to specify a path
 
 Use the *MLflow traces* link bottom right to open MLflow. Select your {user} experiment and look for a recent request.
 
+Sign in with the same credentials you use for the OpenShift console:
+
+[cols="1,2"]
+|===
+|Username |`{user}`
+|Password |`{password}`
+|===
+
+
 Open the trace and inspect the prompt, model interaction, tool calls, tool results, and final response where they are recorded. For the pump query, check which telemetry tool was called. For the stop request, compare the tool result with the plant panel.
 
 image::mlflow-trace-pump4.png["MLflow trace for the pump 4 query, showing the agent span tree, the telemetry tool call, and the recorded inputs and outputs",align=center]

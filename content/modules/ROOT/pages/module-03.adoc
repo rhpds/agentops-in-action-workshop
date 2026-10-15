@@ -75,7 +75,7 @@ Stopping one faulty pump can be part of an operator's work. Shutting down the wh
 
 Put your admin hat back on and open Keycloak using the supplied URL and credentials:
 
-URL: https://sso.{openshift_cluster_ingress_domain}/admin/waterplant-{user}/console
+URL: https://sso.{openshift_cluster_ingress_domain}/admin/waterplant-{user}/console[sso.{openshift_cluster_ingress_domain}/admin/waterplant-{user}/console^]
 
 Username: `admin`
 
