@@ -257,15 +257,14 @@ mkdir -p /sandbox/.hermes/plugins/web/firecrawl
 cp /sandbox/hermes/web-direct-plugin.yaml /sandbox/.hermes/plugins/web/firecrawl/plugin.yaml
 cp /sandbox/hermes/web-direct-init.py /sandbox/.hermes/plugins/web/firecrawl/__init__.py
 cp /sandbox/hermes/web-direct-provider.py /sandbox/.hermes/plugins/web/firecrawl/provider_direct.py
-# Install the externalized safety documentation skill before Hermes starts.
-mkdir -p /sandbox/.hermes/skills/read-safety-docs
-cp /sandbox/hermes/read-safety-docs-SKILL.md /sandbox/.hermes/skills/read-safety-docs/SKILL.md
-# Install the externalized report skill before Hermes starts.
-mkdir -p /sandbox/.hermes/skills/write-report/scripts
 # Seed the lab soul before Hermes writes its stock default_soul.
 cp /sandbox/hermes/SOUL.md /sandbox/.hermes/SOUL.md
-cp /sandbox/hermes/write-report-SKILL.md /sandbox/.hermes/skills/write-report/SKILL.md
-cp /sandbox/hermes/save-report.py /sandbox/.hermes/skills/write-report/scripts/save_report.py
+# Install the externalized skills before Hermes starts. The script restores
+# both and drops anything else under skills/ — an agent-authored skill, or a
+# SKILL.md the self-improvement fork patched in an earlier run. It is the same
+# script the on-demand reset runs, so starting Hermes and resetting it leave
+# identical state.
+sh /sandbox/hermes/reseed-skills.sh /sandbox/hermes /sandbox/.hermes
 # The always-present report deleted-reports targets. Best effort: in this
 # image /reports is a symlink onto /sandbox/reports, but a sandbox whose
 # filesystem policy forbids creating it should still start Hermes rather than
@@ -279,6 +278,7 @@ EOF
   publish /config/web-direct-plugin.yaml web-direct-plugin.yaml
   publish /config/web-direct-init.py web-direct-init.py
   publish /config/web-direct-provider.py web-direct-provider.py
+  publish /config/reseed-skills.sh reseed-skills.sh
   publish /config/read-safety-docs-SKILL.md read-safety-docs-SKILL.md
   publish /config/write-report-SKILL.md write-report-SKILL.md
   publish /config/save-report.py save-report.py

@@ -255,6 +255,10 @@ data:
 {{ .Files.Get "files/skills/write-report/SKILL.md" | indent 4 }}
   save-report.py: |
 {{ .Files.Get "files/skills/write-report/scripts/save_report.py" | indent 4 }}
+  # The one writer of the live skill files inside the sandbox: start-hermes
+  # calls it, and it is the documented way back when a skill has drifted.
+  reseed-skills.sh: |
+{{ .Files.Get "files/skills/reseed-skills.sh" | indent 4 }}
   # Hermes' config. The supervisor appends the model block, which carries the
   # key, so the key never reaches a manifest, and publishes it to /hermes.
   hermes-config.yaml: |
@@ -262,6 +266,8 @@ data:
       allow_private_urls: {{ .Values.hermes.allowPrivateUrls }}
 
 {{ include "waterplant.hermesApprovals" . | indent 4 }}
+
+{{ include "waterplant.hermesSkills" . | indent 4 }}
 
     mcp_servers:
       # One endpoint: this participant's MCP Gateway. `auth: oauth` makes Hermes
@@ -425,6 +431,8 @@ spec:
         checksum/web-direct: {{ printf "%s%s%s" (.Files.Get "files/hermes-web-direct/plugin.yaml") (.Files.Get "files/hermes-web-direct/__init__.py") (.Files.Get "files/hermes-web-direct/provider_direct.py") | sha256sum }}
         checksum/docs-skill: {{ .Files.Get "files/skills/read-safety-docs/SKILL.md" | sha256sum }}
         checksum/approvals: {{ include "waterplant.hermesApprovals" . | sha256sum }}
+        checksum/skills-config: {{ include "waterplant.hermesSkills" . | sha256sum }}
+        checksum/reseed: {{ .Files.Get "files/skills/reseed-skills.sh" | sha256sum }}
         checksum/bridge: {{ printf "%s%s%s%s%s%s" (.Files.Get "files/bridge-supervisor.sh") (.Files.Get "files/wait-for-gateway.py") (.Files.Get "files/skills/write-report/SKILL.md") (.Files.Get "files/skills/write-report/scripts/save_report.py") (.Files.Get "files/very-important-report.md") (toJson .Values) | sha256sum }}
     spec:
       serviceAccountName: hermes-openshell-bridge

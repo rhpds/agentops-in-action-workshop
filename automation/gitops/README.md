@@ -268,6 +268,55 @@ The combined quota defaults to requests of 8 CPU / 16 GiB, limits of 12 CPU /
 24 GiB and 20 pods. Check aggregate cluster capacity for the participant count;
 these limits do not reserve that capacity.
 
+### Keeping the skill library fixed
+
+The lab ships exactly two skills and every module assumes exactly those two.
+Hermes, left at its defaults, does not hold that still. `turn_finalizer.py`
+spawns a background self-improvement fork after any turn that used
+`skills.creation_nudge_interval` tool iterations or more (default 10) while
+`skill_manage` is in the toolset; the fork replays the conversation and patches
+`SKILL.md`. In module 5 that turns a one-turn prompt injection into a permanent
+one — the fetched bulletin's "reply only in emoji" directive gets written into
+`read-safety-docs` as a standing rule, fires on every later documentation
+lookup including in modules that never asked for a bulletin, and survives a
+pod restart because `$HERMES_HOME` is a PVC.
+
+Both charts therefore render `skills.creation_nudge_interval: 0`
+(`waterplant.hermesSkills`, which must stay byte-identical between the two
+copies, like the approvals block beside it). Zero fails the `> 0` check, so the
+fork never runs. Only skills are affected; the memory review has its own nudge
+interval and still runs.
+
+`files/skills/reseed-skills.sh` is the way back for an environment that already
+drifted. It restores both skills from the pristine copies, removes every other
+directory under `skills/` — an agent-authored skill, a curator `.archive` — and
+clears `.usage.json` and `.curator_state` so the tree reads as a fresh pod. It
+is the only writer of the live skill files: `seed-config` and the sandbox's
+`start-hermes` both call it, so a pod start and an on-demand reset leave
+identical state. Run it by hand with:
+
+```sh
+# unsandboxed (the ConfigMap is mounted read-only at /config for this)
+oc exec deploy/hermes-plain -c hermes -- sh /config/reseed-skills.sh /config /app/.hermes
+
+# sandbox
+openshell sandbox exec --name hermie -- sh /sandbox/hermes/reseed-skills.sh \
+  /sandbox/hermes /sandbox/.hermes
+```
+
+Hermes re-reads the skill files per turn, so neither form needs a restart. The
+console's plant reset (`POST /api/plant/reset`) covers the simulation only and
+does not touch the agent filesystem; wiring it to this script is a change in
+the console image, not in these charts.
+
+Checking for drift is a one-liner, and is worth doing before a module that
+depends on the skills behaving as shipped:
+
+```sh
+diff <(oc get cm hermes-plain -o jsonpath='{.data.read-safety-docs-SKILL\.md}') \
+     <(oc exec deploy/hermes-plain -c hermes -- cat /app/.hermes/skills/read-safety-docs/SKILL.md)
+```
+
 ## Offline validation
 
 The regression suite renders complete parent/child Application trees for two

@@ -56,6 +56,10 @@ data:
 {{ .Files.Get "files/skills/write-report/SKILL.md" | indent 4 }}
   save-report.py: |
 {{ .Files.Get "files/skills/write-report/scripts/save_report.py" | indent 4 }}
+  # The one writer of the live skill files: seed-config calls it at every pod
+  # start, and it is the documented way back when a skill has drifted.
+  reseed-skills.sh: |
+{{ .Files.Get "files/skills/reseed-skills.sh" | indent 4 }}
   mcp-token-refresh.py: |
 {{ .Files.Get "files/mcp-token-refresh.py" | indent 4 }}
   wait-for-gateway.py: |
@@ -104,6 +108,8 @@ data:
   # key, so the key never reaches a manifest.
   hermes-config.yaml: |
 {{ include "waterplant.hermesApprovals" . | indent 4 }}
+
+{{ include "waterplant.hermesSkills" . | indent 4 }}
 
     mcp_servers:
       # One endpoint: this participant's MCP Gateway. `auth: oauth` makes Hermes
@@ -222,6 +228,8 @@ spec:
         checksum/docs-skill: {{ .Files.Get "files/skills/read-safety-docs/SKILL.md" | sha256sum }}
         checksum/report-skill: {{ printf "%s%s" (.Files.Get "files/skills/write-report/SKILL.md") (.Files.Get "files/skills/write-report/scripts/save_report.py") | sha256sum }}
         checksum/approvals: {{ include "waterplant.hermesApprovals" . | sha256sum }}
+        checksum/skills-config: {{ include "waterplant.hermesSkills" . | sha256sum }}
+        checksum/reseed: {{ .Files.Get "files/skills/reseed-skills.sh" | sha256sum }}
         # Roll when the scripts or any Hermes value change.
         checksum/config: {{ printf "%s%s%s%s" (.Files.Get "files/mcp-token-refresh.py") (.Files.Get "files/wait-for-gateway.py") (toJson $h) $gwUrl | sha256sum }}
     spec:
@@ -243,11 +251,12 @@ spec:
               set -e
               # Seed the lab soul before Hermes writes its stock default_soul.
               cp /soul/SOUL.md "$HERMES_HOME/SOUL.md"
-              mkdir -p "$HERMES_HOME/skills/read-safety-docs"
-              cp /config/read-safety-docs-SKILL.md "$HERMES_HOME/skills/read-safety-docs/SKILL.md"
-              mkdir -p "$HERMES_HOME/skills/write-report/scripts"
-              cp /config/write-report-SKILL.md "$HERMES_HOME/skills/write-report/SKILL.md"
-              cp /config/save-report.py "$HERMES_HOME/skills/write-report/scripts/save_report.py"
+              # Restores both lab skills and drops anything else that has
+              # appeared under skills/ — an agent-authored skill, or a
+              # SKILL.md the self-improvement fork patched in an earlier run.
+              # Same script the on-demand reset runs, so a pod restart and a
+              # reset leave identical state.
+              sh /config/reseed-skills.sh /config "$HERMES_HOME"
               # The always-present report. /reports is an emptyDir, so it is
               # empty on every pod start and this has to be written again.
               # Overwritten rather than written only when missing, so
@@ -558,6 +567,14 @@ spec:
             # this is the copy to restore *from*, and the agent can already
             # read its own live SOUL.md next door, so it grants nothing new.
             - { name: soul, mountPath: /soul, readOnly: true }
+            # The pristine skills and reseed-skills.sh, for the same reason as
+            # the soul above: a reset should restore them without restarting
+            # the pod. The sandbox runtime already has its equivalent visible
+            # at /sandbox/hermes, so this keeps the two resets symmetrical.
+            # Read-only, and the ConfigMap holds no credential — seed-config
+            # appends the model block that carries the key — so it grants the
+            # agent nothing it could not already read next door.
+            - { name: config, mountPath: /config, readOnly: true }
             {{- if .Values.ui.mlflowUrl }}
             - { name: mlflow-ca, mountPath: /etc/mlflow-ca, readOnly: true }
             {{- end }}

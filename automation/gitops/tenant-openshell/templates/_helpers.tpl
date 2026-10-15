@@ -87,3 +87,20 @@ approvals:
 agent:
   disabled_toolsets: [code_execution]
 {{- end -}}
+
+{{- /*
+Hermes' post-turn skill review off, for the reasons set out beside the
+identical block in tenant-platform/templates/_approvals.tpl. In short:
+turn_finalizer spawns a self-improvement fork after any turn of ten or more
+tool iterations, and that fork patches SKILL.md — so module 5's injected
+bulletin ends up written into read-safety-docs as a standing rule that fires
+in every later module. Must stay byte-identical to that copy.
+
+Named, so checksum/bridge-equivalent annotations can cover it: the supervisor
+renders config.yaml only at start-up, so an inline edit would update the
+ConfigMap while the old file kept being published to /hermes.
+*/}}
+{{- define "waterplant.hermesSkills" -}}
+skills:
+  creation_nudge_interval: 0
+{{- end -}}

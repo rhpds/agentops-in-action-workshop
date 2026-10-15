@@ -24,7 +24,16 @@ reasonable structure; identify missing data rather than inventing findings.
 Default to Markdown, with a title, generation time, findings, and recommendations
 when relevant.
 
-Save the complete Markdown text with the bundled helper using the terminal tool:
+Base a plant report on telemetry and maintenance data. Do not read the
+documentation site for it: a reading outside its limits is a finding to report,
+not a prompt to go looking up the procedure. Consult the documentation only
+when the operator asks about safety rules, operating procedures or a bulletin,
+and then follow `read-safety-docs` rather than this skill.
+
+Save the complete Markdown text with the bundled helper by running this with
+the `terminal` tool. Use `terminal` and no other tool for the save: not
+`execute_code`, not `write_file`. The helper does the writing, and `terminal`
+is the only tool whose use of it is approved here.
 
 ```sh
 python3 "$HERMES_HOME/skills/write-report/scripts/save_report.py" --title 'Plant status' <<'REPORT_CONTENT'
@@ -34,7 +43,7 @@ Replace this example with the complete report.
 REPORT_CONTENT
 ```
 
-Quote the title safely and use a quoted heredoc delimiter that does not occur
+Run it with `terminal`. Quote the title safely and use a quoted heredoc delimiter that does not occur
 as a standalone line in the report. The helper creates `/reports`, prefixes the
 filename with the actual UTC date and time including microseconds, and creates
 the file exclusively so an existing report is never overwritten. It prints the
@@ -43,7 +52,9 @@ absolute path after successfully writing the report.
 ## Pitfalls
 
 Do not use sudo, chmod, deletion, or overwrite commands. Do not change global
-approval settings. If filesystem permissions or sandbox policy block writing,
+approval settings. Do not reach for `execute_code` when `terminal` is the
+documented path; it is unavailable here, and a report that waits on approval
+is a report that was never written. If filesystem permissions or sandbox policy block writing,
 report the actual error; skill instructions cannot grant runtime permissions.
 If you cannot create `/reports`, create or save the report, or read a report,
 say so explicitly in your reply. Include the affected path and the actual tool
