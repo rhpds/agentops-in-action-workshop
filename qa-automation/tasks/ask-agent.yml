@@ -39,6 +39,26 @@
   failed_when: false
   changed_when: true
 
+# A failed exec is not a lab result. If the pod is gone or the container will
+# not run the command, every downstream check sees an empty reply — which some
+# of them score as "the agent was blocked", the very thing they are meant to
+# prove. Stop here instead, with the reason.
+- name: "ask | {{ ask_label }} | The prompt must have reached a running pod"
+  ansible.builtin.fail:
+    msg: |-
+      Could not exec into {{ e2e_client_pod }} ({{ e2e_client_container }}) in
+      {{ t_ns }} to send the prompt, so there is no reply to judge.
+
+        {{ ask_raw.msg | default(ask_raw.stderr | default('no detail returned')) | trim }}
+
+      If the pod does not exist, a deployment rolled after setup captured its
+      name. Nothing about the agent can be concluded from this run.
+  # `failed_when: false` above rewrites `failed` to false even when the module
+  # itself errored, so that flag cannot be used. A module error returns `msg`
+  # and no `stdout` at all; a command that merely exited non-zero still returns
+  # stdout, empty or not.
+  when: ask_raw.stdout is not defined
+
 - name: "ask | {{ ask_label }} | Parse the reply"
   ansible.builtin.set_fact:
     ask_raw_stdout: "{{ _out }}"
