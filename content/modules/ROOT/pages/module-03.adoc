@@ -15,7 +15,7 @@
 
 Congrats! You sandboxed Hermie and restored its plant queries and tracing. Some of the broader network and filesystem access is now restricted. Sandbox now allows Hermie to reach the MCP Gateway, and that connection gives it access to plant tools. What if those tools let it do more than an operator should?
 
-Your investigation continues. The next step is to find out which tool permissions make the remaining attacks possible and restrict those permissions without breaking the operators' work.
+Your investigation continues. The next step is to find out which tool permissions make the remaining attacks possible and restrict those permissions without breaking the operators work.
 
 === How Hermie reaches a tool
 
@@ -26,20 +26,20 @@ Before we change anything, let's follow a tool request. Two components bring a s
 
 There are two related exchanges:
 
-// Literal block, not [source]: the Showroom theme attaches its copy button to
-// .listingblock pre.highlight only, so a literal block renders without one.
-// This is a diagram of the two exchanges, not a command to run.
-....
-Get an identity token:
-Hermie -> Keycloak -> access token containing identity and roles
+image::identity-tool-access.png["Two flows: Hermie gets an identity token from Keycloak, then calls a plant tool through the MCP Gateway, MCP server, tool, and plant API, with the gateway validating the token and checking tool permission",align=center]
 
-Call a plant tool:
-Hermie + access token -> MCP Gateway -> MCP server -> tool -> plant API
-                        validate token
-                        check tool permission
-....
+[cols="1,2,2",options="header"]
+|===
+| Concept | Question it answers | In this lab
 
-*Authentication* answers “Who is making this request?” *Authorization* answers “Is that identity allowed to perform this action?” A valid token gets Hermie past the identity check, and right role gives access Hermie to only a subset of tools.
+| *Authentication*
+| Who is making this request?
+| A valid token gets Hermie past the identity check.
+
+| *Authorization*
+| Is that identity allowed to perform this action?
+| Right role gives access Hermie to only a subset of tools.
+|===
 
 If the operator has roles for powerful tools, the gateway can correctly authenticate and authorize a request that exceeds the operator's intended duties. We need to give the identity the right permissions, then verify that the gateway enforces them.
 
