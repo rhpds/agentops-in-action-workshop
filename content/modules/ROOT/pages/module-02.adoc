@@ -399,7 +399,7 @@ openshell policy update hermie --remove-rule model_endpoint --wait
 ----
 
 Send another plant query and inspect the new denied event. Restore the rule with the `model_endpoint` command above before continuing.
-+
+
 [source,bash,role=execute,subs="verbatim,attributes"]
 ----
 openshell policy update hermie \
