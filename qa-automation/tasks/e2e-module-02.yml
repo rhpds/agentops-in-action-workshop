@@ -150,6 +150,37 @@
     cmd: "oc rollout status deployment/water-plant-ui -n {{ t_ns }} --timeout=240s"
   changed_when: false
 
+# `oc set env` above REPLACES the console pod, and every prompt in this
+# playbook is exec'd inside it. The pod captured during setup is now gone, so
+# without re-resolving, every later k8s_exec targets a dead pod, returns empty
+# stdout and looks like "the agent did not answer".
+#
+# This only bites on a tenant that has not run module 2 before. On a re-run
+# AGENT_URL is already hermes-agent, `oc set env` is a no-op, no rollout
+# happens and the captured pod survives — which is exactly why this passed
+# repeatedly in testing and failed on the first clean environment.
+- name: "M2 | E2E-M2-02 — re-resolve the console pod after the rollout"
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: "{{ t_ns }}"
+    label_selectors:
+      - app.kubernetes.io/name=water-plant-ui
+    field_selectors:
+      - status.phase=Running
+  register: m2_ui_pod
+  until: m2_ui_pod.resources | default([]) | length > 0
+  retries: 20
+  delay: 6
+
+- name: "M2 | E2E-M2-02 — point subsequent prompts at the new console pod"
+  ansible.builtin.set_fact:
+    e2e_client_pod: "{{ m2_ui_pod.resources[0].metadata.name }}"
+
+- name: "M2 | E2E-M2-02 — console pod in use"
+  ansible.builtin.debug:
+    msg: "prompts now exec in {{ e2e_client_pod }} (was replaced by the AGENT_URL change)" 
+
 - name: "M2 | Count tool invocations before the sandboxed prompt"
   ansible.builtin.include_tasks: count-tool-calls.yml
   vars:
