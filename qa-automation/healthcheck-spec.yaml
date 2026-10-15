@@ -534,15 +534,24 @@ checks:
   - id: TEN-QTA-01
     scope: tenant
     severity: warn
-    title: Quota has headroom
+    title: No participant quota or limit range
     asserts: >-
-      ResourceQuota agentops-participant-quota exists and pods used is below
-      pods hard.
+      Neither ResourceQuota agentops-participant-quota nor LimitRange
+      agentops-participant-limits is present.
     rationale: >-
-      Warn, not fail. A tenant at its pod ceiling still runs, but module 2
-      creates a sandbox and the participant will hit a confusing scheduling
-      failure rather than a quota message.
-    remediation: Raise quota.maxPods in bootstrap-tenant values.
+      Inverted deliberately: a quota here is now the fault, not its absence.
+      The LimitRange that came with it defaulted containers carrying no
+      resources of their own to 512Mi, and the NeMo Guardrails server carries
+      none -- the TrustyAI operator sets no resources and the NemoGuardrails
+      CRD exposes no knob -- so it was OOMKilled on every check, three seconds
+      into detect_sensitive_data. The quota had to go with it: a quota covering
+      memory makes requests/limits mandatory on every container, and the
+      LimitRange was what supplied them.
+    remediation: >-
+      Delete both from the namespace; bootstrap-tenant no longer renders them.
+      If a ceiling is wanted again, a LimitRange on its own is safe -- it only
+      defaults, it makes nothing mandatory -- but give it a default well above
+      512Mi. Size the event against aggregate capacity.
 
 # =============================================================================
 # e2e.yml — the learner path, keyed to content/modules/ROOT/pages/

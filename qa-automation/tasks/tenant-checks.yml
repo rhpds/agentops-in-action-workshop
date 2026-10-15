@@ -554,15 +554,17 @@
       ok: "{{ _sr == 200 }}"
       detail: "showroom HTTP {{ _sr }}"
 
-- name: "Record TEN-QTA-01 — quota has headroom"
+- name: "Record TEN-QTA-01 — no participant quota or limit range"
   ansible.builtin.set_fact:
     hc_findings: "{{ hc_findings + [{'id': 'TEN-QTA-01', 'tenant': hc_tenant, 'severity': 'warn', 'ok': _ok, 'detail': _detail}] }}"
   vars:
+    # Inverted on purpose: a quota here is the fault now, not its absence. Its
+    # LimitRange defaulted the guardrails server to 512Mi and OOMKilled it on
+    # every check, and the two cannot be separated -- a quota covering memory
+    # makes those fields mandatory and the LimitRange was what defaulted them.
     _q: "{{ t_quotas | selectattr('metadata.name', 'equalto', 'agentops-participant-quota') | first | default({}) }}"
-    _used: "{{ (_q.get('status', {}).get('used', {}).get('pods', '0')) | int }}"
     _hard: "{{ (_q.get('status', {}).get('hard', {}).get('pods', '0')) | int }}"
-    _ok: "{{ (_hard > 0) and (_used < _hard) }}"
+    _ok: "{{ _hard == 0 }}"
     _detail: >-
-      {{ (_hard == 0) | ternary('quota agentops-participant-quota absent',
-         'pods ' ~ _used ~ '/' ~ _hard
-         ~ ((' — no headroom for the module 2 sandbox') if (_hard > 0 and _used >= _hard) else '')) }}
+      {{ (_hard == 0) | ternary('no participant quota, as intended',
+         'quota agentops-participant-quota is back — its LimitRange defaults OOMKill the guardrails server') }}

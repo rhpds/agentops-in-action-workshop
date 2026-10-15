@@ -137,11 +137,24 @@ policy:
 # Includes application workloads, OpenShell gateway, bridge, sandbox and sync Jobs.
 # Validate aggregate capacity for the event size before provisioning all tenants.
 # ---------------------------------------------------------------------------
-quota:
-  requests:
-    cpu: "8"
-    memory: "16Gi"
-  limits:
-    cpu: "12"
-    memory: "24Gi"
-  maxPods: "20"
+# Removed, both the ResourceQuota and the LimitRange that went with it.
+#
+# The LimitRange defaulted every container with no resources of its own to
+# 512Mi, and the TrustyAI operator sets none on the NeMo Guardrails server --
+# the NemoGuardrails CRD exposes no knob for it either (spec is caBundleConfig,
+# env, nemoConfigs, replicas, template, and template.pod is only scheduling
+# constraints). So the guardrails server inherited 512Mi and was OOMKilled
+# mid-request, every request: observed on cluster-pz7xk dying three seconds
+# into `detect_sensitive_data`, which loads an NER model before `self check
+# input` makes its model call at all.
+#
+# They had to go together. A ResourceQuota that sets requests.memory or
+# limits.memory makes those fields mandatory on every container, so dropping
+# only the LimitRange -- the thing actually causing the OOM -- would have had
+# admission reject every pod that does not declare them, the guardrails server
+# included. Removing one and keeping the other is the broken combination.
+#
+# What this gives up: nothing now caps a single tenant's consumption, so on a
+# shared event cluster one namespace can crowd out the others. Capacity is back
+# to being a planning exercise against the aggregate (see the note above)
+# rather than something enforced per participant.
