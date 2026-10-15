@@ -105,9 +105,7 @@ Open the trace and inspect the prompt, model interaction, tool calls, tool resul
 
 image::mlflow-trace-pump4.png["MLflow trace for the pump 4 query, showing the agent span tree, the telemetry tool call, and the recorded inputs and outputs",align=center]
 
-The trace for `What's the status of pump 4?` reads top to bottom. The *Trace breakdown* on the left is the span tree: an outer `agent` span wraps an `llm.qwen3-235b-a22b` span, which makes a first `api.qwen3-235b-a22b` model call to decide what to do, invokes `tool.mcp_gateway_telemetry_get_pump_status`, then makes a second `api.qwen3-235b-a22b` call to turn the tool result into an answer. On the right, *Inputs* is the operator's message and *Outputs* is Hermie's final reply with the live readings. The header records *Status* (`OK`), *Latency* (`3.52s`), token count, and the *Session ID* that ties this turn to its trace.
-
-The `api.*` spans are model behavior; the `tool.*` span is the runtime reaching a plant tool through the MCP Gateway. Keep that distinction in mind — later modules use it to tell a model's decision apart from what the platform actually enforced.
+The span tree shows what happened behind the answer: the agent made a model call, called the telemetry tool through the MCP Gateway, then made a second model call to turn the result into Hermie's reply.
 
 === Explore access beyond the operator's needs
 
