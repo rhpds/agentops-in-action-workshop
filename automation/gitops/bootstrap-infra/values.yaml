@@ -194,6 +194,40 @@ installPlanApprover:
   timeoutSeconds: 600
 
 # ---------------------------------------------------------------------------
+# Kuadrant dependency recovery (templates/kuadrant-dependency-recovery.yaml)
+#
+# The Kuadrant operator resolves its dependencies once, at start-up, and caches
+# the result. Start it before authorino-operator is Available and it rejects
+# every AuthPolicy in every namespace for the life of the pod, with
+# Accepted=False / MissingDependency. Nothing recovers on its own.
+#
+# This is NOT the istio variant that rhcl.wave above is designed for, and no
+# wave can fix it: OLM resolves rhcl, authorino, limitador, dns and mcp-gateway
+# into one InstallPlan, so the two come up seconds apart by construction.
+# Observed on cluster-slkjc with a three-second margin. So detect and clear it
+# instead of ordering it.
+# ---------------------------------------------------------------------------
+kuadrantRecovery:
+  enabled: true
+  # Needs `oc` only. Same image and reasoning as installPlanApprover above:
+  # origin-cli needs no registry.redhat.io pull secret, and ose-cli refuses
+  # the :latest tag.
+  image: quay.io/openshift/origin-cli:4.22
+  # The dependency whose absence causes this. Must be Available before a
+  # restart can help, or the operator just loses the race again.
+  dependencyDeployment: authorino-operator
+  # Waited on with `oc rollout status` after its pod is deleted.
+  operatorDeployment: kuadrant-operator-controller-manager
+  # How long to let Kuadrant reach Ready before concluding a restart is needed.
+  # Rarely spent in full: the poll also returns the moment MissingDependency
+  # appears, and a cluster that won the race is Ready within seconds.
+  settleSeconds: 120
+  # Pod restarts to try before failing the sync and turning `bootstrap` red.
+  attempts: 3
+  # Bounds the whole Job: the dependency wait plus `attempts` restarts.
+  timeoutSeconds: 900
+
+# ---------------------------------------------------------------------------
 # MCP Gateway — cluster-level pieces (templates/mcp-gateway-platform.yaml)
 #
 # One Gateway per participant, created by tenant-platform. What lives here is

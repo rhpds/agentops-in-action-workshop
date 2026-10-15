@@ -125,8 +125,19 @@ spec:
                 EXPECT=401
                 for p in mcp-auth-policy mcp-authz-policy; do
                   log "waiting for AuthPolicy $p to be Enforced"
-                  oc wait "authpolicy/$p" -n "$NS" --for=condition=Enforced --timeout=300s >/dev/null \
-                    || fail "AuthPolicy $p never reported Enforced"
+                  if ! oc wait "authpolicy/$p" -n "$NS" --for=condition=Enforced --timeout=300s >/dev/null; then
+                    # Say WHY. The commonest cause is not this policy at all:
+                    # a Kuadrant operator that resolved its dependencies before
+                    # authorino-operator was up rejects every AuthPolicy with
+                    # Accepted=False/MissingDependency, and the Enforced
+                    # condition then never appears. Without this line the log
+                    # says only "never reported Enforced", and finding the
+                    # cause means reading this condition, then the Kuadrant CR,
+                    # then correlating three pods' start times.
+                    log "  Accepted: $(oc get "authpolicy/$p" -n "$NS" \
+                      -o jsonpath="{.status.conditions[?(@.type=='Accepted')].status} {.status.conditions[?(@.type=='Accepted')].reason}: {.status.conditions[?(@.type=='Accepted')].message}" 2>/dev/null)"
+                    fail "AuthPolicy $p never reported Enforced"
+                  fi
                 done
                 wait_until 300 "Kuadrant's EnvoyFilter kuadrant-auth-$GW" has_filter
               else
