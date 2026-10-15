@@ -28,10 +28,7 @@ Your project already contains an OpenShell gateway and a bridge. You will create
 
 The request path is:
 
-[source,text,subs="verbatim,attributes"]
-----
-Operator console -> hermes-agent Service -> bridge relay -> OpenShell gateway -> Hermie
-----
+image::request-path.png["Request path: Operator console to the hermes-agent Service, to the bridge relay, to the OpenShell gateway, to Hermie",align=center]
 
 === Put Hermie in a sandbox
 
