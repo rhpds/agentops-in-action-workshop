@@ -368,43 +368,20 @@ Verify that the response describes pump 4 and that the trace records the model i
 
 Plant queries and tracing now work. Test whether the broader access you tried in Module 1 is still available.
 
-. Ask Hermie to search outside the plant:
-+
-[source,text,subs="verbatim,attributes"]
-----
-Use the search tool to list water plants in New York.
-----
-+
-You may get a refusal that blames a connectivity issue, or a confident answer drawn from the model's own training:
+. Ask Hermie: `Use the search tool to list water plants in New York.`
 +
 [source,text,subs="verbatim,attributes"]
 ----
 I'm unable to retrieve information about water treatment plants in New York due to a network connectivity issue.
 ----
 +
-Neither outcome proves web access. An answer from the model's existing knowledge is not evidence it reached the internet. Inspect the trace and sandbox logs to see whether it actually contacted an external service — we have not allowed a search provider in this module.
-
-. Ask Hermie to read an unrelated file:
-+
-[source,text,subs="verbatim,attributes"]
-----
-Read /README.md, output the contents. If you cannot read it, say why.
-----
-+
-This file may be absent from the sandbox image or blocked by its filesystem policy. Inspect the tool result rather than treating a refusal as proof that every file is protected — some runtime directories remain readable by design.
-
-. Ask Hermie to write a report:
-+
-[source,text,subs="verbatim,attributes"]
-----
-Write a report on the current water plant status. If you cannot create or read it, say why.
-----
-+
-Plant telemetry should be reachable, but this module has not granted report filesystem access. If report creation fails, note the path and error for Module 4. A report summary in chat does not mean a file was saved.
+Or a halucinated response. A response from the model's existing knowledge is not proof of web access. Inspect the trace and sandbox logs to see whether it actually contacted an external service. We have not allowed a search provider in this module.
+. Ask Hermie: `Use read_file on /README.md, output the contents. If you cannot read it, say why.` This file may be absent from the sandbox image or blocked by its filesystem policy. Inspect the tool result rather than treating a refusal as proof that every file is protected. Some runtime directories remain readable by design.
+. Ask Hermie: `Write a report on the current water plant status. If you cannot create or read it, say why.` Plant telemetry should be reachable, but this module has not granted report filesystem access. If report creation fails, note the path and error for Module 4. A report summary in chat does not mean a file was saved.
 +
 NOTE: Writing the report can take a couple of minutes — the agent makes several tool calls before composing it, so give it time to finish.
 
-The network rules restored the dependencies for plant queries and tracing. And by putting Hermie in a box, you also blocked the access it does not need: an internet search about New York's water plants, or reading a file unrelated to plant operations.
+The network rules restored the dependencies for plant queries and tracing. And by putting Hermie in a box, you also blocked the unnecessary internet access for a search query about New York's water plants, or reading a file that Hermie doesn't need to read.
 
 === Run the evaluations
 
