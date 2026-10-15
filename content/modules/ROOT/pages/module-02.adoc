@@ -116,6 +116,8 @@ The sandbox should be `Ready`. Alright, let's start sandboxed Hermie!
 openshell sandbox exec --name hermie -- start-hermes
 ----
 
+NOTE: You may see `cp: cannot create regular file '/reports/very-important-report.md': Permission denied` followed by `start-hermes: could not seed /reports; the console restores it on reset`. This is expected and harmless — the console writes that report back when the plant is reset. Hermes still starts, as the final `Hermes is up on 127.0.0.1:8080` line confirms.
+
 And make its port `8080` available through the gateway.
 
 [source,bash,role=execute,subs="verbatim,attributes"]
