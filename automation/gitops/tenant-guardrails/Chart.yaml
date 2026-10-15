@@ -1,0 +1,5 @@
+apiVersion: v2
+name: tenant-guardrails
+description: Per-participant NeMo Guardrails service and Northgate self-check configuration
+type: application
+version: 0.1.0

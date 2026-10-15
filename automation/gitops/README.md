@@ -61,6 +61,81 @@ ValidatingAdmissionPolicy API; they are mandatory, not an optional hardening fla
 
 ## Existing deployments
 
+### NeMo Guardrails
+
+Bootstrap creates a `<username>-guardrails` Argo CD Application for the Hermes
+harness by default. It deploys `tenant-guardrails` into the participant's normal
+workload namespace, after the platform, OpenShell, and policy Applications.
+Set `guardrails.enabled: false` in bootstrap values to omit it. TrustyAI must be
+Managed in the DataScienceCluster and the `NemoGuardrails` CRD must be installed.
+
+The chart creates ConfigMap `nemo-guardrails-config` followed by the
+`NemoGuardrails/nemo-guardrails` CR. The operator owns the generated Deployment,
+Service, and Route. `OPENAI_API_KEY` references the participant's existing
+`hermes-env` Secret, key `MODEL_API_KEY`; it is not embedded in the config.
+Route authentication is enabled by default through the operator annotation.
+
+Configure `model.baseUrl` and `model.model` in **bootstrap-tenant** to use a
+different endpoint or model. Those settings are forwarded to the platform
+(`agent.litellm.*`), sandbox (`model.*`), and guardrails (`model.*`) charts, so
+Hermes and its judge use the same inference settings. Direct overrides on one
+child Application can still make them diverge; use bootstrap for shared changes.
+
+The configuration enables Presidio PII detection on input and output, followed
+by `self check input` and `self check output`. Presidio blocks messages containing
+email addresses or phone numbers; it does not mask them. These checks run locally
+before the corresponding model-based judge, so detected input is blocked before
+being sent to the judge. Detection does not distinguish personal from business
+contact details. Configure `pii.entities` in the **tenant-guardrails** chart to
+change the entity types, or set `pii.enabled: false` to disable PII checks.
+The runtime image must include Presidio and its language model, as in the
+supported Red Hat NeMo Guardrails image.
+
+Both self-checks use the configured `main` model, with separate Northgate policy
+prompts in `prompts.yaml`. These judge topic relevance and instruction/response
+integrity. Adjust their policies and token budget through `selfCheck` values.
+
+The guardrails Application auto-syncs Git changes, with self-heal and prune off
+to preserve participant edits to its configuration, matching the policy app's
+approach. Re-sync restores the configuration from Git. Follow the operator's
+configuration reload behavior and verify readiness after changing config.
+
+To inspect readiness:
+
+```sh
+oc get nemoguardrails nemo-guardrails -n "${USER_NAME}-agentops" -w
+```
+
+Once Ready, test the standalone checks endpoint using the operator-created Route:
+
+```sh
+GUARDRAILS_URL="https://$(oc get route nemo-guardrails -n "${USER_NAME}-agentops" -o jsonpath='{.spec.host}')"
+curl -sS "$GUARDRAILS_URL/v1/guardrail/checks" \
+  -H "Authorization: Bearer $(oc whoami -t)" \
+  -H 'Content-Type: application/json' \
+  --data '{"model":"qwen3-235b-a22b","messages":[{"role":"user","content":"Summarize the pump maintenance notes for the next shift."}]}'
+```
+
+Use the configured model name if you changed it. Repeat with an unrelated
+personal travel request and inspect the rail verdicts, rather than inferring
+enforcement from an assistant refusal. Judge decisions are model-dependent and
+require live evaluation; rendering the configuration does not validate behavior.
+
+For a PII check, repeat the request with synthetic contact details, for example
+`Summarize this shift note: contact the operator at alex@example.com.` Inspect
+the verdict for `detect sensitive data on input`; it should block the request
+before the model-based self-check runs. Compare it with the same note without
+the email address. Verify output detection separately when integrating response
+checks; a successful input check does not demonstrate output enforcement.
+
+This provisions the service and configuration; it does **not** yet route the
+console, Hermes inference, or MCP tool traffic through Guardrails. Integrate
+checks at the intended input/output boundary as the next step. In particular,
+the Guardrails chat endpoint is not a transparent replacement for Hermes's
+tool-calling API. See the
+[Red Hat deployment and CR reference](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.5/html/enabling_ai_safety_with_guardrails/enabling-ai-safety-with-nemo-guardrails_nemo-guardrails)
+and [NVIDIA self-check documentation](https://docs.nvidia.com/nemo/guardrails/configure-guardrails/guardrail-catalog/self-check).
+
 ### Hermes safety documentation skill
 
 Both unsandboxed deployments install `read-safety-docs` under

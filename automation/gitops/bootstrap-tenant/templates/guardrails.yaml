@@ -1,0 +1,40 @@
+{{- if and .Values.guardrails.enabled (eq .Values.platform.agentHarness "hermes") }}
+{{- $user := include "tenant.username" . -}}
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{ $user }}-guardrails
+  namespace: {{ .Values.gitops.argocdNamespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "25"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: {{ .Values.gitops.argocdProject }}
+  source:
+    repoURL: {{ .Values.gitops.repoURL }}
+    targetRevision: {{ .Values.gitops.targetRevision }}
+    path: automation/gitops/tenant-guardrails
+    helm:
+      releaseName: {{ $user }}-guardrails
+      parameters:
+        - name: username
+          value: {{ $user | quote }}
+        - name: namespaceSuffix
+          value: {{ .Values.namespaceSuffix | quote }}
+        - name: model.baseUrl
+          value: {{ .Values.model.baseUrl | quote }}
+        - name: model.model
+          value: {{ .Values.model.model | quote }}
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: {{ include "tenant.namespace" . }}
+  syncPolicy:
+    # Apply Git changes automatically, but preserve participant config edits.
+    automated: {}
+    syncOptions:
+      - CreateNamespace=false
+    retry:
+      limit: 5
+      backoff: { duration: 15s, factor: 2, maxDuration: 3m }
+{{- end }}

@@ -50,6 +50,17 @@ gitops:
   # Created by bootstrap-infra, which the cluster catalog item bootstraps.
   argocdProject: agentops-in-action
 
+# Shared inference settings for Hermes and the NeMo self-check judge.
+# Configure these here so every child Application uses the same model.
+model:
+  baseUrl: "https://maas-rhdp.apps.maas.redhatworkshops.io/v1"
+  model: "qwen3-235b-a22b"
+
+guardrails:
+  # Requires the TrustyAI NemoGuardrails CRD. Uses the Hermes model-key Secret.
+  # Provisioned for the Hermes harness; no traffic is redirected automatically.
+  enabled: true
+
 # Values forwarded to tenant-platform.
 platform:
   # Quay org holding the workload images. Forwarded as a Helm *parameter*, so
