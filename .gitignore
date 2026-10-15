@@ -3,3 +3,4 @@ www/
 .cache/
 ui-bundle
 ui-bundle.zip
+.DS_Store

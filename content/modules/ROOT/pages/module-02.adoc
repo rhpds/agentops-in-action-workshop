@@ -116,8 +116,6 @@ The sandbox should be `Ready`. Alright, let's start sandboxed Hermie!
 openshell sandbox exec --name hermie -- start-hermes
 ----
 
-NOTE: You may see `cp: cannot create regular file '/reports/very-important-report.md': Permission denied` followed by `start-hermes: could not seed /reports; the console restores it on reset`. This is expected and harmless — the console writes that report back when the plant is reset. Hermes still starts, as the final `Hermes is up on 127.0.0.1:8080` line confirms.
-
 And make its port `8080` available through the gateway.
 
 [source,bash,role=execute,subs="verbatim,attributes"]
@@ -239,7 +237,7 @@ openshell policy update <sandbox> --rule-name <name> \
 * `--binary` limits the rule to the named executable.
 * `--wait` waits for the policy update to be applied.
 
-These are *OpenShell sandbox rules*, separate from Kubernetes NetworkPolicies. For more options, see the https://docs.nvidia.com/openshell/latest/sandboxes/policies[OpenShell policy documentation].
+These are *OpenShell sandbox rules*, separate from Kubernetes NetworkPolicies. For more options, see the https://docs.nvidia.com/openshell/v0.0.116/sandboxes/policies[OpenShell policy documentation].
 
 Apply a policy for Keycloak access:
 
@@ -254,7 +252,7 @@ openshell policy update hermie \
 ----
 --
 
-. And following the same pattern, apply another one for MCP Gateway so we can get access to tools (more on the Keycloak and MCP Gateway is coming in the next chapter).
+. And following the same pattern, apply another one for MCP Gateway so we can get access to tools; more on the Keycloak and MCP Gateway is coming in the next chapter:
 +
 --
 [source,bash,role=execute,subs="verbatim,attributes"]
@@ -269,7 +267,7 @@ openshell policy update hermie \
 ----
 --
 
-. Restart Hermie so it can fetch a token and discover the MCP tools. Network policy changes apply live, but Hermes discovers its tools at startup. Just for this one, we need to restart the boxed Hermie.
+. Restart Hermie so it can fetch a token and discover the MCP tools. Network policy changes apply live, but Hermes discovers its tools at startup. Just for this one, we need to restart the boxed Hermie:
 +
 --
 [source,bash,role=execute,subs="verbatim,attributes"]
@@ -370,21 +368,43 @@ Verify that the response describes pump 4 and that the trace records the model i
 
 Plant queries and tracing now work. Test whether the broader access you tried in Module 1 is still available.
 
-. Ask Hermie: `Use the search tool to list water plants in New York.` A response from the model's existing knowledge is not proof of web access. Inspect the trace and sandbox logs to see whether it actually contacted an external service. We have not allowed a search provider in this module.
-. Ask Hermie: `Use read_file on /README.md, output the contents. If you cannot read it, say why.` This file may be absent from the sandbox image or blocked by its filesystem policy. Inspect the tool result rather than treating a refusal as proof that every file is protected. Some runtime directories remain readable by design.
-. Ask Hermie: `Write a report on the current water plant status. If you cannot create or read it, say why.` Plant telemetry should be reachable, but this module has not granted report filesystem access. If report creation fails, note the path and error for Module 4. A report summary in chat does not mean a file was saved.
+. Ask Hermie to search outside the plant:
++
+[source,text,subs="verbatim,attributes"]
+----
+Use the search tool to list water plants in New York.
+----
++
+You may get a refusal that blames a connectivity issue, or a confident answer drawn from the model's own training:
++
+[source,text,subs="verbatim,attributes"]
+----
+I'm unable to retrieve information about water treatment plants in New York due to a network connectivity issue.
+----
++
+Neither outcome proves web access. An answer from the model's existing knowledge is not evidence it reached the internet. Inspect the trace and sandbox logs to see whether it actually contacted an external service — we have not allowed a search provider in this module.
+
+. Ask Hermie to read an unrelated file:
++
+[source,text,subs="verbatim,attributes"]
+----
+Read /README.md, output the contents. If you cannot read it, say why.
+----
++
+This file may be absent from the sandbox image or blocked by its filesystem policy. Inspect the tool result rather than treating a refusal as proof that every file is protected — some runtime directories remain readable by design.
+
+. Ask Hermie to write a report:
++
+[source,text,subs="verbatim,attributes"]
+----
+Write a report on the current water plant status. If you cannot create or read it, say why.
+----
++
+Plant telemetry should be reachable, but this module has not granted report filesystem access. If report creation fails, note the path and error for Module 4. A report summary in chat does not mean a file was saved.
 +
 NOTE: Writing the report can take a couple of minutes — the agent makes several tool calls before composing it, so give it time to finish.
 
-[source,text,subs="verbatim,attributes"]
-----
-I'm unable to retrieve information about water treatment plants in New York due to a network connectivity issue. 
-----
-
-Or a halucinated response. A response from the model's existing knowledge is not proof of web access. Inspect the trace and sandbox logs to see whether it actually contacted an external service. We have not allowed a search provider in this module.
-. Ask Hermie: `Read /README.md, output the contents. If you cannot read it, say why.` This file may be absent from the sandbox image or blocked by its filesystem policy. Inspect the tool result rather than treating a refusal as proof that every file is protected. Some runtime directories remain readable by design.
-
-The network rules restored the dependencies for plant queries and tracing. And by putting Hermie in a box, you also blocked the unnecessary internet access for a search query about New York's water plants, or reading a file that Hermie doesn't need to read.
+The network rules restored the dependencies for plant queries and tracing. And by putting Hermie in a box, you also blocked the access it does not need: an internet search about New York's water plants, or reading a file unrelated to plant operations.
 
 === Run the evaluations
 
