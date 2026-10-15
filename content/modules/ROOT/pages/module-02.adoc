@@ -35,7 +35,7 @@ image::request-path.png["Request path: Operator console to the hermes-agent Serv
 . Switch to Terminal tab and log in to your OpenShift cluster with your credentials.
 +
 --
-[source,bash,role="execute send-to-wetty",subs="verbatim,attributes"]
+[source,bash,role=execute,subs="verbatim,attributes"]
 ----
 oc login {openshift_api_url} --username {user} --password {password} --insecure-skip-tls-verify
 ----
@@ -53,7 +53,7 @@ Use insecure connections? (y/n): y
 . First, list the OpenShell components we mentioned above in your namespace:
 +
 --
-[source,bash,role="execute send-to-wetty",subs="verbatim,attributes"]
+[source,bash,role=execute,subs="verbatim,attributes"]
 ----
 oc get pods -n {user}-agentops \
   -l 'app.kubernetes.io/name in (openshell,hermes-openshell-bridge)'
@@ -65,7 +65,7 @@ You should see two pods: the *OpenShell gateway* (`{user}-openshell-0`) and the 
 . In order to run the agent in a sandbox, we need to use `openshell` commands against the OpenShell gateway. The gateway uses an in-cluster Service address and requires mTLS client certificates. Run these commands inside the `cli` container of the Hermes bridge pod, where the CLI and certificates are already available.
 +
 --
-[source,bash,role="execute send-to-wetty",subs="verbatim,attributes"]
+[source,bash,role=execute,subs="verbatim,attributes"]
 ----
 POD=$(oc get pod -l app.kubernetes.io/name=hermes-openshell-bridge -o name -n {user}-agentops)
 oc rsh -n {user}-agentops -c cli $POD
@@ -75,7 +75,7 @@ oc rsh -n {user}-agentops -c cli $POD
 . Let's point to the OpenShell gateway so we can create a sandboxed Hermie.
 +
 --
-[source,bash,role="execute send-to-wetty",subs="verbatim,attributes"]
+[source,bash,role=execute,subs="verbatim,attributes"]
 ----
 openshell gateway add https://{user}-openshell.{user}-agentops.svc.cluster.local:8080 --local --name openshell-gw
 openshell gateway select openshell-gw
@@ -85,7 +85,7 @@ openshell gateway select openshell-gw
 . Create the sandbox using the same Hermes image.
 +
 --
-[source,bash,role="execute send-to-wetty",subs="verbatim,attributes"]
+[source,bash,role=execute,subs="verbatim,attributes"]
 ----
 openshell sandbox create --name hermie --from quay.io/rh-aiservices-bu/waterplant-hermes:0.2.5 --cpu 2 --memory 4Gi --no-tty -- true
 ----
@@ -94,7 +94,7 @@ openshell sandbox create --name hermie --from quay.io/rh-aiservices-bu/waterplan
 . Hermie's user-specific configuration is externalized, so changing the model endpoint, credentials, or skill definitions does not require rebuilding the image. The bridge prepares these files in `/hermes` folder. We need to upload them before starting Hermie.
 +
 --
-[source,bash,role="execute send-to-wetty",subs="verbatim,attributes"]
+[source,bash,role=execute,subs="verbatim,attributes"]
 ----
 openshell sandbox upload hermie /hermes /sandbox
 ----
@@ -103,7 +103,7 @@ openshell sandbox upload hermie /hermes /sandbox
 . Confirm that the sandbox exists and the configuration was uploaded:
 +
 --
-[source,bash,role="execute send-to-wetty",subs="verbatim,attributes"]
+[source,bash,role=execute,subs="verbatim,attributes"]
 ----
 openshell sandbox list
 openshell sandbox exec --name hermie -- ls /sandbox/hermes
@@ -111,14 +111,14 @@ openshell sandbox exec --name hermie -- ls /sandbox/hermes
 
 The sandbox should be `Ready`. Alright, let's start sandboxed Hermie!
 
-[source,bash,role="execute send-to-wetty",subs="verbatim,attributes"]
+[source,bash,role=execute,subs="verbatim,attributes"]
 ----
 openshell sandbox exec --name hermie -- start-hermes
 ----
 
 And make its port `8080` available through the gateway.
 
-[source,bash,role="execute send-to-wetty",subs="verbatim,attributes"]
+[source,bash,role=execute,subs="verbatim,attributes"]
 ----
 openshell service expose hermie 8080 openai
 ----
@@ -139,14 +139,14 @@ openshell service expose hermie 8080 openai
 --
 For that, just type `exit` in the bridge CLI container terminal.
 
-[source,bash,role="execute send-to-wetty",subs="verbatim,attributes"]
+[source,bash,role=execute,subs="verbatim,attributes"]
 ----
 exit
 ----
 
 Then run the following command to point the UI to the sandboxed Hermie.
 
-[source,bash,role="execute send-to-wetty",subs="verbatim,attributes"]
+[source,bash,role=execute,subs="verbatim,attributes"]
 ----
 oc set env deployment/water-plant-ui AGENT_URL=http://hermes-agent.{user}-agentops.svc:8787 -n {user}-agentops
 ----
@@ -155,7 +155,7 @@ oc set env deployment/water-plant-ui AGENT_URL=http://hermes-agent.{user}-agento
 . Wait for it to be healthy:
 +
 --
-[source,bash,role="execute send-to-wetty",subs="verbatim,attributes"]
+[source,bash,role=execute,subs="verbatim,attributes"]
 ----
 oc rollout status deployment/water-plant-ui -n {user}-agentops
 ----
@@ -172,7 +172,7 @@ oc rollout status deployment/water-plant-ui -n {user}-agentops
 --
 See it for yourself. Let's go back to the pod that we were running the openshell commands:
 
-[source,bash,role="execute send-to-wetty",subs="verbatim,attributes"]
+[source,bash,role=execute,subs="verbatim,attributes"]
 ----
 POD=$(oc get pod -l app.kubernetes.io/name=hermes-openshell-bridge -o name -n {user}-agentops)
 oc rsh -n {user}-agentops -c cli $POD
@@ -182,7 +182,7 @@ oc rsh -n {user}-agentops -c cli $POD
 . Check OpenShell logs with this command:
 +
 --
-[source,bash,role="execute send-to-wetty",subs="verbatim,attributes"]
+[source,bash,role=execute,subs="verbatim,attributes"]
 ----
 openshell logs hermie --since 5m --source sandbox | grep DENIED
 ----
@@ -201,7 +201,7 @@ You'd see logs similar to below:
 . And you can check Hermie the agent's own logs:
 +
 --
-[source,bash,role="execute send-to-wetty",subs="verbatim,attributes"]
+[source,bash,role=execute,subs="verbatim,attributes"]
 ----
 openshell sandbox exec --name hermie -- cat /sandbox/hermes-gateway.log
 ----
@@ -241,7 +241,7 @@ These are *OpenShell sandbox rules*, separate from Kubernetes NetworkPolicies. F
 
 Apply a policy for Keycloak access:
 
-[source,bash,role="execute send-to-wetty",subs="verbatim,attributes"]
+[source,bash,role=execute,subs="verbatim,attributes"]
 ----
 openshell policy update hermie \
   --rule-name keycloak_token \
@@ -255,7 +255,7 @@ openshell policy update hermie \
 . And following the same pattern, apply another one for MCP Gateway so we can get access to tools (more on the Keycloak and MCP Gateway is coming in the next chapter).
 +
 --
-[source,bash,role="execute send-to-wetty",subs="verbatim,attributes"]
+[source,bash,role=execute,subs="verbatim,attributes"]
 ----
 openshell policy update hermie \
   --rule-name mcp_gateway \
@@ -270,14 +270,14 @@ openshell policy update hermie \
 . Restart Hermie so it can fetch a token and discover the MCP tools. Network policy changes apply live, but Hermes discovers its tools at startup. Just for this one, we need to restart the boxed Hermie.
 +
 --
-[source,bash,role="execute send-to-wetty",subs="verbatim,attributes"]
+[source,bash,role=execute,subs="verbatim,attributes"]
 ----
 openshell sandbox exec --name hermie -- start-hermes
 ----
 
 Confirm the two rules are present and inspect the startup log:
 
-[source,bash,role="execute send-to-wetty",subs="verbatim,attributes"]
+[source,bash,role=execute,subs="verbatim,attributes"]
 ----
 openshell policy get hermie --full
 openshell sandbox exec --name hermie -- tail -n 60 /sandbox/hermes-gateway.log
@@ -293,7 +293,7 @@ The latest startup should no longer report that it cannot fetch an MCP token or 
 
 Still doesn't work 😥 We may need to add a few more policies. Let's check the logs again:
 
-[source,bash,role="execute send-to-wetty",subs="verbatim,attributes"]
+[source,bash,role=execute,subs="verbatim,attributes"]
 ----
 openshell logs hermie --since 5m --source sandbox | grep DENIED | grep maas
 ----
@@ -309,7 +309,7 @@ You should see an output like below:
 . This log shows us that Hermie is missing a policy to let it to access the model endpoint. Let's apply it:
 +
 --
-[source,bash,role="execute send-to-wetty",subs="verbatim,attributes"]
+[source,bash,role=execute,subs="verbatim,attributes"]
 ----
 openshell policy update hermie \
   --rule-name model_endpoint \
@@ -330,7 +330,7 @@ Open the *MLflow traces* link in the console footer. Select your participant's e
 
 But..where is the trace about shutting down pump 4? Ahh, wonder why? Yup, you know what to do at this point! First, check the logs:
 
-[source,bash,role="execute send-to-wetty",subs="verbatim,attributes"]
+[source,bash,role=execute,subs="verbatim,attributes"]
 ----
 openshell logs hermie --since 5m --source sandbox | grep mlflow | grep DENIED
 ----
@@ -346,7 +346,7 @@ A familiar output:
 . Let's apply the policy:
 +
 --
-[source,bash,role="execute send-to-wetty",subs="verbatim,attributes"]
+[source,bash,role=execute,subs="verbatim,attributes"]
 ----
 openshell policy update hermie \
   --rule-name mlflow_tracing \
@@ -394,14 +394,14 @@ In the operator console, click the evaluation button. When the run finishes, com
 
 You do not need to run this for the main exercise. To demonstrate revocation, remove the model endpoint rule from inside the bridge CLI container:
 
-[source,bash,role="execute send-to-wetty",subs="verbatim,attributes"]
+[source,bash,role=execute,subs="verbatim,attributes"]
 ----
 openshell policy update hermie --remove-rule model_endpoint --wait
 ----
 
 Send another plant query and inspect the new denied event. Restore the rule with the `model_endpoint` command above before continuing.
 +
-[source,bash,role="execute send-to-wetty",subs="verbatim,attributes"]
+[source,bash,role=execute,subs="verbatim,attributes"]
 ----
 openshell policy update hermie \
   --rule-name model_endpoint \
