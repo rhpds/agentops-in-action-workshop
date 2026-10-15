@@ -18,12 +18,12 @@ You worked through several different kinds of harm: excessive plant access, acci
 |Layer |What it contributed
 |OpenShell sandbox and policies |Constrained the agent's environment, writable paths, and network destinations.
 |Keycloak and MCP Gateway |Established identity and enforced permissions for plant tool calls. Authentication alone did not authorize every tool.
-|Scoped documentation access |Restored useful reads while blocking the bulletin's unwanted redirect.
-|NeMo input checks |Checked operator requests for contact details and behavior outside the Northgate policy before forwarding them to Hermie.
+|Scoped documentation access |Restored useful reads while blocking the unwanted redirect.
+|NeMo Guardrails checks |Checked operator requests for contact details and behavior outside the Northgate policy before forwarding them to Hermie.
 |Traces and evaluations |Helped distinguish a refusal from an enforced denial, investigate actions, and check that useful tasks still worked.
 |===
 
-You also found the limits. A writable report directory still permits deletion. An allowed document or installed skill can contain unwanted instructions. Output checks in a ConfigMap do not protect replies unless the application actually submits those replies for checking.
+You also found the limits; like a writable report directory still permits deletion. An allowed document or installed skill can contain unwanted instructions. 
 
 Those findings are part of the result: you can explain what your controls enforce and where work remains.
 
