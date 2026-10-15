@@ -70,6 +70,10 @@ spec:
         # at once, and is the opposite of what BYOA is meant to show.
         - name: agent.harness
           value: {{ .Values.platform.agentHarness | quote }}
+        - name: agent.litellm.baseUrl
+          value: {{ .Values.model.baseUrl | quote }}
+        - name: agent.litellm.model
+          value: {{ .Values.model.model | quote }}
         # This participant's own MCP Gateway, and the Keycloak it trusts.
         - name: mcpGateway.enabled
           value: {{ .Values.platform.mcpGateway | quote }}

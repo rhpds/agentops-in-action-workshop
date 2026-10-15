@@ -118,7 +118,7 @@ class Consolidation(unittest.TestCase):
                 for app in (d for d in bootstrap if d['kind'] == 'Application'):
                     self.assertEqual(app['spec']['destination']['namespace'], ns)
                     automated = app['spec'].get('syncPolicy', {}).get('automated')
-                    if app['metadata']['name'].endswith('-policy'):
+                    if app['metadata']['name'].endswith(('-policy', '-guardrails')):
                         # Automated, so the baseline actually reaches the
                         # cluster -- it used to be manual-sync and every
                         # tenant sat OutOfSync with its AuthPolicies Missing.
@@ -129,7 +129,7 @@ class Consolidation(unittest.TestCase):
                         # that would revert a participant's edit mid-exercise.
                         # Pinned here because that is an easy thing to "fix"
                         # without knowing why it was off.
-                        self.assertEqual(automated, {}, 'policy app: automated, nothing else')
+                        self.assertEqual(automated, {}, 'editable app: automated, nothing else')
                     else:
                         self.assertTrue(automated.get('selfHeal') and automated.get('prune'),
                                         'infrastructure apps self-heal and prune')

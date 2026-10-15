@@ -40,6 +40,10 @@ spec:
         # sandbox policy has to allow the egress, which tenant-policy owns.
         - name: mlflow.enabled
           value: {{ .Values.platform.mlflowTracing | quote }}
+        - name: model.baseUrl
+          value: {{ .Values.model.baseUrl | quote }}
+        - name: model.model
+          value: {{ .Values.model.model | quote }}
   destination:
     server: https://kubernetes.default.svc
     namespace: {{ $ns }}
