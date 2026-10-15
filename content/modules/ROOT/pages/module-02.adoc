@@ -70,6 +70,7 @@ You should see two pods: the *OpenShell gateway* (`{user}-openshell-0`) and the 
 POD=$(oc get pod -l app.kubernetes.io/name=hermes-openshell-bridge -o name -n {user}-agentops)
 oc rsh -n {user}-agentops -c cli $POD
 ----
+
 --
 
 . Let's point to the OpenShell gateway so we can create a sandboxed Hermie.
@@ -80,6 +81,9 @@ oc rsh -n {user}-agentops -c cli $POD
 openshell gateway add https://{user}-openshell.{user}-agentops.svc.cluster.local:8080 --local --name openshell-gw
 openshell gateway select openshell-gw
 ----
+
+* `gateway add` registers your namespace's OpenShell gateway with the CLI under the name `openshell-gw`.
+* `gateway select` makes it the active gateway, so every later `openshell` command is sent to it.
 --
 
 . Create the sandbox using the same Hermes image.
@@ -89,6 +93,8 @@ openshell gateway select openshell-gw
 ----
 openshell sandbox create --name hermie --from quay.io/rh-aiservices-bu/waterplant-hermes:0.2.5 --cpu 2 --memory 4Gi --no-tty -- true
 ----
+
+This creates an empty sandbox named `hermie` from the same Hermes image, with 2 CPUs and 4Gi of memory, but does not start the agent yet.
 --
 
 . Hermie's user-specific configuration is externalized, so changing the model endpoint, credentials, or skill definitions does not require rebuilding the image. The bridge prepares these files in `/hermes` folder. We need to upload them before starting Hermie.
@@ -98,6 +104,8 @@ openshell sandbox create --name hermie --from quay.io/rh-aiservices-bu/waterplan
 ----
 openshell sandbox upload hermie /hermes /sandbox
 ----
+
+This copies the prepared configuration from the bridge's `/hermes` directory into `/sandbox` inside the sandbox.
 --
 
 . Confirm that the sandbox exists and the configuration was uploaded:
@@ -108,6 +116,9 @@ openshell sandbox upload hermie /hermes /sandbox
 openshell sandbox list
 openshell sandbox exec --name hermie -- ls /sandbox/hermes
 ----
+
+* `sandbox list` shows every sandbox on the gateway and its current state.
+* `sandbox exec` runs a command inside the sandbox -- here, listing the uploaded files.
 
 The sandbox should be `Ready`. Alright, let's start sandboxed Hermie!
 
@@ -368,16 +379,36 @@ Verify that the response describes pump 4 and that the trace records the model i
 
 Plant queries and tracing now work. Test whether the broader access you tried in Module 1 is still available.
 
-. Ask Hermie: `Use the search tool to list water plants in New York.`
+. Ask Hermie:
 +
-[source,text,subs="verbatim,attributes"]
+[source,text,role=copy,subs="verbatim,attributes"]
 ----
+Use the search tool to list water plants in New York.
+----
++
+You should get a response like:
++
+....
 I'm unable to retrieve information about water treatment plants in New York due to a network connectivity issue.
-----
+....
 +
 Or a halucinated response. A response from the model's existing knowledge is not proof of web access. Inspect the trace and sandbox logs to see whether it actually contacted an external service. We have not allowed a search provider in this module.
-. Ask Hermie: `Use read_file on /README.md, output the contents. If you cannot read it, say why.` This file may be absent from the sandbox image or blocked by its filesystem policy. Inspect the tool result rather than treating a refusal as proof that every file is protected. Some runtime directories remain readable by design.
-. Ask Hermie: `Write a report on the current water plant status. If you cannot create or read it, say why.` Plant telemetry should be reachable, but this module has not granted report filesystem access. If report creation fails, note the path and error for Module 4. A report summary in chat does not mean a file was saved.
+. Ask Hermie:
++
+[source,text,role=copy,subs="verbatim,attributes"]
+----
+Use read_file on /README.md, output the contents. If you cannot read it, say why.
+----
++
+This file may be absent from the sandbox image or blocked by its filesystem policy. Inspect the tool result rather than treating a refusal as proof that every file is protected. Some runtime directories remain readable by design.
+. Ask Hermie:
++
+[source,text,role=copy,subs="verbatim,attributes"]
+----
+Write a report on the current water plant status. If you cannot create or read it, say why.
+----
++
+Plant telemetry should be reachable, but this module has not granted report filesystem access. If report creation fails, note the path and error for Module 4. A report summary in chat does not mean a file was saved.
 +
 NOTE: Writing the report can take a couple of minutes — the agent makes several tool calls before composing it, so give it time to finish.
 

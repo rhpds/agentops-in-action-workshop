@@ -49,7 +49,7 @@ Everything below is specific to your participant account and is filled in automa
 
 |Keycloak admin console
 |`admin`
-|`{password}`
+|`redhat`
 |===
 
 == Modules
