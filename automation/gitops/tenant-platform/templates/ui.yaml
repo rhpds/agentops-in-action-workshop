@@ -415,6 +415,13 @@ spec:
             # console can reach it.
             - name: AGENT_SKILLS_SOURCE
               value: /config
+            # The pristine always-present report, published beside them. The
+            # console clears the reports directory and puts this one back,
+            # rather than asking the agent to rewrite it — which restored one
+            # file at best and never removed the ones its earlier turns had
+            # written.
+            - name: AGENT_REPORT_SOURCE
+              value: /config/very-important-report.md
             {{- else }}
             - name: AGENT_POD_SELECTOR
               value: agents.x-k8s.io/sandbox-name-hash
@@ -431,6 +438,8 @@ spec:
             # restart put back the same files.
             - name: AGENT_SKILLS_SOURCE
               value: /sandbox/hermes
+            - name: AGENT_REPORT_SOURCE
+              value: /sandbox/hermes/very-important-report.md
             {{- end }}
             - name: NAMESPACE
               value: {{ $ns }}
