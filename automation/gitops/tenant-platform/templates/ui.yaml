@@ -407,6 +407,14 @@ spec:
               value: {{ .Values.agent.hermes.home | quote }}
             - name: AGENT_SOUL_SOURCE
               value: /soul/SOUL.md
+            # The pristine skills, and reseed-skills.sh beside them. Same
+            # reasoning as the soul: a reset that leaves a patched SKILL.md
+            # behind has not reset the lab, because Hermes re-reads the file
+            # on the next lookup of that kind. agent-hermes-plain.yaml mounts
+            # this ConfigMap read-only into the hermes container so the
+            # console can reach it.
+            - name: AGENT_SKILLS_SOURCE
+              value: /config
             {{- else }}
             - name: AGENT_POD_SELECTOR
               value: agents.x-k8s.io/sandbox-name-hash
@@ -418,6 +426,11 @@ spec:
               value: /sandbox/.hermes
             - name: AGENT_SOUL_SOURCE
               value: /sandbox/hermes/SOUL.md
+            # Where the bridge uploaded them — start-hermes seeds the live
+            # skills from exactly this directory, so a reset and a Hermes
+            # restart put back the same files.
+            - name: AGENT_SKILLS_SOURCE
+              value: /sandbox/hermes
             {{- end }}
             - name: NAMESPACE
               value: {{ $ns }}

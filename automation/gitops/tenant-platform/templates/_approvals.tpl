@@ -18,10 +18,28 @@ approval.py's hardline blocklist is unconditional, so it still applies.
 
 execute_code is gated unconditionally in a gateway context whatever the script
 does (check_execute_code_guard), which is how a module 1 report write
-deadlocked. write-report tells the agent to use `terminal`, whose command trips
-no dangerous pattern — the model reached for execute_code anyway. Dropping the
-toolset leaves terminal, read_file and write_file, so the skill's documented
-path is the only one on offer.
+deadlocked. Dropping the toolset keeps the model off that path. Note that
+approvals.mode off would have cleared the deadlock by itself — check_execute_code_guard
+returns approved immediately when the mode is off — so this subtraction is not
+what unblocked anything. It is here because execute_code scripts bypass
+DANGEROUS_PATTERNS by design, and the governable path is the documented one.
+
+platform_toolsets is what actually makes `terminal` reachable, and without it
+the paragraph above was wrong: terminal was never on offer either. Hermes infers
+a platform's enabled toolsets by subset — a configurable toolset counts as on
+only when every tool it resolves to is also in the platform bundle. In the
+running gateway the `terminal` toolset resolves to terminal, process,
+read_terminal and close_terminal, while hermes-api-server carries only terminal
+and process, so the whole toolset is dropped. The agent then reports "the
+required 'terminal' tool is not available" and writes no report. Measured on
+cluster-slkjc: tool.terminal appears in none of 1200+ recorded spans, and GET
+/v1/toolsets reports terminal enabled=false. Naming the toolsets explicitly
+switches _get_platform_tools to direct membership and skips the inference.
+
+The list is the set the inference already produced, plus terminal — verified
+behaviour-neutral otherwise, and the `gateway` MCP toolset still resolves, so
+every telemetry, maintenance and control tool is untouched. code_execution is
+omitted here as well as subtracted above; belt and braces.
 
 A named template, not inline config text, so it can be hashed into the pod
 annotations that consume it: no existing checksum covers the inline config, and
@@ -37,6 +55,9 @@ approvals:
 
 agent:
   disabled_toolsets: [code_execution]
+
+platform_toolsets:
+  api_server: [terminal, file, skills, web, memory]
 {{- end -}}
 
 {{- /*

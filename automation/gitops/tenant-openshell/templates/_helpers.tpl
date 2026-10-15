@@ -70,6 +70,12 @@ Hermes' default approvals.mode of manual parks the prompt in a queue with no
 listener and the agent waits on an operator who is never asked. Must stay
 byte-identical to that copy — the two configs should differ only by runtime.
 
+platform_toolsets pins api_server's toolsets explicitly, which is what makes
+`terminal` reachable at all: Hermes otherwise infers the enabled set by subset
+and drops the whole terminal toolset, because it resolves to four tools while
+hermes-api-server carries only two of them. Same defect here as on the plain
+Hermes — this chart runs the same api_server platform.
+
 A named template so it can be hashed into the bridge's pod annotation:
 checksum/bridge covers .Values and the bridge files but not inline config text,
 and the supervisor renders config.yaml only at start-up, so an inline edit
@@ -86,6 +92,9 @@ approvals:
 
 agent:
   disabled_toolsets: [code_execution]
+
+platform_toolsets:
+  api_server: [terminal, file, skills, web, memory]
 {{- end -}}
 
 {{- /*
