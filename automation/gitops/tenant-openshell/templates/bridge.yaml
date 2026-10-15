@@ -261,6 +261,22 @@ data:
     security:
       allow_private_urls: {{ .Values.hermes.allowPrivateUrls }}
 
+    # Approvals off and execute_code removed, for the same reason as the plain
+    # Hermes — see tenant-platform/templates/agent-hermes-plain.yaml. The
+    # console reaches this one through the relay but still speaks
+    # /v1/chat/completions, which registers no approval callback, so a
+    # manual-mode prompt blocks on a queue nothing can resolve.
+    #
+    # Here it matters more, not less: the sandbox is the control. OpenShell's
+    # filesystem and network policy decide what the agent may touch, and that
+    # is what module 4 has participants tighten. An approval the operator is
+    # never shown adds no containment, it just looks like a broken agent.
+    approvals:
+      mode: "off"
+
+    agent:
+      disabled_toolsets: [code_execution]
+
     mcp_servers:
       # One endpoint: this participant's MCP Gateway. `auth: oauth` makes Hermes
       # send the token mcp-token-refresh.py keeps at
