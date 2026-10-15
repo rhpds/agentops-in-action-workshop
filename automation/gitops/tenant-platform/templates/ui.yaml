@@ -441,6 +441,8 @@ spec:
             - name: NEMO_CONFIG_ID
               value: {{ .Values.ui.nemoConfigId | quote }}
             {{- end }}
+            - name: NEMO_MODEL
+              value: {{ .Values.ui.nemoModel | default .Values.agent.litellm.model | quote }}
           volumeMounts:
             - name: probe-defs
               mountPath: /config/probe-defs

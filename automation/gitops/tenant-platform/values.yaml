@@ -331,6 +331,18 @@ ui:
   # config tenant-guardrails ships and the instance's own default, so this is
   # belt-and-braces; empty omits the field and lets the server choose.
   nemoConfigId: northgate
+  # The judge the rails call, sent as the request's `model`. Empty follows
+  # agent.litellm.model, which bootstrap-tenant forwards from the same
+  # model.model it gives tenant-guardrails -- so one value stays in step across
+  # both charts.
+  #
+  # Not cosmetic, and not what the field name suggests: `model` is required
+  # (the server 422s without it) and it OVERRIDES the rail config's own
+  # `models:` entry. Naming the agent's served name here, `hermes-agent`, got a
+  # 200 with the rail failed underneath on `[401] key not allowed to access
+  # model. This key can only access models=['qwen3-235b-a22b']` -- a guardrail
+  # that answers successfully and checks nothing.
+  nemoModel: ""
   # The attack/eval engine that runs inside the console. It probes this
   # participant's agent over the same chat endpoint the chat pane uses, so it
   # needs no runner Deployment and no cross-namespace RBAC — which is why

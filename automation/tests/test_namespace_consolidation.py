@@ -135,6 +135,9 @@ class Consolidation(unittest.TestCase):
                                         'infrastructure apps self-heal and prune')
                 ui = resource(docs, 'Deployment', 'water-plant-ui')
                 env = {e['name']: e.get('value') for e in ui['spec']['template']['spec']['containers'][0]['env']}
+                # What the guardrails rail set is told to judge with, taken
+                # from the same place bootstrap-tenant forwards to both charts.
+                env_agent_model = 'qwen3-235b-a22b'
                 if harness == 'hermes':
                     # hermes-plain whenever it is deployed alongside the
                     # gateway, hermes-agent otherwise. ui.yaml derives this
@@ -156,6 +159,13 @@ class Consolidation(unittest.TestCase):
                 self.assertIn('NEMO_ENDPOINT', env, 'module 6 edits a variable that must exist')
                 self.assertEqual(env['NEMO_ENDPOINT'], '')
                 self.assertEqual(env['NEMO_CONFIG_ID'], 'northgate')
+                # The judge the rails call, which must track the model the key
+                # is actually entitled to. `model` is required on the check
+                # request and overrides the rail config's own `models:` entry,
+                # so a stale value here yields a 200 with the rail failed
+                # underneath on `[401] key not allowed to access model` -- a
+                # guardrail that reports success and checks nothing.
+                self.assertEqual(env['NEMO_MODEL'], env_agent_model)
                 # No RBAC for the guardrail, deliberately: tenant-guardrails
                 # runs it with authEnabled false, so the console just calls the
                 # Service. An earlier revision authenticated through
