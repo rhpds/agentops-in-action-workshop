@@ -145,6 +145,27 @@ class Consolidation(unittest.TestCase):
                     plain = resource(docs, 'Deployment', 'hermes-plain', required=False)
                     expected = 'hermes-plain' if plain else 'hermes-agent'
                     self.assertEqual(env['AGENT_URL'], f'http://{expected}.{ns}.svc:8787')
+                # The input guardrail ships off, and ships *present*. Both
+                # halves matter: empty is the lab's starting condition, and
+                # rendering the variable anyway is what puts it in
+                # `oc set env --list` for the participant to overwrite in
+                # module 6 instead of having to invent the name.
+                self.assertIn('NEMO_ENDPOINT', env, 'module 6 edits a variable that must exist')
+                self.assertEqual(env['NEMO_ENDPOINT'], '')
+                self.assertEqual(env['NEMO_CONFIG_ID'], 'northgate')
+                # kube-rbac-proxy in front of the guardrails server authorizes
+                # on the string it was configured with --
+                # `nemo-guardrails-service` -- while the Service object is
+                # named `nemo-guardrails`. Naming the real Service here looks
+                # like a cleanup and 403s every check, so the mismatch is
+                # pinned rather than left to a reader's judgement.
+                nemo_role = resource(docs, 'Role', 'water-plant-ui-nemo-check')
+                self.assertEqual(nemo_role['rules'], [{
+                    'apiGroups': [''],
+                    'resources': ['services'],
+                    'resourceNames': ['nemo-guardrails-service'],
+                    'verbs': ['get'],
+                }])
                 if runtime == 'openshell':
                     gateway = resource(docs, 'StatefulSet', f'{user}-openshell')
                     gateway_labels = gateway['spec']['template']['metadata']['labels']

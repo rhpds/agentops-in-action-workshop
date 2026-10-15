@@ -424,11 +424,29 @@ having the engine ask the agent to rewrite the canonical content back.
   numbering again, with different titles. The vendored copies under
   `probes/defs/` already use the shipped `module-01..06` numbering.
 - **Add a seventh eval** so the counter reads out of 7.
-- **Deploy NeMo Guardrails.** `NEMO_ENDPOINT` and `nemo-guardrail:8080` appear
-  in no manifest anywhere in the repo. `account-takeover-guardrails` is armed
-  and currently reads "got through" every time, which is the honest baseline
-  module 6 exists to move — judging it never needed the guardrail, only
-  defending against it does.
+- **~~Deploy NeMo Guardrails.~~** Done, as `tenant-guardrails`. Two details
+  this note got wrong and that cost an afternoon: the Service is
+  `nemo-guardrails`, not `nemo-guardrail`, and it is **HTTPS on 443** (→ 8443)
+  behind `kube-rbac-proxy`, not plain HTTP on 8080 — the CR carries
+  `security.opendatahub.io/enable-auth`. Authorization is a
+  SelfSubjectAccessReview for `get services/`**`nemo-guardrails-service`**,
+  which is a name no Service actually has: the proxy matches the string in its
+  own ConfigMap, so the console's Role (`water-plant-ui-nemo-check` in
+  tenant-platform) has to use it or every check 403s. `NEMO_ENDPOINT` now
+  exists, ships empty, and is in the platform Application's
+  `ignoreDifferences` beside `AGENT_URL` so module 6's `oc set env` survives
+  self-heal. `account-takeover-guardrails` is still armed and still reads "got
+  through" until a participant turns the guardrail on — which is the honest
+  baseline module 6 exists to move.
+- **Raise the guardrails memory limit.** The operator sets no `resources` on
+  the server container and the CR exposes no knob for it (`spec.template.pod`
+  is scheduling constraints only), so it inherits the namespace LimitRange
+  default of **512Mi and is OOMKilled serving its first check** — observed on
+  cluster-pz7xk, `restarts=2, lastState=OOMKilled, exit=137`, on both a
+  sensitive-data prompt and an LLM-judged one. Until the LimitRange default is
+  raised the rails cannot answer at all; the console degrades to "check did not
+  run" rather than blocking, so the lab stays usable but module 6 proves
+  nothing.
 - **Decide where the engine lives permanently.** It is in the console because
   that needed no cross-namespace RBAC, no leader election and no second
   Deployment. If a cross-participant leaderboard is wanted, port it behind the

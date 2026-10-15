@@ -99,16 +99,25 @@ spec:
   destination:
     server: https://kubernetes.default.svc
     namespace: {{ include "tenant.namespace" . }}
-  # The one exception to self-heal: the console's AGENT_URL, so it can be
-  # flipped by hand between the sandboxed Hermes (hermes-agent) and the plain
-  # one (hermes-plain) — see tenant-platform agent.hermes.plain. Without
-  # RespectIgnoreDifferences an automated sync would still write it back.
+  # The exceptions to self-heal, both of them console environment variables a
+  # participant is told to set by hand:
+  #
+  #   AGENT_URL     flips between the sandboxed Hermes (hermes-agent) and the
+  #                 plain one (hermes-plain) in module 2 — see tenant-platform
+  #                 agent.hermes.plain.
+  #   NEMO_ENDPOINT turns on the input guardrail in module 6. The chart ships
+  #                 it empty on purpose (tenant-platform ui.nemoEndpoint), so
+  #                 this is what makes the edit stick rather than vanish at the
+  #                 next sync.
+  #
+  # Without RespectIgnoreDifferences below, an automated sync writes both back.
   ignoreDifferences:
     - group: apps
       kind: Deployment
       name: water-plant-ui
       jqPathExpressions:
         - '.spec.template.spec.containers[] | select(.name == "ui") | .env[] | select(.name == "AGENT_URL")'
+        - '.spec.template.spec.containers[] | select(.name == "ui") | .env[] | select(.name == "NEMO_ENDPOINT")'
   syncPolicy:
     # Nothing here is something an attendee is told to touch, so restoring it
     # can only help them.

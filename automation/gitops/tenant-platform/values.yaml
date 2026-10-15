@@ -58,7 +58,12 @@ image:
     # 0.1.1 was the release that handed Hermes its conversation by
     # X-Hermes-Session-Id instead of replaying the on-screen transcript,
     # which had the model narrating tool calls it never made.
-    tag: "0.2.0"
+    #
+    # 0.2.1 adds the NeMo Guardrails input check: every prompt -- the chat
+    # pane's and the probe engine's -- is checked before the agent is asked,
+    # when ui.nemoEndpoint is set. Needs the build pushed to Quay before this
+    # tag resolves.
+    tag: "0.2.1"
   docs:
     repository: waterplant-docs
     # The Northgate safety documentation site. Three real pages the agent is
@@ -293,6 +298,30 @@ ui:
   # Note the prefixes differ on the same host: OTLP ingest is at the server
   # root (/v1/traces) while the REST API is under /mlflow/api/2.0/mlflow/...
   mlflowApiUrl: https://mlflow.redhat-ods-applications.svc.cluster.local:8443
+  # NeMo Guardrails input check, applied to every prompt before the agent is
+  # asked — the chat pane's and the attack/eval engine's alike.
+  #
+  # Empty is the lab's starting condition, and deliberately so: the baseline
+  # weakness is absent infrastructure config, not a flag in the console, so
+  # with this unset nothing is checked and nothing says it should have been.
+  # Module 6 is where a participant sets it by hand, which is why it is named
+  # in the platform Application's ignoreDifferences alongside agentUrl —
+  # without that an automated sync writes it straight back out.
+  #
+  # When set it is the HTTPS Service, e.g.
+  # https://nemo-guardrails.<user>-agentops.svc:443. Not plain HTTP and not
+  # port 8080: tenant-guardrails renders the instance with
+  # security.opendatahub.io/enable-auth, so kube-rbac-proxy answers on 8443
+  # behind Service port 443 and the server itself is never exposed. The
+  # console authenticates with its own projected ServiceAccount token and
+  # verifies the service-signer certificate with the CA in the same
+  # projection, so this needs no Secret and no extra volume — only the Role
+  # below.
+  nemoEndpoint: ""
+  # The rail set to apply, sent as guardrails.config_id. `northgate` is the
+  # config tenant-guardrails ships and the instance's own default, so this is
+  # belt-and-braces; empty omits the field and lets the server choose.
+  nemoConfigId: northgate
   # The attack/eval engine that runs inside the console. It probes this
   # participant's agent over the same chat endpoint the chat pane uses, so it
   # needs no runner Deployment and no cross-namespace RBAC — which is why

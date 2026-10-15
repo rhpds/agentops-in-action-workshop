@@ -161,6 +161,65 @@ subjects:
 {{- end }}
 ---
 {{/*
+Lets the console call the NeMo Guardrails check endpoint.
+
+The instance is rendered with security.opendatahub.io/enable-auth, so
+kube-rbac-proxy sits in front of the server and turns every request into a
+SelfSubjectAccessReview. These three strings are that review, and they come
+from the proxy's own ConfigMap (nemo-guardrails-rbac-proxy-config), not from
+anything the guardrails API documents.
+
+The resourceName is the trap: the proxy is configured with
+`nemo-guardrails-service`, while the Service object the operator creates is
+named `nemo-guardrails`. Nothing reconciles the two — RBAC matches the string
+the proxy was given — so a Role naming the real Service 403s every check.
+Verified on cluster-pz7xk: without this binding the console's ServiceAccount
+gets `Forbidden (user=system:serviceaccount:<ns>:water-plant-ui, verb=get,
+resource=services)` and the console reports the check as not run.
+
+Granted unconditionally rather than behind `if .Values.ui.nemoEndpoint`,
+because the endpoint is the one variable a participant sets by hand: gating the
+permission on a value GitOps does not own would make module 6's `oc set env`
+appear to work and then fail every check on a 403.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $uiSa }}-nemo-check
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: water-plant-ui
+    app.kubernetes.io/part-of: water-plant
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    resourceNames: ["nemo-guardrails-service"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $uiSa }}-nemo-check
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: water-plant-ui
+    app.kubernetes.io/part-of: water-plant
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $uiSa }}-nemo-check
+subjects:
+  - kind: ServiceAccount
+    name: {{ $uiSa }}
+    namespace: {{ $ns }}
+---
+{{/*
 The operator console.
 
 The dashboard reads plant-api directly rather than through the agent. That is
@@ -421,6 +480,18 @@ spec:
             {{- end }}
             - name: NAMESPACE
               value: {{ $ns }}
+            # The input guardrail. Rendered even when empty, exactly as
+            # AGENT_URL is: an empty variable shows up in `oc set env --list`
+            # for the participant to overwrite in module 6, where an absent
+            # one would have to be invented from the guide. Both are named in
+            # the platform Application's ignoreDifferences, which is what lets
+            # that hand edit survive self-heal.
+            - name: NEMO_ENDPOINT
+              value: {{ .Values.ui.nemoEndpoint | quote }}
+            {{- if .Values.ui.nemoConfigId }}
+            - name: NEMO_CONFIG_ID
+              value: {{ .Values.ui.nemoConfigId | quote }}
+            {{- end }}
           volumeMounts:
             - name: probe-defs
               mountPath: /config/probe-defs
