@@ -119,7 +119,7 @@ Hermie can perform plant tasks. But what else can it do?
 List water plants in New York.
 ----
 
-Hermie can do an internat research and get back to you:
+Hermie can do some internet research and get back to you:
 
 [source,text,subs="verbatim,attributes"]
 ----
