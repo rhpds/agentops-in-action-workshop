@@ -145,27 +145,27 @@ class Consolidation(unittest.TestCase):
                     plain = resource(docs, 'Deployment', 'hermes-plain', required=False)
                     expected = 'hermes-plain' if plain else 'hermes-agent'
                     self.assertEqual(env['AGENT_URL'], f'http://{expected}.{ns}.svc:8787')
-                # The input guardrail ships off, and ships *present*. Both
-                # halves matter: empty is the lab's starting condition, and
-                # rendering the variable anyway is what puts it in
-                # `oc set env --list` for the participant to overwrite in
-                # module 6 instead of having to invent the name.
+                # The input guardrail ships off, and ships present *in the
+                # rendered manifest* -- which is not the same as reaching the
+                # cluster. The platform Application ignores this path, and
+                # RespectIgnoreDifferences strips it from the desired state,
+                # so a participant's Deployment has no NEMO_ENDPOINT until
+                # module 6's `oc set env` creates one. Pinned here because the
+                # rendered value is what a non-ignoring consumer gets, and
+                # because dropping it would silently break those.
                 self.assertIn('NEMO_ENDPOINT', env, 'module 6 edits a variable that must exist')
                 self.assertEqual(env['NEMO_ENDPOINT'], '')
                 self.assertEqual(env['NEMO_CONFIG_ID'], 'northgate')
-                # kube-rbac-proxy in front of the guardrails server authorizes
-                # on the string it was configured with --
-                # `nemo-guardrails-service` -- while the Service object is
-                # named `nemo-guardrails`. Naming the real Service here looks
-                # like a cleanup and 403s every check, so the mismatch is
-                # pinned rather than left to a reader's judgement.
-                nemo_role = resource(docs, 'Role', 'water-plant-ui-nemo-check')
-                self.assertEqual(nemo_role['rules'], [{
-                    'apiGroups': [''],
-                    'resources': ['services'],
-                    'resourceNames': ['nemo-guardrails-service'],
-                    'verbs': ['get'],
-                }])
+                # No RBAC for the guardrail, deliberately: tenant-guardrails
+                # runs it with authEnabled false, so the console just calls the
+                # Service. An earlier revision authenticated through
+                # kube-rbac-proxy and needed a namespace-wide `get services`
+                # grant -- the proxy writes `resourceName` where upstream reads
+                # `name`, so its own scoping is dropped and a resourceNames
+                # Role 403s every check. Pinned as an absence so that Role does
+                # not come back with the reasoning lost.
+                self.assertIsNone(resource(docs, 'Role', 'water-plant-ui-nemo-check',
+                                           required=False))
                 if runtime == 'openshell':
                     gateway = resource(docs, 'StatefulSet', f'{user}-openshell')
                     gateway_labels = gateway['spec']['template']['metadata']['labels']

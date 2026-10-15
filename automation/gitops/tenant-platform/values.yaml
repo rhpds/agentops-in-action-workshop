@@ -308,6 +308,15 @@ ui:
   # in the platform Application's ignoreDifferences alongside agentUrl —
   # without that an automated sync writes it straight back out.
   #
+  # Note what that costs, verified on cluster-pz7xk: with
+  # RespectIgnoreDifferences, Argo strips the ignored path from the DESIRED
+  # state too, so NEMO_ENDPOINT is never created on the Deployment at all --
+  # it does not arrive as an empty placeholder. (NEMO_CONFIG_ID, rendered two
+  # lines below it and not ignored, does arrive.) The participant's
+  # `oc set env` creates the variable, and ignoreDifferences then protects it;
+  # the value here only reaches a cluster whose Application does not ignore
+  # this path, such as a direct `helm template` or automation/dev.
+  #
   # When set it is the HTTPS Service, e.g.
   # https://nemo-guardrails.<user>-agentops.svc:443. Not plain HTTP and not
   # port 8080: tenant-guardrails renders the instance with

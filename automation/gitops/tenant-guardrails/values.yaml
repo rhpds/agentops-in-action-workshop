@@ -6,8 +6,20 @@ guardrails:
   configName: northgate
   configMap: nemo-guardrails-config
   replicas: 1
-  # Protect the operator-created Route with Kubernetes authentication.
-  authEnabled: true
+  # No authentication. The only caller is the console, one pod away in the same
+  # namespace, and with auth on the operator puts kube-rbac-proxy in front of
+  # the Service as well as the Route -- so a local call needed a token and a
+  # namespace-wide `get services` grant to satisfy a SubjectAccessReview the
+  # proxy sends without a resource name (it writes `resourceName` where
+  # kube-rbac-proxy reads `name`, so its own scoping is dropped). That is a lot
+  # of machinery for pod-to-pod traffic inside one tenant.
+  #
+  # Note what this gives up: the operator always creates a Route and the CRD
+  # exposes no knob to suppress it, so the endpoint is publicly reachable and
+  # now unauthenticated. Acceptable here only because every rail is advisory --
+  # the console fails open and the lab is a scratch workshop tenant -- and it is
+  # the reason this value exists rather than being hard-coded.
+  authEnabled: false
   # Existing participant credentials; no API key is copied into a ConfigMap.
   envSecret: hermes-env
   apiKeySecretKey: MODEL_API_KEY
