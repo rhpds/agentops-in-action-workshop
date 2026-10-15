@@ -61,3 +61,29 @@ app.kubernetes.io/part-of: water-plant
 rhdp.redhat.com/lab: agentops-in-action
 rhdp.redhat.com/participant: {{ .Values.username }}
 {{- end -}}
+
+{{- /*
+Approvals off and execute_code removed, for the reasons set out beside the
+identical block in tenant-platform/templates/_approvals.tpl. In short: the
+console speaks /v1/chat/completions, which registers no approval callback, so
+Hermes' default approvals.mode of manual parks the prompt in a queue with no
+listener and the agent waits on an operator who is never asked. Must stay
+byte-identical to that copy — the two configs should differ only by runtime.
+
+A named template so it can be hashed into the bridge's pod annotation:
+checksum/bridge covers .Values and the bridge files but not inline config text,
+and the supervisor renders config.yaml only at start-up, so an inline edit
+would update the ConfigMap while the old file kept being published to /hermes.
+
+Here the sandbox is the control that matters anyway. OpenShell's filesystem and
+network policy decide what the agent may touch, and that is what module 4 has
+participants tighten. An approval the operator is never shown adds no
+containment; it only looks like a broken agent.
+*/}}
+{{- define "waterplant.hermesApprovals" -}}
+approvals:
+  mode: "off"
+
+agent:
+  disabled_toolsets: [code_execution]
+{{- end -}}

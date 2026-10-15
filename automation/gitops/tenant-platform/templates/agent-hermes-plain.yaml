@@ -4,45 +4,6 @@
 {{- $h := .Values.agent.hermes -}}
 {{- $image := printf "%s:%s" $h.plain.image $h.plain.tag -}}
 {{- $gwUrl := printf "http://%s-%s.%s.svc.cluster.local:8080/mcp" .Values.mcpGateway.gatewayName .Values.mcpGateway.gatewayClassName $ns -}}
-{{- /*
-Approvals off and execute_code removed. Defined here, and hashed into the pod
-annotation below, so a change to either setting actually rolls the pod: no
-checksum covers this file's inline config text, so editing it alone updates the
-ConfigMap while seed-config — which only runs at pod start — keeps copying the
-old file into $HERMES_HOME.
-
-Why the settings. The console speaks /v1/chat/completions, and that handler
-registers no approval callback — only /v1/runs does, with
-/v1/runs/{id}/approval to resolve it. So a manual-mode prompt calls
-submit_pending() into a per-session queue with no listener, and the tool
-returns "Asking the user for approval". The agent blocks forever and tells the
-operator it is waiting on them, while nothing in the console can grant it;
-saying "yes" in the chat is a new turn, not an approval, so the queue entry is
-untouched. Hermes defaults approvals.mode to manual, so leaving it unset is
-what selects this.
-
-mode: off rather than smart — smart needs auxiliary.approval configured and an
-escalate verdict falls through to the same dead queue. Coherent with the soul,
-too: the agent is not an authorization boundary here, the platform is. And
-approval.py's hardline blocklist is unconditional, so it still applies.
-
-execute_code is gated unconditionally in a gateway context whatever the script
-does (check_execute_code_guard), which is how a module 1 report write
-deadlocked. write-report tells the agent to use `terminal`, whose command trips
-no dangerous pattern — the model reached for execute_code anyway. Dropping the
-toolset leaves terminal, read_file and write_file, so the skill's documented
-path is the only one on offer.
-
-Must stay byte-identical to the bridge's copy in tenant-openshell: the two
-configs should differ only by runtime.
-*/}}
-{{- define "waterplant.hermesApprovals" -}}
-approvals:
-  mode: "off"
-
-agent:
-  disabled_toolsets: [code_execution]
-{{- end }}
 {{/*
 A second, unsandboxed Hermes beside whichever runtime agent.hermes.runtime
 selected, so the console can be pointed at either and the two compared on the

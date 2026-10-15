@@ -261,21 +261,7 @@ data:
     security:
       allow_private_urls: {{ .Values.hermes.allowPrivateUrls }}
 
-    # Approvals off and execute_code removed, for the same reason as the plain
-    # Hermes — see tenant-platform/templates/agent-hermes-plain.yaml. The
-    # console reaches this one through the relay but still speaks
-    # /v1/chat/completions, which registers no approval callback, so a
-    # manual-mode prompt blocks on a queue nothing can resolve.
-    #
-    # Here it matters more, not less: the sandbox is the control. OpenShell's
-    # filesystem and network policy decide what the agent may touch, and that
-    # is what module 4 has participants tighten. An approval the operator is
-    # never shown adds no containment, it just looks like a broken agent.
-    approvals:
-      mode: "off"
-
-    agent:
-      disabled_toolsets: [code_execution]
+{{ include "waterplant.hermesApprovals" . | indent 4 }}
 
     mcp_servers:
       # One endpoint: this participant's MCP Gateway. `auth: oauth` makes Hermes
@@ -438,6 +424,7 @@ spec:
         # running in the sandbox; the new supervisor adopts it.
         checksum/web-direct: {{ printf "%s%s%s" (.Files.Get "files/hermes-web-direct/plugin.yaml") (.Files.Get "files/hermes-web-direct/__init__.py") (.Files.Get "files/hermes-web-direct/provider_direct.py") | sha256sum }}
         checksum/docs-skill: {{ .Files.Get "files/skills/read-safety-docs/SKILL.md" | sha256sum }}
+        checksum/approvals: {{ include "waterplant.hermesApprovals" . | sha256sum }}
         checksum/bridge: {{ printf "%s%s%s%s%s%s" (.Files.Get "files/bridge-supervisor.sh") (.Files.Get "files/wait-for-gateway.py") (.Files.Get "files/skills/write-report/SKILL.md") (.Files.Get "files/skills/write-report/scripts/save_report.py") (.Files.Get "files/very-important-report.md") (toJson .Values) | sha256sum }}
     spec:
       serviceAccountName: hermes-openshell-bridge
