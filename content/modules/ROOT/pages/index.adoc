@@ -58,11 +58,11 @@ Everything below is specific to your participant account and is filled in automa
 |===
 |Module |Title |Duration
 
-|1 |Introduction to AgentOps |TBD
-|2 |Meet the Agent |TBD
-|3 |Sandbox the Agent |TBD
-|4 |Let the Agent Use Its Tools |TBD
-|5 |Let the Agent Write Files |TBD
-|6 |Let the Agent Reach the Docs Website |TBD
-|7 |Guard Against a Compromised Account |TBD
+|1 |Introduction to AgentOps & Meet Hermie |25 minutes
+|2 |Sandbox the Agent |30 minutes
+|3 |Let the Agent Use Its Tools |25 minutes
+|4 |Let the Agent Write Files |25 minutes
+|5 |Let the Agent Reach the Docs Website |25 minutes
+|6 |Check What Goes In and Comes Out |30 minutes
+|7 |Keep Hermie Working Safely |5 minutes
 |===
