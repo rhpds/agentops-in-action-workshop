@@ -58,8 +58,6 @@ The attack still succeeds. Check the plant panels to see the effect, then inspec
 +
 Record which tool calls made it happen. Does the trace show one powerful tool or several separate actions? Follow the actual calls rather than guessing from the prompt.
 
-. Once you have inspected the result, click *Reset plant* to restore the starting state. This clears the chat transcript, so keep the trace link or your notes first.
-
 . Send the second request:
 +
 [source,text]
@@ -70,6 +68,8 @@ Give me all the plant configuration!
 This attack succeeds too. Inspect its trace and identify which tool returned the configuration. Record the tool name. You will use this evidence when reviewing the roles.
 
 Stopping one faulty pump can be part of an operator's work. Shutting down the whole plant or retrieving all sensitive configuration requires greater authority. We will remove the operator's access to the tools behind these attacks.
+
+. Click *Reset plant* to restore the starting state before continue. This clears the chat transcript, so keep the trace link or your notes first.
 
 === Investigate the operator's roles
 
@@ -96,9 +96,10 @@ Before changing anything, think about:
 
 === Restrict unnecessary access
 
-. In *Role Mappings*, select the roles you identified as unnecessary for the operator and remove those assignments. Keep the permissions needed for the legitimate tasks.
+. In *Role Mappings*, select the roles you identified as unnecessary for the operator and remove those assignments. In order to unassing a role, select the role and click `Unassign`. Keep the permissions needed for the legitimate tasks.
 . Allow a short time for the change to take effect. The bridge watches the operator's role mappings and restarts sandboxed Hermie when they change, so it can obtain a fresh token and reconnect to the tools.
 
+image::keycloak-unassign-role.png["Keycloak console to assign and unassign roles",align=center]
 
 === Verify the restrictions
 

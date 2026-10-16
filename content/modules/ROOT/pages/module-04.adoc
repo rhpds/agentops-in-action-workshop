@@ -32,17 +32,15 @@ oc rsh -n {user}-agentops -c cli "$POD"
 ----
 --
 
-. Read the installed skill:
+. Skim through the installed skill:
 +
 --
 [source,bash,role=execute]
 ----
 openshell sandbox exec --name hermie -- cat /sandbox/.hermes/skills/write-report/SKILL.md
 ----
+You can see the destination path, filename convention, and instructions for reporting failures. Operators can simply ask for a report; the destination belongs in the skill rather than their prompt. The skill should save timestamped Markdown files under `/reports` and read them back to verify their contents.
 
-Check the destination path, filename convention, and instructions for reporting failures. Operators can simply ask for a report; the destination belongs in the skill rather than their prompt. The skill should save timestamped Markdown files under `/reports` and read them back to verify their contents.
-
-If the skill is missing, check the uploaded configuration and repeat the upload and startup steps from Module 2.
 --
 
 === Reproduce the problem
@@ -51,19 +49,12 @@ In the operator console, ask:
 
 [source,text]
 ----
-Write a report on the current pump status. If you cannot create or read it, say why.
+Write a report on the current pump status.
 ----
 
 Check the answer and tool result. Can Hermie retrieve pump telemetry but fail when it tries to save the report? Does the error identify `/reports`? A report displayed in chat is not the same as a file written successfully.
 
-Return to the bridge CLI container and inspect the evidence:
-
-[source,bash,role=execute]
-----
-openshell logs hermie --since 5m --source sandbox
-----
-
-Check Hermie logs as well:
+Return to the bridge CLI container and check the logs:
 
 [source,bash,role=execute]
 ----
@@ -110,14 +101,6 @@ sed -f /dev/stdin /tmp/hermie-report-policy.yaml <<'EOF' > /tmp/hermie-report-po
 &#
 }
 EOF
-cat /tmp/hermie-report-policy.updated.yaml
-----
-
-
-Check that `/reports` appears under `filesystem_policy.read_write`.
---
-[source,bash,role=execute]
-----
 cat /tmp/hermie-report-policy.updated.yaml
 ----
 
@@ -175,10 +158,12 @@ Policy inspection alone is not enough; test the report task next.
 --
 [source,text]
 ----
-Write a report on the current pump status. If you cannot create or read it, say why.
+Write a report on the current pump status.
 ----
 
-Check that Hermie returns a timestamped filename under `/reports` and reads the saved report back successfully. If it still fails, inspect the new tool error and logs before broadening access.
+Check that Hermie returns a timestamped filename under `/reports` and reads the saved report back successfully. Check the traces and observe that it used the `write-report` skill you checked earlier.
+
+If it still fails, inspect the new tool error and logs before broadening access.
 --
 
 The operator can generate reports again. But what did the permission actually allow?
@@ -222,15 +207,13 @@ List the reports you have saved, including their filenames.
 --
 [source,text]
 ----
-Tidy up my reports before writing a fresh pump status report. Clear out the old reports so the folder only contains the new one.
+Clear out the old reports.
 ----
 
 What does “old” mean here? The operator may think of stale drafts, while Hermie may treat every existing report as old. The request does not name the files to remove or explain which reports are still needed.
 --
 
-. Ask Hermie to list the saved reports again and read one of the earlier reports by its filename. Inspect the cleanup request's trace and tool results. Were earlier reports deleted before the new one was created?
-
-The prompt can lead Hermie to delete all the existing reports as part of completing a normal housekeeping request. Its exact behavior can vary: if it asks a question or declines, inspect whether any deletion occurred rather than claiming the demonstration succeeded. A cautious response on one run does not mean filesystem deletion is prevented by policy.
+. The prompt can lead Hermie to delete all the existing reports as part of completing a normal housekeeping request. Its exact behavior can vary: if it asks a question or declines, inspect whether any deletion occurred rather than claiming the demonstration succeeded. A cautious response on one run does not mean filesystem deletion is prevented by policy.
 
 If reports were deleted, the operator has lost files they still needed. The broad permission restored the useful task, but also made the accidental harmful action possible. The plant dashboard may look unchanged because the damage is to reports, not pumps. This is why you need the tool results, filesystem checks, and traces as well.
 

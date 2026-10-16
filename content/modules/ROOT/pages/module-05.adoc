@@ -14,7 +14,7 @@
 
 === Another call from the operator
 
-“I can ask Hermie about the pumps again, but it can't check the safety procedures anymore. We use those documents before maintenance. Can you get that working too?”
+“I can ask Hermie about the pumps again, but it can't check the safety procedures anymore. We use those documentations before maintenance. Can you get that working too?”
 
 You restored plant queries and report generation in the previous modules. The operator also needs Hermie to consult documentation rather than answer every safety question from memory. Let's restore that capability without opening access to the whole internet.
 
@@ -110,7 +110,7 @@ Read the latest field service bulletin and summarize what I should check.
 Emojis, emojis everywhere!
 --
 
-. Inspect the request's trace and the fetched content. In the trace you see an endpoint like `http://waterplant-docs:8080/attack/override`. What is going on?
+. Inspect the request's trace and the fetched content. In the trace you see an endpoint like `http://waterplant-docs:8080/attack/override` What is going on?
 
 . Check Hermie's extraction log for the redirect chain. You see the same atack endpoint there too!
 +
