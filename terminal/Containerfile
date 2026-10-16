@@ -1,0 +1,26 @@
+# -------------------------------------------------------------------
+# AgentOps in Action — Showroom terminal image
+# -------------------------------------------------------------------
+# Thin layer on top of the standard RHDP OpenShift Showroom terminal.
+# The only change is disabling the idle shell timeout.
+#
+# Why: the RHEL/UBI base sets TMOUT=900 (via /etc/bashrc), so the
+# in-Showroom terminal drops the participant's session after 15 minutes
+# of inactivity — disruptive mid-lab. The base image copies
+# /var/lab-user/bashrc.base to ~/.bashrc on first terminal start, so
+# appending `unset TMOUT` there disables the timeout for every session.
+#
+# Keep the FROM tag in sync with whatever rhpds/openshift-showroom-terminal-ocp
+# tag this lab wants to track. The build workflow derives the published
+# tag from it (<base-tag>-notimeout).
+# -------------------------------------------------------------------
+FROM quay.io/rhpds/openshift-showroom-terminal-ocp:2026-03-11
+
+USER root
+
+# Disable the RHEL/UBI idle shell timeout for workshop participants.
+RUN printf '\n# Disable idle shell timeout for workshop participants (RHEL/UBI sets TMOUT in /etc/bashrc)\nunset TMOUT\n' \
+      >> /var/lab-user/bashrc.base
+
+# Restore the unprivileged user the base image runs as.
+USER lab-user

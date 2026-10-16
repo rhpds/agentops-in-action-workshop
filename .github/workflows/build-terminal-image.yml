@@ -1,0 +1,51 @@
+name: Build terminal image
+
+# Builds the lab's Showroom terminal image (standard RHDP terminal + idle-timeout
+# disabled) and pushes it to Quay. Pins the published tag to the base image tag so
+# agnosticv can reference an immutable, deterministic image.
+#
+# Prerequisites (one-time, done by a maintainer):
+#   1. Create the Quay repo named by IMAGE below (public, or grant the robot pull).
+#   2. Add repo secrets QUAY_USERNAME and QUAY_PASSWORD (a Quay robot account token
+#      with write access is recommended).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - terminal/**
+      - .github/workflows/build-terminal-image.yml
+  workflow_dispatch: {}
+
+env:
+  # Change the org/name here if this lab publishes elsewhere.
+  IMAGE: quay.io/rh-aiservices-bu/agentops-in-action-terminal
+  # Must match the FROM tag in terminal/Containerfile. The published image is
+  # tagged "<BASE_TAG>-notimeout" so the fix is traceable to its base.
+  BASE_TAG: "2026-03-11"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Build image
+        id: build
+        uses: redhat-actions/buildah-build@v2
+        with:
+          image: ${{ env.IMAGE }}
+          tags: ${{ env.BASE_TAG }}-notimeout latest
+          containerfiles: ./terminal/Containerfile
+          context: ./terminal
+          archs: amd64
+
+      - name: Push to Quay
+        uses: redhat-actions/push-to-registry@v2
+        with:
+          image: ${{ steps.build.outputs.image }}
+          tags: ${{ steps.build.outputs.tags }}
+          registry: ""
+          username: ${{ secrets.QUAY_USERNAME }}
+          password: ${{ secrets.QUAY_PASSWORD }}
