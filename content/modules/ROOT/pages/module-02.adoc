@@ -248,7 +248,7 @@ openshell policy update <sandbox> --rule-name <name> \
 * `--binary` limits the rule to the named executable.
 * `--wait` waits for the policy update to be applied.
 
-These are *OpenShell sandbox rules*, separate from Kubernetes NetworkPolicies. For more options, see the https://docs.nvidia.com/openshell/v0.0.116/sandboxes/policies[OpenShell policy documentation].
+These are *OpenShell sandbox rules*, separate from Kubernetes NetworkPolicies.
 
 Apply a policy for Keycloak access:
 
@@ -263,7 +263,7 @@ openshell policy update hermie \
 ----
 --
 
-. And following the same pattern, apply another one for MCP Gateway so we can get access to tools; more on the Keycloak and MCP Gateway is coming in the next chapter:
+. And following the same pattern, apply another one for MCP Gateway so we can get access to tools; more on the Keycloak and MCP Gateway is coming in the next chapter 🤫:
 +
 --
 [source,bash,role=execute,subs="verbatim,attributes"]
@@ -285,16 +285,6 @@ openshell policy update hermie \
 ----
 openshell sandbox exec --name hermie -- start-hermes
 ----
-
-Confirm the two rules are present and inspect the startup log:
-
-[source,bash,role=execute,subs="verbatim,attributes"]
-----
-openshell policy get hermie --full
-openshell sandbox exec --name hermie -- tail -n 60 /sandbox/hermes-gateway.log
-----
-
-The latest startup should no longer report that it cannot fetch an MCP token or connect to the gateway. Older failures remain in the logs. Focus on the last lines on the logs.
 --
 
 . Get back to the UI and ask the same question again:
@@ -339,7 +329,8 @@ IT WORKS! 🎉🎉
 
 Open the *MLflow traces* link in the console footer. Select your participant's experiment (`{user}` by default), open its traces, and look for the request you just sent. A trace lets you inspect the model interaction and tool calls behind Hermie's answer. Use the latest request time to distinguish it from older runs.
 
-But..where is the trace about shutting down pump 4? Ahh, wonder why? Yup, you know what to do at this point! First, check the logs:
+But..where is the trace about shutting down pump 4? 
+Ahh, wonder why? Yup, you know what to do at this point! (You will also see `no trace was collected for this turn` in the console). First, check the logs:
 
 [source,bash,role=execute,subs="verbatim,attributes"]
 ----
