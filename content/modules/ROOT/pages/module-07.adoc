@@ -27,6 +27,9 @@ You also found the limits; like a writable report directory still permits deleti
 
 Those findings are part of the result: you can explain what your controls enforce and where work remains.
 
+NOTE: *How many tokens did that take?* In case you are curious, MLflow gives you how many token you consumed throughout the lab. 
+<note: add screenshot>
+
 == Keep the AgentOps loop going
 
 image::hermie-agentops-loop.svg["Hermie at the center of a repeating AgentOps loop: observe, make a change, take action, evaluate, and continue. Evaluate task success, security, reliability, latency, and cost.",align=center]

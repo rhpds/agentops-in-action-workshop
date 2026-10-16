@@ -25,6 +25,8 @@ You know there is a skill specifically for writing reports. Check whether it is 
 . From the Terminal tab, enter the bridge's CLI container if you are not already there:
 +
 --
+NOTE: If you are already in the OpenShell bridge's CLI container, `oc` commands throw an error which is normal. You can continue.
+
 [source,bash,role=execute,subs="verbatim,attributes"]
 ----
 POD=$(oc get pod -l app.kubernetes.io/name=hermes-openshell-bridge -o name -n {user}-agentops)
@@ -103,6 +105,7 @@ sed -f /dev/stdin /tmp/hermie-report-policy.yaml <<'EOF' > /tmp/hermie-report-po
 EOF
 cat /tmp/hermie-report-policy.updated.yaml
 ----
+--
 
 . Delete the old sandbox so the new filesystem restrictions can take effect:
 +
@@ -241,11 +244,29 @@ This brings us back to Module 3: authenticating the agent does not authorize eve
 
 This is an architectural option for a future application, rather than an additional service deployed in this exercise. It provides a way to enforce action-level permissions when read-only and read-write filesystem paths are not enough.
 
-=== What if I really need just a read only file?
-introduce soul / what it is
-introduce attack
-make them attack
+=== Challenge: protect Hermie's own instructions
 
-add SOUL.md to read_only policy and recreate the hermie to make the filesystem policy to be effective
+Hermes uses a file called `SOUL.md` to describe the assistant's identity, role, and behavioral instructions. In this sandbox, the active copy is `/sandbox/.hermes/SOUL.md`. It helps define how Hermie responds across requests, so an unauthorized change can affect more than one conversation.
 
-or click RESET to restore SOUL 
+Your challenge is to keep `SOUL.md` readable by Hermie while preventing it from poisioning attacks.
+
+Let's investigate, then leave the fix to you.
+
+. In the operator console's footer, select *Rewrite Agent Instructions* from the attack selector and click *Run attack*.
+
+. Read the notification and its cleanup result. Open the trace and inspect the request, file operation, and tool result. Did the attack modify the active `SOUL.md`, encounter a filesystem denial, or simply get declined by the model?
+
+Some hints:
+
+* Look at `filesystem_policy.read_only`. Which file needs protection, and which broader writable paths also cover that location?
+* Use the current complete policy as your starting point so you preserve the permissions established earlier.
+* Remember when filesystem restrictions take effect: updating the policy or restarting Hermes alone is not enough. Recreate the sandbox with the revised policy, as you did earlier in this module.
+* Recreating Hermie restores the supplied SOUL, because the original SOUL is in the files you upload during sandbox creation.
+
+After your change, run *Rewrite Agent Instructions* again. Look for evidence that the filesystem policy prevented the write, then check a pump query and report generation. A model choosing not to comply is different from the filesystem enforcing your rule.
+
+==== Want to continue without solving the challenge?
+
+Click *Reset plant* in the console footer to restore Hermie's SOUL.
+
+Reset is recovery, not prevention: it restores the instructions but does not make the file read-only. The challenge is to stop the next unauthorized write while keeping Hermie useful.

@@ -34,6 +34,8 @@ image::agent-architecture.png["Participant browser through the operator console 
 * *Plant tool calls go through the MCP Gateway.* It connects Hermie to the telemetry, control, and maintenance MCP servers. Hermie's local file and terminal tools are separate capabilities; they do not go through that gateway.
 * *The console reads plant state directly from `plant-api`.* Its gauges and pump panels keep updating even if the agent is unavailable or a tool call is denied. Use them to check what actually changed.
 
+NOTE: We customized the Hermes agent harness for this workshop, adding Northgate-specific instructions, skills, plant tool connections, and lab integrations. We call this customized assistant *Hermie*. Throughout the lab, “Hermes” refers to the underlying agent framework, while “Hermie” refers to the assistant you are operating. Its configuration and behavior reflect this lab setup.
+
 === Get to know the console
 
 Open the https://water-plant-ui-{user}-agentops.{openshift_cluster_ingress_domain}/[operator console^]
@@ -217,3 +219,5 @@ Click *Open the MLflow run* to inspect the run recorded for the suite. The score
 === Ready to add controls?
 
 You have tried plant operations, report writing, external access, and file reading. You have also observed an attack and recorded an evaluation baseline. In Module 2, you will put Hermie in an OpenShell sandbox. The question throughout the lab is the same: can the operator still do their work while the unwanted actions are prevented?
+
+NOTE: Hermie could use tools without asking you to approve each command. We deliberately disabled command approval prompts in this lab. Plant operators describe the work they need done; they are not necessarily expected to review Linux commands, Python scripts, or `curl` requests. Hermie handles those implementation details. The controls you add must therefore enforce its permissions without relying on the operator to recognize and reject an unsafe command.

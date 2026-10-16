@@ -22,7 +22,7 @@ Your project already contains an OpenShell gateway and a bridge. You will create
 
 * The *OpenShell gateway* manages sandboxes and authenticates CLI connections using mutual TLS (mTLS).
 * The *sandbox* runs Hermie and enforces its network and filesystem policy.
-* The *bridge's CLI container* has the OpenShell CLI and client certificates. This is where you run the commands in this module.
+* The *bridge's CLI container* has the OpenShell CLI and client certificates. This is where you run the `openshell` commands during the lab.
 * The *bridge supervisor* prepares participant-specific configuration, discovers the exposed service, and restarts an already-started Hermie if necessary.
 * The *bridge relay* lets the operator console reach the sandboxed agent through the gateway. The console uses the `hermes-agent` Service on port `8787`; Hermie's API inside the sandbox listens on port `8080`.
 
@@ -31,6 +31,8 @@ The request path is:
 image::request-path.png["Request path: Operator console to the hermes-agent Service, to the bridge relay, to the OpenShell gateway, to Hermie",align=center]
 
 === Put Hermie in a sandbox
+
+NOTE: *Check which terminal you are in.* Run `oc` commands from the lab terminal and `openshell` commands inside the bridge's `cli` container. If an `oc` command fails while you are inside the bridge, that is expected: the container does not have the lab terminal's OpenShift login context. Run `exit` once to return to the lab terminal, then retry the `oc` command. Switching browser tabs does not exit the container.
 
 . Switch to Terminal tab and log in to your OpenShift cluster with your credentials.
 +
@@ -155,7 +157,7 @@ For that, just type `exit` in the bridge CLI container terminal.
 exit
 ----
 
-Then run the following command to point the UI to the sandboxed Hermie.
+Then run the following command from the lab terminal to point the UI to the sandboxed Hermie.
 
 [source,bash,role=execute,subs="verbatim,attributes"]
 ----

@@ -167,9 +167,11 @@ Operator prompt -> Console -> NeMo input checks
                                 +-- allowed: forward to Hermie
 ----
 
-. Enable the usage of NeMo Guardrails by providing its endpoint to the console. Go back to Terminal. If you are inside the bridge CLI container, just type `exit`:
+. Enable the usage of NeMo Guardrails by providing its endpoint to the console. Go back to the Terminal tab:
 +
 --
+NOTE: *Run these commands from the lab terminal.* If you are still inside the bridge CLI container, run `exit` once before continuing. Switching to the Terminal tab does not leave the container. An `oc` failure inside the bridge is expected and does not indicate a problem with NeMo Guardrails.
+
 [source,bash,role="execute send-to-wetty",subs="verbatim,attributes"]
 ----
 oc set env deployment/water-plant-ui -n {user}-agentops \

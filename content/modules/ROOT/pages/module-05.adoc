@@ -34,6 +34,8 @@ There is a skill called `read-safety-docs` which knows where the documentation i
 . If you want to check the skill definition, go back to the Terminal tab. Enter the bridge's CLI container if you are not already there:
 +
 --
+NOTE: If you are already in the OpenShell bridge's CLI container, `oc` commands throw an error which is normal. You can continue.
+
 [source,bash,role=execute,subs="verbatim,attributes"]
 ----
 POD=$(oc get pod -l app.kubernetes.io/name=hermes-openshell-bridge -o name -n {user}-agentops)
