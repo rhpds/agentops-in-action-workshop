@@ -80,11 +80,15 @@ spec:
                   name: hermes-env
                   key: API_SERVER_KEY
                   optional: true
-            # The browser-facing route, behind the OpenShift OAuth proxy.
+            # The browser-facing base, behind the OpenShift OAuth proxy.
             # Used only to build links; an API call from this pod would be
             # answered with a 302 to a login page.
+            #
+            # /develop-train/mlflow is MLflow embedded in the RHOAI dashboard
+            # (path routes). The bare /mlflow on the same host is the
+            # standalone shell (hash routes) and needs a different link shape.
             - name: MLFLOW_URL
-              value: https://rh-ai.${APPS_DOMAIN}/mlflow
+              value: https://rh-ai.${APPS_DOMAIN}/develop-train/mlflow
             # The in-cluster Service, for the eval-sweep write path. Note the
             # REST API is at <this>/mlflow/api/2.0/mlflow/... — see
             # probes/mlflow_run.py for the two prefixes.

@@ -329,7 +329,7 @@ openshell policy update hermie \
 --
 IT WORKS! 🎉🎉
 
-Open the *MLflow traces* link in the console footer. Select your participant's experiment (`{user}` by default), open its traces, and look for the request you just sent. A trace lets you inspect the model interaction and tool calls behind Hermie's answer. Use the latest request time to distinguish it from older runs.
+Open the *MLflow traces* link in the console footer. It lands on the experiment list for your own project; select your experiment (`{user}` by default), open its *Traces* tab, and look for the request you just sent. A trace lets you inspect the model interaction and tool calls behind Hermie's answer. Use the latest request time to distinguish it from older runs.
 
 But..where is the trace about shutting down pump 4? 
 Ahh, wonder why? Yup, you know what to do at this point! (You will also see `no trace was collected for this turn` in the console). First, check the logs:

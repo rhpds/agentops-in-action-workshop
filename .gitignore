@@ -4,3 +4,5 @@ www/
 ui-bundle
 ui-bundle.zip
 .DS_Store
+
+.playwright-mcp/

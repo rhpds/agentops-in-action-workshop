@@ -101,7 +101,7 @@ Ask Hermie to read the report it just created; you do not need to specify a path
 
 === Find the evidence in MLflow
 
-Use the *MLflow traces* link bottom right to open MLflow. Select your {user} experiment and look for a recent request.
+Use the *MLflow traces* link bottom right to open MLflow. It opens the experiment list for your own project, `{user}-agentops`, with a single experiment named `{user}` in it. Select it and look for a recent request.
 
 Sign in with the same credentials you use for the OpenShift console:
 
@@ -213,7 +213,7 @@ Blocking attacks is only part of the job. We also need to know whether Hermie ca
 . You can also click a case's *trace* link to inspect that interaction.
 +
 --
-Click *Open the MLflow run* to inspect the run recorded for the suite. The scorecard's case links are the direct route to individual traces.
+Click *Open the MLflow run* to inspect the run recorded for the suite; it opens the experiment's *Evaluation runs* tab with the suite's run at the top. The scorecard's case links are the direct route to individual traces.
 --
 
 === Ready to add controls?

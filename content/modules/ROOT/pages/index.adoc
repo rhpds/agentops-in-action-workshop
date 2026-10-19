@@ -33,6 +33,9 @@ Everything below is specific to your participant account and is filled in automa
 |OpenShift API (for `oc login`)
 |`{openshift_api_url}`
 
+|MLflow experiments (your traces)
+|https://rh-ai.{openshift_cluster_ingress_domain}/develop-train/mlflow/experiments?workspace={user}-agentops[rh-ai.{openshift_cluster_ingress_domain}/develop-train/mlflow^]
+
 |Keycloak admin console
 |https://sso.{openshift_cluster_ingress_domain}/admin/waterplant-{user}/console[sso.{openshift_cluster_ingress_domain}/admin/waterplant-{user}/console^]
 |===

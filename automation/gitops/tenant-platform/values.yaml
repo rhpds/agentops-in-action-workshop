@@ -267,12 +267,19 @@ ui:
   # this chart actually deployed and speaks that harness's protocol. Set a
   # value only to aim the console at an agent outside this chart.
   agentUrl: ""
-  # Set this and the console does two things with it: links its header to
-  # MLflow, and — since Hermes's tool calls never cross the wire — ends each
-  # turn with a link to that turn's own trace. The second also creates the
-  # read-only RBAC the console's ServiceAccount needs to search for it. Empty,
-  # neither happens and the console says plainly that the harness exposes no
-  # tool calls.
+  # Set this and the console does two things with it: links its footer to the
+  # participant's MLflow experiment list, and ends each turn with a link to
+  # that turn's own trace. The second also creates the read-only RBAC the
+  # console's ServiceAccount needs to search for it. Empty, neither happens
+  # and the console says plainly that no trace is available.
+  #
+  # A *base* with no trailing path. The console appends the route itself:
+  # /experiments?workspace=<ns>, /experiments/<id>/traces?..., and
+  # /experiments/<id>/evaluation-runs?.... bootstrap-tenant's default is
+  # https://rh-ai.<domain>/develop-train/mlflow, which is MLflow as embedded
+  # in the RHOAI dashboard. Those are path routes; the standalone MLflow at
+  # the bare /mlflow on the same host uses hash routes (#/experiments/...)
+  # and the two are not interchangeable without changing traces.py.
   mlflowUrl: ""
   # The experiment the console searches. Empty means the participant's
   # username, which is what the bridge names it. Change one and you must change

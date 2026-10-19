@@ -67,17 +67,27 @@ platform:
   # it overrides image.namespace in tenant-platform rather than merging with
   # it — the two have to agree, and this one wins.
   imageNamespace: rh-aiservices-bu
-  # Where the operator console links for MLflow traces.
+  # Where the operator console links for MLflow traces. A *base*, with no
+  # trailing path: the console appends /experiments?workspace=<ns> for the
+  # footer link and /experiments/<id>/traces?... per turn.
   #
-  # Empty means https://rh-ai.<deployer.domain>/mlflow — RHOAI's dashboard
-  # gateway, which is where the MLflow operator surfaces the UI. MLflow has no
-  # Route of its own, so that gateway is the only way in, and it is reachable by
-  # any participant: RHOAI's Auth CR allows system:authenticated.
+  # Empty means https://rh-ai.<deployer.domain>/develop-train/mlflow — MLflow
+  # as embedded in RHOAI's dashboard, behind the data-science-gateway. MLflow
+  # has no Route of its own, so that gateway is the only way in, and it is
+  # reachable by any participant: RHOAI's Auth CR allows system:authenticated.
+  #
+  # Note /develop-train/mlflow, not /mlflow. The same host serves both: the
+  # bare /mlflow is the standalone MLflow shell with hash routes, while
+  # /develop-train/mlflow is the same MLflow inside the RHOAI dashboard with
+  # path routes. The lab uses the embedded one so a participant opening a
+  # trace stays inside the RHOAI console the rest of the lab lives in.
+  # Switching between the two means changing the link *shape* in the console
+  # too, not just this string — see traces.py.
   #
   # Set explicitly if a cluster's dashboard is not at rh-ai.<domain>; that
-  # prefix was confirmed on cluster-jddlk, where all six RHOAI *-params
-  # ConfigMaps record it as gateway-domain, but it is not read from the cluster
-  # at render time.
+  # prefix was confirmed on cluster-jddlk and again on cluster-zwtpw, where
+  # all six RHOAI *-params ConfigMaps record it as gateway-domain, but it is
+  # not read from the cluster at render time.
   mlflowUrl: ""
   # Whether this participant's Hermes emits OTLP traces to MLflow. Only the
   # openshell runtime does: the bridge installs the hermes_otel plugin into the

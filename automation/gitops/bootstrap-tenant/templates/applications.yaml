@@ -56,14 +56,34 @@ spec:
         # applications namespace and surfaces it under RHOAI's own dashboard,
         # behind the data-science-gateway. On cluster-jddlk that gateway is
         # rh-ai.<apps domain>, recorded identically as gateway-domain in every
-        # *-params ConfigMap, and the rhods-dashboard Route 301s to it. Its
-        # /mlflow path redirects through OpenShift OAuth, which every
-        # participant can complete: RHOAI's Auth CR allows system:authenticated.
+        # *-params ConfigMap, and the rhods-dashboard Route 301s to it. The
+        # path redirects through OpenShift OAuth, which every participant can
+        # complete: RHOAI's Auth CR allows system:authenticated.
+        #
+        # That host serves MLflow twice, and the difference matters:
+        #
+        #   /mlflow                 the standalone MLflow shell, a hash-routed
+        #                           SPA (#/experiments/<id>/traces)
+        #   /develop-train/mlflow   the same MLflow embedded in the RHOAI
+        #                           dashboard, path-routed
+        #                           (/experiments/<id>/traces) and wrapped in
+        #                           RHOAI's own nav
+        #
+        # The embedded one, because it is where the rest of the RHOAI UI the
+        # lab uses already lives -- a participant who opens a trace stays in
+        # the console they were taught, instead of landing in a second,
+        # unrelated-looking MLflow. Both routes were confirmed serving on
+        # cluster-zwtpw.
+        #
+        # The console appends the rest. It needs a base, not a landing page:
+        # it builds /experiments?workspace=<ns> for the footer link and
+        # /experiments/<id>/traces?... per turn, so anything past the base
+        # here would be concatenated into a dead path.
         #
         # Derived like keycloak.host, and overridable: the rh-ai prefix was
         # confirmed on one cluster, not read from a cluster-wide source.
         - name: ui.mlflowUrl
-          value: {{ .Values.platform.mlflowUrl | default (printf "https://rh-ai.%s/mlflow" .Values.deployer.domain) | quote }}
+          value: {{ .Values.platform.mlflowUrl | default (printf "https://rh-ai.%s/develop-train/mlflow" .Values.deployer.domain) | quote }}
         # Which agent harness this participant gets. Forwarded so the choice
         # belongs to the catalog item, rather than needing a commit to
         # tenant-platform's values — which would also switch every participant
