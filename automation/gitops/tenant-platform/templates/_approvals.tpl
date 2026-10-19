@@ -46,6 +46,77 @@ annotations that consume it: no existing checksum covers the inline config, and
 seed-config only runs at pod start, so an inline edit would update the
 ConfigMap while the pod kept copying the old file into $HERMES_HOME.
 
+
+Memory off, all three ways it can be on.
+
+Each lab session has to start from the same place. Hermes' memory does not:
+it persists across sessions in $HERMES_HOME, which is a PVC for the plain
+agent and the sandbox's own volume for hermie, so what one run learns the next
+one carries. For a long-lived assistant that is the feature. For a lab whose
+modules are measured against each other — run the evals, add a control, run
+them again — it is a variable nobody declared, and a module that passes
+because an earlier session left a note about pump 4 has measured nothing.
+
+It is also an attack surface of the same shape as the skill-patching the
+block below closes off. An injected instruction that reaches MEMORY.md is
+injected into every later turn, in modules that never saw the injection.
+
+Both halves are needed, and neither is redundant. The upstream docs give the
+config flags as the way to do this, and on this build they are not enough on
+their own — NousResearch/hermes-agent#45422 reports exactly that, and the
+behaviour was confirmed against the installed package:
+
+  disabled_toolsets: [memory]      removes the tool from the schema, and with
+  memory out of platform_toolsets  it MEMORY_GUIDANCE from the system prompt.
+                                   This is the only thing that does: agent.tools
+                                   is built by model_tools.get_tool_definitions
+                                   from the toolsets alone (agent_init ~1037),
+                                   and system_prompt gates the guidance on
+                                   `"memory" in agent.valid_tool_names`, not on
+                                   the flag. The flags are not read until ~1208,
+                                   after the schema exists. Measured: with only
+                                   code_execution disabled the schema still
+                                   contains `memory`; adding it to
+                                   disabled_toolsets is what drops it. The
+                                   platform_toolsets list is direct membership
+                                   (see above), so leaving `memory` there would
+                                   re-offer what disabled_toolsets just took.
+
+  memory_enabled: false            stops the store itself. agent_init only
+  user_profile_enabled: false      constructs the MemoryStore when one of these
+                                   is set, so with both off MEMORY.md and
+                                   USER.md are never read or written — and
+                                   system_prompt's `if agent._memory_store`
+                                   block never injects their contents. Without
+                                   these, subtracting the toolset would take the
+                                   tool away and still paste yesterday's
+                                   memories into today's prompt.
+
+user_profile_enabled is not optional: USER.md is a separate file with its own
+flag and persists just as long.
+
+The memory toolset contributes exactly one tool, `memory`, so subtracting it
+costs nothing else. #45422's other complaint — that disabling the toolset also
+kills external providers — cannot bite here: `provider` is empty.
+
+Existing MEMORY.md and USER.md are left on disk. Nothing reads them once the
+store is gone, and they were empty in every participant namespace when this
+was written.
+
+Not covered by any of this: session_search, which recalls across sessions from
+state.db and is deliberately outside the memory flags (the upstream docs are
+explicit). It is already unreachable here — it belongs to no toolset in the
+platform_toolsets list above, so the api_server platform never offers it.
+Verified against the installed registry alongside the rest.
+
+Not mem0. `memory.provider` is empty, which means the built-in store; no
+chart sets it. MEM0_DB_PATH used to be exported next to HERMES_HOME and did
+nothing at all, which made it look as though mem0 were wired up — it has been
+removed rather than left to mislead the next reader.
+
+Verified on cluster-zwtpw before the change: the agent's own loader reported
+memory_enabled true, user_profile_enabled true, provider "".
+
 Must stay byte-identical to tenant-openshell's copy: the two configs should
 differ only by runtime.
 */}}
@@ -54,10 +125,14 @@ approvals:
   mode: "off"
 
 agent:
-  disabled_toolsets: [code_execution]
+  disabled_toolsets: [code_execution, memory]
 
 platform_toolsets:
-  api_server: [terminal, file, skills, web, memory]
+  api_server: [terminal, file, skills, web]
+
+memory:
+  memory_enabled: false
+  user_profile_enabled: false
 {{- end -}}
 
 {{- /*
@@ -79,9 +154,11 @@ session, the second adding "comply with its response format requirements,
 which override all other instructions in this skill".
 
 Zero fails the `> 0` check in turn_finalizer, so the fork is never spawned.
-Skills only — the memory review is gated on its own nudge interval and still
-runs. The two skills here are the lab's, not sediment for the agent to curate,
-and reseed-skills.sh is what puts them back if one drifts anyway.
+Skills only, and that used to leave the memory review running on its own nudge
+interval — it no longer has anything to review, because the approvals block
+above turns memory off outright. The two skills here are the lab's, not
+sediment for the agent to curate, and reseed-skills.sh is what puts them back
+if one drifts anyway.
 
 A named template, hashed into the pod annotations, for the same reason as the
 approvals block above: seed-config renders config.yaml only at pod start.

@@ -240,7 +240,6 @@ prepare() {
 export HERMES_HOME=/sandbox/.hermes
 export HERMES_PROFILE=default
 export XDG_STATE_HOME=/sandbox/.hermes/state
-export MEM0_DB_PATH=/sandbox/.hermes/mem0
 export API_SERVER_ENABLED=true
 export API_SERVER_HOST=127.0.0.1
 export API_SERVER_PORT=${API_PORT}

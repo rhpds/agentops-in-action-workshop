@@ -284,8 +284,10 @@ pod restart because `$HERMES_HOME` is a PVC.
 Both charts therefore render `skills.creation_nudge_interval: 0`
 (`waterplant.hermesSkills`, which must stay byte-identical between the two
 copies, like the approvals block beside it). Zero fails the `> 0` check, so the
-fork never runs. Only skills are affected; the memory review has its own nudge
-interval and still runs.
+fork never runs. Only skills are affected — the memory review has its own nudge
+interval — but it no longer has anything to review: the approvals block turns
+Hermes' memory off outright, so each lab session starts from the same place
+instead of carrying what the last one wrote to MEMORY.md.
 
 `files/skills/reseed-skills.sh` is the way back for an environment that already
 drifted. It restores both skills from the pristine copies, removes every other

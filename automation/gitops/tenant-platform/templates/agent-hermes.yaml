@@ -402,8 +402,6 @@ spec:
             - name: FIRECRAWL_API_URL
               value: http://waterplant-docs:8080
             {{- end }}
-            - name: MEM0_DB_PATH
-              value: "{{ .Values.agent.hermes.home }}/mem0"
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
