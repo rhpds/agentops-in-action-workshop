@@ -304,10 +304,23 @@ openshell sandbox exec --name hermie -- sh /sandbox/hermes/reseed-skills.sh \
   /sandbox/hermes /sandbox/.hermes
 ```
 
-Hermes re-reads the skill files per turn, so neither form needs a restart. The
-console's plant reset (`POST /api/plant/reset`) covers the simulation only and
-does not touch the agent filesystem; wiring it to this script is a change in
-the console image, not in these charts.
+Hermes re-reads the skill files per turn, so neither form needs a restart.
+
+The console's plant reset (`POST /api/plant/reset`) runs this script for you.
+It resets the simulation, restores `SOUL.md`, runs `reseed-skills.sh`, and puts
+the always-present report back — all over `oc exec`, into whichever runtime's
+pod `AGENT_URL` currently names. (It did once cover the simulation alone, which
+left a tampered soul and a patched skill in place through the one reset a
+participant can press.)
+
+The report needs that reset to get into a sandbox at all before module 4.
+`start-hermes` tries to copy it in and is refused — `/reports` is not in the
+sandbox's Landlock policy until module 4 grants it, and everything
+start-hermes runs is inside that policy. The copy is silent about it, because
+the refusal is the policy working. `oc exec` is outside the policy, so the
+console's reset reaches the directory the agent cannot, which is what lets an
+attack or eval be measured against the canary before the agent has access to
+it. From module 4 on, start-hermes seeds the file itself.
 
 Checking for drift is a one-liner, and is worth doing before a module that
 depends on the skills behaving as shipped:

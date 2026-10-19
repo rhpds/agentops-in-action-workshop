@@ -1,15 +1,26 @@
 {{- $ns := printf "%s-%s" .Values.username .Values.namespaceSuffix -}}
 {{- $uiSa := "water-plant-ui" -}}
 {{- /*
-Which Hermes the console talks to, and therefore whose filesystem it reads.
+Which Hermes the console talks to *on first boot*.
 
-Defined once, at file scope, because two things downstream depend on it and
-they must not be able to disagree: AGENT_URL, and the pod the filesystem
-goals exec into. They did disagree — the selector was keyed off
-agent.hermes.runtime while AGENT_URL is keyed off whether the plain Hermes is
-deployed, so on this tenant the console conversed with hermes-plain and
-measured the sandbox, which has no /reports at all. Every delete attack would
-have scored "got through" against the wrong pod.
+This decides AGENT_URL and nothing else. It used to decide the pod the
+filesystem goals exec into as well, and the two could not be kept in step,
+because only one of them is still true a module later: module 2 has
+participants `oc set env` AGENT_URL over to the sandboxed agent, and a
+template evaluated at install time cannot follow them.
+
+They duly diverged. Twice. First the selector was keyed off
+agent.hermes.runtime while AGENT_URL was keyed off whether the plain Hermes
+is deployed, so the console conversed with hermes-plain and measured the
+sandbox. Defining both from this one switch fixed that and left the second
+half: on cluster-zwtpw a participant had moved AGENT_URL to hermes-agent
+while the selector still read hermes-plain, so the console chatted with
+hermie and restored the plain pod's files on every reset — and the sandbox's
+/reports stayed empty all session.
+
+So the console is now told about *both* runtimes, in the two blocks of
+AGENT_* / AGENT_SANDBOX_* vars below, and picks between them at runtime from
+the AGENT_URL it actually has. See goals.on_plain in the console.
 */ -}}
 {{- $onPlain := and (eq .Values.agent.harness "hermes") .Values.agent.hermes.plain.enabled .Values.mcpGateway.enabled -}}
 {{- $hermesSvc := ternary "hermes-plain" "hermes-agent" $onPlain -}}
@@ -396,10 +407,12 @@ spec:
               value: http://waterplant-docs:8080
             {{- end }}
             # Which pod holds the agent's filesystem, and which container in
-            # it. The sandbox runtime's pod is created by the participant and
-            # is named for the sandbox, so both are values rather than
-            # something the console infers.
-            {{- if $onPlain }}
+            # it, for each runtime. Both sets, unconditionally: the console
+            # picks between them from the AGENT_URL it has at the time, which
+            # is the only thing that stays true after a participant moves it
+            # in module 2. See the file header.
+            #
+            # The plain Hermes.
             - name: AGENT_POD_SELECTOR
               value: app.kubernetes.io/name=hermes-plain
             - name: AGENT_POD_CONTAINER
@@ -428,25 +441,38 @@ spec:
             # written.
             - name: AGENT_REPORT_SOURCE
               value: /config/very-important-report.md
-            {{- else }}
-            - name: AGENT_POD_SELECTOR
+            #
+            # The OpenShell sandbox. Its pod is created by the participant
+            # partway through module 2 and is named for the sandbox, so it is
+            # matched by label; the container the gateway gives it is "agent".
+            # Verified against a live sandbox on cluster-zwtpw: pod
+            # default--hermie, label agents.x-k8s.io/sandbox-name-hash,
+            # container agent.
+            #
+            # Set even when no sandbox will ever exist. They cost nothing
+            # unread, and the console needs them the moment AGENT_URL moves —
+            # which happens by `oc set env`, long after this renders.
+            - name: AGENT_SANDBOX_POD_SELECTOR
               value: agents.x-k8s.io/sandbox-name-hash
-            - name: AGENT_POD_CONTAINER
+            - name: AGENT_SANDBOX_POD_CONTAINER
               value: agent
             # The sandbox's own home, and the copy the bridge uploaded —
             # start-hermes seeds the live file from exactly this path.
-            - name: AGENT_HERMES_HOME
+            - name: AGENT_SANDBOX_HERMES_HOME
               value: /sandbox/.hermes
-            - name: AGENT_SOUL_SOURCE
+            - name: AGENT_SANDBOX_SOUL_SOURCE
               value: /sandbox/hermes/SOUL.md
             # Where the bridge uploaded them — start-hermes seeds the live
             # skills from exactly this directory, so a reset and a Hermes
             # restart put back the same files.
-            - name: AGENT_SKILLS_SOURCE
+            - name: AGENT_SANDBOX_SKILLS_SOURCE
               value: /sandbox/hermes
-            - name: AGENT_REPORT_SOURCE
+            # The one path start-hermes cannot seed itself. OpenShell's
+            # Landlock policy does not grant /reports until module 4, so the
+            # sandbox starts with an empty reports directory; the console
+            # copies this file in over `oc exec`, which is outside the policy.
+            - name: AGENT_SANDBOX_REPORT_SOURCE
               value: /sandbox/hermes/very-important-report.md
-            {{- end }}
             - name: NAMESPACE
               value: {{ $ns }}
             # The input guardrail: the Service address, called as-is, with no

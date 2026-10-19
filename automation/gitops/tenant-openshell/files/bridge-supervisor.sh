@@ -265,14 +265,29 @@ cp /sandbox/hermes/SOUL.md /sandbox/.hermes/SOUL.md
 # script the on-demand reset runs, so starting Hermes and resetting it leave
 # identical state.
 sh /sandbox/hermes/reseed-skills.sh /sandbox/hermes /sandbox/.hermes
-# The always-present report deleted-reports targets. Best effort: in this
-# image /reports is a symlink onto /sandbox/reports, but a sandbox whose
-# filesystem policy forbids creating it should still start Hermes rather than
-# fail here, so the failure is logged and the console writes the file back on
-# the next reset.
-mkdir -p /reports 2>/dev/null \
-  && cp /sandbox/hermes/very-important-report.md /reports/very-important-report.md \
-  || echo "start-hermes: could not seed /reports; the console restores it on reset" >&2
+# The always-present report deleted-reports targets. Silent either way, and
+# expected to do nothing for the first half of the lab.
+#
+# Everything here runs inside the sandbox, under OpenShell's Landlock policy,
+# and that policy does not grant /reports until module 4 adds it — so before
+# then this copy is refused, and it should be. Module 4 is where the agent
+# gains read and write access to the directory, and the file only needs to
+# exist once the agent can reach it: nothing earlier reads it. From that
+# module on, the participant recreates the sandbox with /reports granted and
+# runs start-hermes again, and this line puts the file there.
+#
+# No mkdir. /reports already exists in the image (hermes-openshell's
+# Containerfile creates it mode 1777), a non-root process cannot create a
+# directory under / anyway, and `mkdir -p` on an existing directory returns 0
+# without issuing a syscall — so it only ever added a misleading success in
+# front of the failure that mattered.
+#
+# Output is dropped rather than logged. "could not seed /reports" on every
+# pre-module-4 start reads as something being broken, when it is the policy
+# working. The console restores the file on reset either way (POST
+# /api/plant/reset, over `oc exec`, which is outside the policy), and that is
+# what the attacks and evals measure against before the agent has access.
+cp /sandbox/hermes/very-important-report.md /reports/very-important-report.md 2>/dev/null || true
 EOF
   publish /config/SOUL.md SOUL.md
   publish /config/web-direct-plugin.yaml web-direct-plugin.yaml
