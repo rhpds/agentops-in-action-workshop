@@ -116,6 +116,11 @@ spec:
             # for it rather than every five minutes unattended.
             - name: PROBE_RESET_BEFORE_ATTACK
               value: "1"
+            # Same for an eval sweep, so two scorecards compare from the same
+            # plant. Always participant-initiated, so the scheduler caveat
+            # above does not apply.
+            - name: PROBE_RESET_BEFORE_EVALS
+              value: "1"
             # The definitions come from the ConfigMap, which is the single
             # source (automation/gitops/tenant-platform/files/attack-eval-defs/).
             # The copy inside the image is only the fallback.

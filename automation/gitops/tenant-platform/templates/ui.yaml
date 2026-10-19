@@ -372,6 +372,12 @@ spec:
             # happens every few minutes.
             - name: PROBE_RESET_BEFORE_ATTACK
               value: {{ .Values.ui.probes.resetBeforeAttack | quote }}
+            # And before an eval sweep, so two scorecards are comparable.
+            # Unlike the attack reset this one is always participant-initiated
+            # — it only runs when somebody presses Run all evals — so the
+            # scheduler caveat above does not apply to it.
+            - name: PROBE_RESET_BEFORE_EVALS
+              value: {{ .Values.ui.probes.resetBeforeEvals | quote }}
             # The mounted definitions win over the set baked into the image.
             # Empty or absent, the image's own copy is used, so the console
             # still works with no ConfigMap at all.

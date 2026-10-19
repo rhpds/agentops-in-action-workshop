@@ -363,6 +363,16 @@ ui:
     # Safe only while scheduler is "0". A reset discards the participant's
     # work orders, and unattended that would happen every few minutes.
     resetBeforeAttack: "1"
+    # Reseed the plant before an eval sweep too, so two scorecards compare.
+    #
+    # On, because the lab asks participants to read one sweep against another
+    # — before a control and after it — and that comparison is only honest
+    # from an identical starting plant. Module 1 already tells them this
+    # happens ("it first resets the plant and clears the chat transcript"),
+    # and the price is the same as any other reset: work orders, maintenance
+    # records and the chat transcript go. The module warns them to finish
+    # inspecting their manual requests before clicking.
+    resetBeforeEvals: "1"
   route:
     enabled: true
     timeout: 600s
