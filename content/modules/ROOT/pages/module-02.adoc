@@ -16,6 +16,55 @@ Hermie can call plant tools, run commands, and read files. A prompt asking it to
 
 The goal is to restore the connections Hermie needs for plant operations while leaving unrelated destinations blocked.
 
+=== What OpenShell is
+
+https://build.nvidia.com/openshell[OpenShell^] is an open, secure runtime for AI
+agents. It governs agent execution, access, and where inference goes -- and it does
+so from outside the agent process, which is the property the rest of this lab rests
+on: enforcement cannot be influenced by model output. A prompt injection can change
+what Hermie decides to do; it cannot change what Hermie is permitted to do.
+
+Its model is deny by default: grant permissions scoped to the declared task, and
+refuse everything else. That is why the sandbox you are about to create starts with
+no network access at all.
+
+Four pieces do the work:
+
+* *Agent sandboxes* are the execution environments, with kernel-level controls over
+  the filesystems and networks the agent reaches. Those controls persist when the
+  agent runs generated code or spawns child processes -- the escape routes a
+  prompt-level rule does not cover.
+* *The supervisor* runs inside each sandbox and is the local enforcement point. It
+  checks outbound requests from outside the agent process, which is what makes it
+  fine-grained enough to allow a read while blocking a write through the same API,
+  and it holds service credentials outside the workload until a request is
+  authorized.
+* *The gateway* manages the lifecycles and policies of many sandboxes, with
+  team-based access control and workspace separation. In this lab you have your own
+  gateway, and your sandbox lives in its `default` workspace.
+* *The policy prover* uses formal logic to check whether modeled permissions stay
+  within operator-defined boundaries.
+
+For the full architecture, see
+https://docs.nvidia.com/openshell/v0.0.116/about/how-it-works[How OpenShell works^].
+
+==== How a sandbox becomes a Pod
+
+On OpenShift, OpenShell does not create Pods itself. When you ask the gateway for a
+sandbox, it creates a `Sandbox` custom resource, and the *Red Hat build of Agent
+Sandbox* controller reconciles that resource into a running Pod -- pulling the image,
+attaching a workspace volume, and reporting readiness back on the resource's status.
+
+That split is:
+
+* *The gateway owns policy and lifecycle* -- what the sandbox is allowed to do, and
+  when it exists.
+* *The Agent Sandbox controller owns the workload* -- turning the declared sandbox
+  into a Pod and keeping it running.
+
+You will see both of these when you create the sandbox: the `openshell` CLI talks to
+the gateway, and `oc get sandbox` shows the resource the controller acted on.
+
 === How the components fit together
 
 Your project already contains an OpenShell gateway and a bridge. You will create the sandbox and start Hermie inside it.
@@ -97,6 +146,108 @@ openshell sandbox create --name hermie --from quay.io/rh-aiservices-bu/waterplan
 ----
 
 This creates an empty sandbox named `hermie` from the same Hermes image, with 2 CPUs and 4Gi of memory, but does not start the agent yet.
+--
+
+. The CLI did not create a Pod. It asked the OpenShell gateway to create a `Sandbox`
+custom resource, and the *Agent Sandbox controller* turned that into the running
+workload. Look at what was created, from your own terminal rather than the bridge:
++
+--
+[source,bash,role=execute,subs="verbatim,attributes"]
+----
+oc get sandbox -n {user}-agentops
+oc get pods -n {user}-agentops
+----
+
+Note the pod list is unfiltered this time. The sandbox pod does not carry the
+`app.kubernetes.io/name` labels you filtered on earlier, so the narrower command
+would not show it.
+
+The sandbox is named `+default--hermie+`: the workspace (`default`) and the name you
+gave it. Inspect it with `+oc get sandbox default--hermie -n {user}-agentops -o yaml+`.
+Trimmed to the parts that matter:
+
+....
+apiVersion: agents.x-k8s.io/v1beta1
+kind: Sandbox
+metadata:
+  name: default--hermie
+  namespace: user-nzptt-agentops
+  labels:
+    openshell.ai/managed-by: openshell
+    openshell.ai/sandbox-name: hermie
+    openshell.ai/sandbox-workspace: default
+spec:
+  operatingMode: Running
+  shutdownPolicy: Retain
+  podTemplate:
+    spec:
+      automountServiceAccountToken: false
+      serviceAccountName: user-nzptt-openshell-sandbox
+      containers:
+        - name: agent
+          image: quay.io/rh-aiservices-bu/waterplant-hermes:0.2.6
+          command: [/opt/openshell/bin/openshell-sandbox]
+          env:
+            - { name: OPENSHELL_SANDBOX, value: hermie }
+            - { name: OPENSHELL_SANDBOX_COMMAND, value: sleep infinity }
+            - { name: OPENSHELL_ENDPOINT, value: 'https://user-nzptt-openshell...:8080' }
+          resources:
+            limits: { cpu: '2', memory: 4Gi }
+          securityContext:
+            runAsUser: 0
+            capabilities:
+              add: [SYS_ADMIN, NET_ADMIN, SYS_PTRACE, SYSLOG]
+          volumeMounts:
+            - { mountPath: /sandbox, name: workspace }
+      volumes:
+        - name: openshell-supervisor-bin
+          image:
+            reference: 'ghcr.io/nvidia/openshell/supervisor:2d10881...'
+  volumeClaimTemplates:
+    - metadata: { name: workspace }
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources: { requests: { storage: 2Gi } }
+status:
+  conditions:
+    - type: Ready
+      status: 'True'
+      reason: DependenciesReady
+      message: Pod is Ready
+  nodeName: worker-cluster-kv9d8-2
+  podIPs:
+    - 10.232.4.26
+....
+
+What the *Agent Sandbox controller* does with that resource:
+
+* *It owns the Pod, not you.* The controller reconciles the `Sandbox` into a Pod
+  named `+default--hermie+` -- the name recorded in the CR's
+  `agents.x-k8s.io/pod-name` annotation -- built from `podTemplate`, and reports
+  back in `status.conditions`. `Ready` with `reason: DependenciesReady` is the
+  controller saying the Pod came up.
+* *OpenShell is PID 1 in that Pod, not Hermie.* `command` runs OpenShell's own
+  `openshell-sandbox` supervisor, delivered by the `openshell-supervisor-bin`
+  image volume. It is the container's first and only process at this point: your
+  `-- true` became `OPENSHELL_SANDBOX_COMMAND: sleep infinity`, so the supervisor
+  starts, holds the sandbox open, and waits. Hermie is not running yet. When you
+  run `+openshell sandbox exec --name hermie -- start-hermes+` later, the supervisor
+  is what launches Hermes as a child process -- which is exactly why every syscall
+  and network call Hermie makes passes through OpenShell before it reaches the
+  kernel or the network.
+* *The elevated privileges are the enforcement mechanism.* `runAsUser: 0` with
+  `SYS_ADMIN`, `NET_ADMIN`, `SYS_PTRACE` and `SYSLOG` are what let the supervisor
+  intercept syscalls and network calls inside the sandbox. The agent is confined
+  by that supervisor, not by the container's own privileges.
+* *`volumeClaimTemplates` gives it a 2Gi workspace* at `/sandbox` -- which is why
+  the files you are about to upload survive a restart of the agent process.
+* *`shutdownPolicy: Retain`* keeps the sandbox and its workspace when the agent
+  stops, so a policy change plus `start-hermes` does not lose your uploads.
+
+Notice what is *not* here: any network or filesystem policy. The sandbox starts on
+OpenShell's default -- no network at all -- and you grant access one endpoint at a
+time later in this module.
 --
 
 . Hermie's user-specific configuration is externalized, so changing the model endpoint, credentials, or skill definitions does not require rebuilding the image. The bridge prepares these files in `/hermes` folder. We need to upload them before starting Hermie.
