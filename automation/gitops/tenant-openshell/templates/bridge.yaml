@@ -535,6 +535,7 @@ spec:
             # Not OPENSHELL_GATEWAY: the CLI reads that as the name of the
             # gateway to use, and every command then fails "Unknown gateway".
             - { name: GATEWAY_URL, value: {{ printf "https://%s:8080" $gwHost | quote }} }
+            - { name: TOKIO_WORKER_THREADS, value: "4" }
             - { name: HERMES_IMAGE, value: {{ .Values.sandbox.image | quote }} }
             - { name: SANDBOX_NAME, value: {{ .Values.sandbox.name | quote }} }
             - { name: SANDBOX_CPU, value: {{ .Values.sandbox.cpu | quote }} }
