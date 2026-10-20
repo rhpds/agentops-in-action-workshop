@@ -172,7 +172,7 @@ Operator prompt -> Console -> NeMo input checks
 --
 NOTE: *Run these commands from the lab terminal.* If you are still inside the bridge CLI container, run `exit` once before continuing. Switching to the Terminal tab does not leave the container. An `oc` failure inside the bridge is expected and does not indicate a problem with NeMo Guardrails.
 
-[source,bash,role="execute send-to-wetty",subs="verbatim,attributes"]
+[source,bash,role=execute,subs="verbatim,attributes"]
 ----
 oc set env deployment/water-plant-ui -n {user}-agentops \
   --containers=ui NEMO_ENDPOINT=http://nemo-guardrails:80
