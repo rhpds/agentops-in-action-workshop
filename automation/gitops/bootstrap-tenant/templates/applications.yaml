@@ -116,6 +116,16 @@ spec:
         # accept the ingress.
         - name: attackRunner.agentServiceSelector
           value: {{ if eq .Values.platform.hermesRuntime "openshell" }}hermes-openshell-bridge{{ else }}hermes-agent{{ end }}
+        # And the lab runner, which needs the same thing for the same reason:
+        # its ServiceAccount is in the shared namespace and a RoleBinding has
+        # to name where its subject comes from. Unlike the attack runner it
+        # needs no NetworkPolicy here — it prompts the agent through the
+        # operator console's Route, which is also the path the participant
+        # uses, so it follows AGENT_URL and carries the module 6 guardrail.
+        - name: labRunner.enabled
+          value: {{ .Values.platform.labRunner | quote }}
+        - name: labRunner.sharedNamespace
+          value: {{ .Values.platform.labRunnerNamespace | quote }}
   destination:
     server: https://kubernetes.default.svc
     namespace: {{ include "tenant.namespace" . }}
