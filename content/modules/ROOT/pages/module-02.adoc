@@ -186,7 +186,7 @@ spec:
       serviceAccountName: user-nzptt-openshell-sandbox
       containers:
         - name: agent
-          image: quay.io/rh-aiservices-bu/waterplant-hermes:0.2.6
+          image: quay.io/rh-aiservices-bu/waterplant-hermes:0.2.7
           command: [/opt/openshell/bin/openshell-sandbox]
           env:
             - { name: OPENSHELL_SANDBOX, value: hermie }
