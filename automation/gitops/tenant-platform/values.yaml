@@ -59,6 +59,13 @@ image:
     # X-Hermes-Session-Id instead of replaying the on-screen transcript,
     # which had the model narrating tool calls it never made.
     #
+    # 0.2.3 carries a forked mcp 1.26.0: upstream's streamable-HTTP client
+    # raises on a non-2xx POST, which unwinds the transport and leaves the
+    # waiting tool call to time out with the session gone -- so MCP Gateway
+    # refusing a tool on the caller's token read as a network outage rather
+    # than a denial. Module 3 depends on that refusal being legible.
+    # modelcontextprotocol/python-sdk#2110; see hermes-plain/Containerfile.
+    #
     # 0.2.1 adds the NeMo Guardrails input check: every prompt -- the chat
     # pane's and the probe engine's -- is checked before the agent is asked,
     # when ui.nemoEndpoint is set. Needs the build pushed to Quay before this
@@ -501,7 +508,7 @@ agent:
     # Containerfile pulls an unpinned base and shallow-clones a fork with no
     # ref, so the pushed digest is fixed but a rebuild will not recreate it.
     image: quay.io/rh-aiservices-bu/waterplant-hermes
-    tag: "0.2.2"
+    tag: "0.2.3"
     port: 8787
     home: /app/.hermes
     storageSize: 5Gi

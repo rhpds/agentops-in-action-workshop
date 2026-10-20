@@ -106,6 +106,15 @@ spec:
                 ('tool:' + request.headers['x-mcp-toolname']) in (has(auth.identity.resource_access) && auth.identity.resource_access.exists(p, p == request.headers['x-mcp-servername']) ? auth.identity.resource_access[request.headers['x-mcp-servername']].roles : [])
     response:
       unauthorized:
+        # Served as JSON so the agent's MCP client will read the body. It
+        # parses a non-2xx body only when the content type says JSON, and
+        # Authorino's default here is text/plain -- which would leave the
+        # client with a generic "server returned an error response" and lose
+        # the sentence below, the one that actually tells a participant what
+        # happened. Status stays 403; that part was always right.
+        headers:
+          content-type:
+            value: application/json
         body:
           value: '{"jsonrpc":"2.0","error":{"code":-32600,"message":"Forbidden: Insufficient permissions for this tool."}}'
 {{- end }}
