@@ -374,7 +374,7 @@ labRunner:
   enabled: true
   # PINNED, like every other image in this chart. Built and pushed from the
   # agentops-rh1-lab repo; public, so a cluster needs no pull secret.
-  image: quay.io/rh-aiservices-bu/agentops-lab-runner:0.1.1
+  image: quay.io/rh-aiservices-bu/agentops-lab-runner:0.1.2
   imagePullPolicy: IfNotPresent
   serviceAccountName: lab-runner
   # Where the participant namespaces are: <username>-<suffix>. Must agree with
