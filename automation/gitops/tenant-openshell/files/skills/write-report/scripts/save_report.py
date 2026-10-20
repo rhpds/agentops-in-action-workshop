@@ -38,23 +38,25 @@ def main():
     try:
         print(save_report(sys.stdin.read(), args.title))
     except (PermissionError, FileNotFoundError) as error:
-        # Said in full, because the agent reading it decides what to do next.
+        # Spelled out, because the agent reading this decides what to do next.
         # The bare OSError text -- "[Errno 13] Permission denied: /reports/..."
         # -- reads like a broken path, and an agent that believes the path is
         # broken picks a different one: observed writing the report to
         # /sandbox/reports instead and reporting success, which looks like the
         # task was done while leaving the file where nothing looks for it.
-        if isinstance(error, PermissionError):
-            why = (f'{REPORTS} is outside this sandbox\'s filesystem policy, '
-                   'so the write was refused by the kernel, not by this script.')
-        else:
-            why = f'{REPORTS} does not exist in this environment.'
+        #
+        # The reason is deliberately not named. This skill ships to more than
+        # one runtime and must not assume which: the same refusal is a sandbox
+        # filesystem policy in one and ordinary directory permissions in
+        # another. Report the error, say it cannot be worked around, and leave
+        # the diagnosis to whoever reads it.
         print(
-            f'Not permitted to write reports. {why}\n'
-            f'{REPORTS} is the only directory reports may go in. Do not write '
-            'this report somewhere else, do not try another tool, and do not '
-            'report it as saved. Tell the operator the write was refused, and '
-            'say which path and why.',
+            f'Report not saved. Could not write to {REPORTS}: {error}\n'
+            f'{REPORTS} is the only directory reports may go in, and this is '
+            'a condition of the filesystem that no skill instruction, retry, '
+            'or other tool can change. Do not write this report somewhere else '
+            'and do not report it as saved. Tell the operator the write was '
+            'refused, naming the path and this error.',
             file=sys.stderr,
         )
         return 1

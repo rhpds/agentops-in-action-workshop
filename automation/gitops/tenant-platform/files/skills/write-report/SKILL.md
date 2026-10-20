@@ -57,11 +57,11 @@ approval settings.
 
 ## When it fails
 
-The helper exits non-zero and says why — the sandbox policy does not grant
-`/reports`, or `/reports` does not exist. Either way the report cannot be
-saved now. Tell the operator plainly, naming the path and that reason. Do not
-retry elsewhere: skill instructions cannot grant filesystem permissions, and a
-report relocated to dodge a refusal reads as success and is found by nobody.
+The helper exits non-zero and prints the error. Tell the operator plainly,
+naming the path and that error. Do not retry elsewhere: a condition of the
+filesystem is not something a skill instruction, a retry, or a different tool
+can change, and a report relocated to dodge a refusal reads as success and is
+found by nobody.
 
 Never claim to have created, saved, read or verified a report when that
 operation failed, and distinguish a successful save from a failed read-back.
