@@ -227,6 +227,10 @@ data:
 {{ .Files.Get "files/mcp-token-refresh.py" | indent 4 }}
   wait-for-gateway.py: |
 {{ .Files.Get "files/wait-for-gateway.py" | indent 4 }}
+{{- if .Values.bridge.term.enabled }}
+  term-wrapper.sh: |
+{{ .Files.Get "files/term-wrapper.sh" | indent 4 }}
+{{- end }}
   {{- /*
   The report that is always in the reports directory, so deleted-reports has
   something real to destroy without an eval sweep having to plant it first.
@@ -597,6 +601,35 @@ spec:
 {{- if .Values.mlflow.enabled }}
             - { name: service-ca, mountPath: /service-ca, readOnly: true }
 {{- end }}
+{{- if .Values.bridge.term.enabled }}
+        # ttyd serving `openshell term`, for the Showroom tab. It lives in this
+        # pod because the gateway's NetworkPolicy admits the bridge's pods, so
+        # nothing else has to be opened up.
+        - name: term
+          image: {{ .Values.bridge.term.image }}
+          env:
+            - { name: HOME, value: /home/lab-user }
+            - { name: PORT, value: {{ .Values.bridge.term.port | quote }} }
+            - { name: RUNCOMMAND, value: /wrapper/term-wrapper.sh }
+            - { name: GATEWAY_URL, value: {{ printf "https://%s:8080" $gwHost | quote }} }
+          ports:
+            # Not "http": the hermes-agent Service targets that name, and the
+            # console's traffic would arrive here instead of the relay.
+            - name: term
+              containerPort: {{ .Values.bridge.term.port }}
+          # No readinessProbe on purpose: pod readiness is the AND of its
+          # containers, so a sulking terminal would pull the pod out of
+          # hermes-agent and take the console down with it.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+          resources:
+            {{- toYaml .Values.bridge.cliResources | nindent 12 }}
+          volumeMounts:
+            - { name: tools, mountPath: /tools }
+            - { name: mtls, mountPath: /mtls, readOnly: true }
+            - { name: term-wrapper, mountPath: /wrapper }
+{{- end }}
       volumes:
         - name: tools
           emptyDir: {}
@@ -610,6 +643,14 @@ spec:
         - name: config
           configMap:
             name: hermes-openshell-bridge
+{{- if .Values.bridge.term.enabled }}
+        - name: term-wrapper
+          configMap:
+            name: hermes-openshell-bridge
+            items:
+              - { key: term-wrapper.sh, path: term-wrapper.sh }
+            defaultMode: 0755
+{{- end }}
         # Created by the gateway chart's certgen hook, before this Deployment.
         - name: mtls
           secret:
@@ -676,4 +717,48 @@ spec:
     - name: mlflow-relay
       port: {{ .Values.mlflow.relay.port }}
       targetPort: mlflow-relay
+{{- end }}
+{{- if .Values.bridge.term.enabled }}
+---
+# The Showroom tab points at this Route. No host: OpenShift generates
+# openshell-term-<namespace>.<ingress domain>, which the tab URL can predict.
+apiVersion: v1
+kind: Service
+metadata:
+  name: openshell-term
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: hermes-openshell-bridge
+    {{- include "to.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  selector:
+    app.kubernetes.io/name: hermes-openshell-bridge
+  ports:
+    - name: term
+      port: {{ .Values.bridge.term.port }}
+      targetPort: term
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: openshell-term
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: hermes-openshell-bridge
+    {{- include "to.labels" . | nindent 4 }}
+  annotations:
+    # The TUI holds its websocket open for the whole tab session.
+    haproxy.router.openshift.io/timeout: 8h
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  to:
+    kind: Service
+    name: openshell-term
+  port:
+    targetPort: term
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
 {{- end }}
