@@ -4,19 +4,19 @@ Welcome to this hands-on AgentOps lab. Over approximately two hours you will tak
 
 == What you will do
 
-* Meet the agent already deployed in your environment, try it out, and watch several attacks succeed
+* Meet the agent already deployed in your environment, try it out, and experience several attacks succeed
   against it while every legitimate use case also succeeds
 * Put the agent in an OpenShell sandbox and discover it's now shielded but useless
 * Make the agent useful again, one control at a time -- tools, file writes, and doc access -- opening
   each back up only as far as it actually needs
-* Guard against a compromised account with NeMo Guardrails
-* Rely on MLflow Evals throughout to see what's working and what isn't, instead of checking manually
+* Guard against injection attacks with NeMo Guardrails
+* Rely on MLflow traces and MLflow Evals throughout to see what's working and what isn't, instead of checking manually
 
 == Environment
 
-Your environment is a shared Red Hat OpenShift 4.22 cluster running Red Hat OpenShift AI 3.6. Your dedicated lab namespace is `{user}-agentops`. Use the tabs above to navigate between the terminal, the OpenShift console, MLflow, and EvalHub.
+The lab environment is a shared Red Hat OpenShift 4.22 cluster running Red Hat OpenShift AI 3.5. You have your dedicated project `{user}-agentops` including below components. You also have tabs on the right side to navigate between some of these components. 
 
-Everything below is specific to your participant account and is filled in automatically. You do not need to share these with anyone.
+You do not need to memorize or access to these links. You'll be given them when needed.
 
 === Your URLs
 
