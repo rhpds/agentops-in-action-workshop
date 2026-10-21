@@ -79,7 +79,7 @@ URL: https://sso.{openshift_cluster_ingress_domain}/admin/waterplant-{user}/cons
 
 Username: `admin`
 
-Password: `{password}`
+Password: `redhat`
 
 You should see the Water Plant realm for your participant. Make sure you are working in `waterplant-{user}`.
 

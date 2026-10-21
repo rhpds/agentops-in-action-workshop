@@ -12,68 +12,23 @@
 
 === Why sandboxing matters
 
-Hermie can call plant tools, run commands, and read files. A prompt asking it to stay within its operator role does not enforce limits on those capabilities. OpenShell adds runtime controls around the agent: outbound connections and filesystem access must fit the sandbox policy, even when the model chooses an unexpected action.
-
-The goal is only to have the connections Hermie needs for plant operations while leaving unrelated destinations blocked.
+Hermie can call plant tools, run commands, and read files. A prompt asking it to stay within its operator role does not enforce limits on those capabilities. Sandboxing adds runtime controls around the agent: outbound connections and filesystem access must fit the sandbox policy, even when the model chooses an unexpected action.
 
 === What OpenShell is
 
-https://build.nvidia.com/openshell[OpenShell^] is an open, secure runtime for AI
-agents. It governs agent execution, access, and where inference goes -- and it does
-so from outside the agent process, which is the property the rest of this lab rests
-on: enforcement cannot be influenced by model output. A prompt injection can change
-what Hermie decides to do; it cannot change what Hermie is permitted to do.
+https://build.nvidia.com/openshell[OpenShell^] is an open-source, secure runtime that sandboxes AI
+agents. It enforces policies, controlling file access, network traffic, system calls, and tool usage to prevent rogue behavior.
 
-Its model is deny by default: grant permissions scoped to the declared task, and
-refuse everything else. That is why the sandbox you are about to create starts with
-no network access at all.
+There are 4 important components:
 
-Four pieces do the work:
+* *Agent sandboxes* run the agent with kernel-level filesystem and network controls that also apply to generated code and child processes.
+* *The supervisor* enforces policy for each sandbox.
+* *The gateway* manages sandbox lifecycles and policies.
+* *The policy prover* uses formal logic to check that permissions stay within operator-defined boundaries.
 
-* *Agent sandboxes* are the execution environments, with kernel-level controls over
-  the filesystems and networks the agent reaches. Those controls persist when the
-  agent runs generated code or spawns child processes -- the escape routes a
-  prompt-level rule does not cover.
-* *The supervisor* runs inside each sandbox and is the local enforcement point. It
-  checks outbound requests from outside the agent process, which is what makes it
-  fine-grained enough to allow a read while blocking a write through the same API,
-  and it holds service credentials outside the workload until a request is
-  authorized.
-* *The gateway* manages the lifecycles and policies of many sandboxes, with
-  team-based access control and workspace separation. In this lab you have your own
-  gateway, and your sandbox lives in its `default` workspace.
-* *The policy prover* uses formal logic to check whether modeled permissions stay
-  within operator-defined boundaries.
-
-For the full architecture, see
-https://docs.nvidia.com/openshell/v0.0.116/about/how-it-works[How OpenShell works^].
-
-==== How a sandbox becomes a Pod
-
-On OpenShift, OpenShell does not create Pods itself. When you ask the gateway for a
-sandbox, it creates a `Sandbox` custom resource, and the *Red Hat build of Agent
-Sandbox* controller reconciles that resource into a running Pod -- pulling the image,
-attaching a workspace volume, and reporting readiness back on the resource's status.
-
-That split is:
-
-* *The gateway owns policy and lifecycle* -- what the sandbox is allowed to do, and
-  when it exists.
-* *The Agent Sandbox controller owns the workload* -- turning the declared sandbox
-  into a Pod and keeping it running.
-
-You will see both of these when you create the sandbox: the `openshell` CLI talks to
-the gateway, and `oc get sandbox` shows the resource the controller acted on.
-
-=== How the components fit together
+For the full architecture, see https://docs.nvidia.com/openshell/v0.0.116/about/how-it-works[How OpenShell works^].
 
 Your project already contains an OpenShell gateway and a bridge. You will create the sandbox and start Hermie inside it.
-
-* The *OpenShell gateway* manages sandboxes and authenticates CLI connections using mutual TLS (mTLS).
-* The *sandbox* runs Hermie and enforces its network and filesystem policy.
-* The *bridge's CLI container* has the OpenShell CLI and client certificates. This is where you run the `openshell` commands during the lab.
-* The *bridge supervisor* prepares participant-specific configuration, discovers the exposed service, and restarts an already-started Hermie if necessary.
-* The *bridge relay* lets the operator console reach the sandboxed agent through the gateway. The console uses the `hermes-agent` Service on port `8787`; Hermie's API inside the sandbox listens on port `8080`.
 
 The request path is:
 
@@ -81,9 +36,7 @@ image::request-path.png["Request path: Operator console to the hermes-agent Serv
 
 === Put Hermie in a sandbox
 
-NOTE: *Check which terminal you are in.* Run `oc` commands from the lab terminal and `openshell` commands inside the bridge's `cli` container. If an `oc` command fails while you are inside the bridge, that is expected: the container does not have the lab terminal's OpenShift login context. Run `exit` once to return to the lab terminal, then retry the `oc` command. Switching browser tabs does not exit the container.
-
-. Switch to Terminal tab and log in to your OpenShift cluster with your credentials.
+. Switch to **Terminal** tab and log in to your OpenShift cluster with your credentials.
 +
 --
 [source,bash,role=execute,subs="verbatim,attributes"]
@@ -101,7 +54,7 @@ Use insecure connections? (y/n): y
 ----
 --
 
-. First, list the OpenShell components we mentioned above in your namespace:
+. First, list the OpenShell components we mentioned above:
 +
 --
 [source,bash,role=execute,subs="verbatim,attributes"]
@@ -110,10 +63,10 @@ oc get pods -n {user}-agentops \
   -l 'app.kubernetes.io/name in (openshell,hermes-openshell-bridge)'
 ----
 
-You should see two pods: the *OpenShell gateway* (`{user}-openshell-0`) and the *Hermes bridge* (`hermes-openshell-bridge-...`). The bridge's *CLI*, *supervisor*, and *relay proxy* run as three containers in the same pod. Its `3/3` readiness means all three containers are ready; the gateway has one container and should show `1/1`.
+You should see two pods: the *OpenShell gateway* (`{user}-openshell-0`) and the *Hermes bridge* (`hermes-openshell-bridge-...`).
 --
 
-. In order to run the agent in a sandbox, we need to use `openshell` commands against the OpenShell gateway. The gateway uses an in-cluster Service address and requires mTLS client certificates. Run these commands inside the `cli` container of the Hermes bridge pod, where the CLI and certificates are already available.
+. In order to run the agent in a sandbox, we need to use `openshell` commands against the OpenShell gateway. The gateway uses an in-cluster Service address and requires mTLS client certificates. You will run these commands inside the `cli` container of the bridge pod, where the CLI and certificates are already available.
 +
 --
 [source,bash,role=execute,subs="verbatim,attributes"]
@@ -148,123 +101,43 @@ openshell sandbox create --name hermie --from quay.io/rh-aiservices-bu/waterplan
 This creates an empty sandbox named `hermie` from the same Hermes image, with 2 CPUs and 4Gi of memory, but does not start the agent yet.
 --
 
-. The CLI did not create a Pod. It asked the OpenShell gateway to create a `Sandbox`
-custom resource, and the *Agent Sandbox controller* turned that into the running
-workload. Inspecting that needs your own terminal rather than the bridge, so leave
-the CLI container first:
+. OpenShell does not create hermie pod itself. When you ask the gateway for a
+sandbox, it creates a `Sandbox` custom resource, and the *Red Hat build of Agent
+Sandbox* controller reconciles that resource into a running Pod by pulling the image,
+attaching a workspace volume, and reporting readiness back on the resource's status.
++
+Inspecting that needs your own terminal rather than the bridge, so leave the CLI container first:
 +
 --
 [source,bash,role=execute,subs="verbatim,attributes"]
 ----
 exit
 ----
-
-You are back in your own terminal. Now check for the sandbox resource and the pods
-it produced:
-
-[source,bash,role=execute,subs="verbatim,attributes"]
-----
-oc get sandbox -n {user}-agentops
-oc get pods -n {user}-agentops
-----
-
-Note the pod list is unfiltered this time. The sandbox pod does not carry the
-`app.kubernetes.io/name` labels you filtered on earlier, so the narrower command
-would not show it.
-
-The sandbox is named `+default--hermie+`: the workspace (`default`) and the name you
-gave it. Inspect it with `+oc get sandbox default--hermie -n {user}-agentops -o yaml+`.
-Trimmed to the parts that matter:
-
-....
-apiVersion: agents.x-k8s.io/v1beta1
-kind: Sandbox
-metadata:
-  name: default--hermie
-  namespace: user-nzptt-agentops
-  labels:
-    openshell.ai/managed-by: openshell
-    openshell.ai/sandbox-name: hermie
-    openshell.ai/sandbox-workspace: default
-spec:
-  operatingMode: Running
-  shutdownPolicy: Retain
-  podTemplate:
-    spec:
-      automountServiceAccountToken: false
-      serviceAccountName: user-nzptt-openshell-sandbox
-      containers:
-        - name: agent
-          image: quay.io/rh-aiservices-bu/waterplant-hermes:0.2.7
-          command: [/opt/openshell/bin/openshell-sandbox]
-          env:
-            - { name: OPENSHELL_SANDBOX, value: hermie }
-            - { name: OPENSHELL_SANDBOX_COMMAND, value: sleep infinity }
-            - { name: OPENSHELL_ENDPOINT, value: 'https://user-nzptt-openshell...:8080' }
-          resources:
-            limits: { cpu: '2', memory: 4Gi }
-          securityContext:
-            runAsUser: 0
-            capabilities:
-              add: [SYS_ADMIN, NET_ADMIN, SYS_PTRACE, SYSLOG]
-          volumeMounts:
-            - { mountPath: /sandbox, name: workspace }
-      volumes:
-        - name: openshell-supervisor-bin
-          image:
-            reference: 'ghcr.io/nvidia/openshell/supervisor:2d10881...'
-  volumeClaimTemplates:
-    - metadata: { name: workspace }
-      spec:
-        accessModes: [ReadWriteOnce]
-        resources: { requests: { storage: 2Gi } }
-status:
-  conditions:
-    - type: Ready
-      status: 'True'
-      reason: DependenciesReady
-      message: Pod is Ready
-  nodeName: worker-cluster-kv9d8-2
-  podIPs:
-    - 10.232.4.26
-....
-
-What the *Agent Sandbox controller* does with that resource:
-
-* *It owns the Pod, not you.* The controller reconciles the `Sandbox` into a Pod
-  named `+default--hermie+` -- the name recorded in the CR's
-  `agents.x-k8s.io/pod-name` annotation -- built from `podTemplate`, and reports
-  back in `status.conditions`. `Ready` with `reason: DependenciesReady` is the
-  controller saying the Pod came up.
-* *OpenShell is PID 1 in that Pod, not Hermie.* `command` runs OpenShell's own
-  `openshell-sandbox` supervisor, delivered by the `openshell-supervisor-bin`
-  image volume. It is the container's first and only process at this point: your
-  `-- true` became `OPENSHELL_SANDBOX_COMMAND: sleep infinity`, so the supervisor
-  starts, holds the sandbox open, and waits. Hermie is not running yet. When you
-  run `+openshell sandbox exec --name hermie -- start-hermes+` later, the supervisor
-  is what launches Hermes as a child process -- which is exactly why every syscall
-  and network call Hermie makes passes through OpenShell before it reaches the
-  kernel or the network.
-* *The elevated privileges are the enforcement mechanism.* `runAsUser: 0` with
-  `SYS_ADMIN`, `NET_ADMIN`, `SYS_PTRACE` and `SYSLOG` are what let the supervisor
-  intercept syscalls and network calls inside the sandbox. The agent is confined
-  by that supervisor, not by the container's own privileges.
-* *`volumeClaimTemplates` gives it a 2Gi workspace* at `/sandbox` -- which is why
-  the files you are about to upload survive a restart of the agent process.
-* *`shutdownPolicy: Retain`* keeps the sandbox and its workspace when the agent
-  stops, so a policy change plus `start-hermes` does not lose your uploads.
-
-Notice what is *not* here: any network or filesystem policy. The sandbox starts on
-OpenShell's default -- no network at all -- and you grant access one endpoint at a
-time later in this module.
 --
-
-. We need to go back inside the `cli` container of the Hermes bridge pod. `$POD` is
-still set from earlier, because you never left your own terminal session.
+. You are back in your own terminal. Now check for the sandbox resource and the pods it produced:
 +
 --
 [source,bash,role=execute,subs="verbatim,attributes"]
 ----
+oc get sandbox -n {user}-agentops
+oc get pods -l agents.x-k8s.io/sandbox-name-hash -n {user}-agentops
+----
+
+What the *Agent Sandbox controller* does with that resource:
+
+* *It creates and owns the Pod.* The controller builds `+default--hermie+` and reports `Ready` once the Pod is up.
+* *OpenShell runs first, not Hermie.* The container starts OpenShell's `openshell-sandbox` supervisor, which holds the sandbox open and waits. When you later start an agent, the supervisor launches it as a child process, so every syscall and network call Hermie makes goes through OpenShell.
+* *Elevated privileges belong to the supervisor, not the agent.* Supervison runs as root and has elevated capabilities let the supervisor intercept Hermie's calls. Hermie itself is confined by the supervisor.
+* *Volume is attached* at `/sandbox`, and *`shutdownPolicy: Retain`* keeps it when the agent stops, so your uploaded files survive restarts.
+
+--
+
+. Let's go back inside the `cli` container to continue running `openshell` commands.
++
+--
+[source,bash,role=execute,subs="verbatim,attributes"]
+----
+POD=$(oc get pod -l app.kubernetes.io/name=hermes-openshell-bridge -o name -n {user}-agentops)
 oc rsh -n {user}-agentops -c cli $POD
 ----
 --
@@ -343,12 +216,20 @@ oc set env deployment/water-plant-ui AGENT_URL=http://hermes-agent.{user}-agento
 oc rollout status deployment/water-plant-ui -n {user}-agentops
 ----
 --
-
-. Let's test it! Go to the agent UI and ask one of the questions you tried previously:
 +
 --
-`What's the status of pump 4?`
+[source,text,subs="verbatim,attributes"]
+----
+deployment "water-plant-ui" successfully rolled out
+----
+
 --
+. Let's test it! Go to the agent UI and ask one of the questions you tried previously:
++
+[source,text,subs="verbatim,attributes"]
+----
+What's the status of pump 4?
+----
 
 . No answer? Doesn't work, right? When you sandboxed an agent with OpenShell, by default, it comes with **deny all** outbound network access. So, you are secure, but too secure (is there such a thing?👀).
 +
@@ -450,7 +331,7 @@ openshell policy update hermie \
 ----
 --
 
-. Restart Hermie so it can fetch a token and discover the MCP tools. Network policy changes apply live, but Hermes discovers its tools at startup. Just for this one, we need to restart the boxed Hermie:
+. Restart Hermie so it can fetch an authentication token and discover the MCP tools. Network policy changes apply live, but Hermes discovers its tools at startup. Just for this one, we need to restart the boxed Hermie:
 +
 --
 [source,bash,role=execute,subs="verbatim,attributes"]
@@ -461,17 +342,28 @@ openshell sandbox exec --name hermie -- start-hermes
 
 . Get back to the UI and ask the same question again:
 +
+[source,text,subs="verbatim,attributes"]
+----
+What's the status of pump 4?
+----
++
 --
-`What's the status of pump 4?`
 
-Still doesn't work 😥 We may need to add a few more policies. Let's check the logs again:
-
+--
++
+. Still doesn't work 😥 We may need to add a few more policies. Let's check the logs again:
++
 [source,bash,role=execute,subs="verbatim,attributes"]
 ----
 openshell logs hermie --since 5m --source sandbox | grep DENIED | grep maas
 ----
++
+--
 
+--
 You should see an output like below:
++
+--
 
 [source,text,subs="verbatim,attributes"]
 ----
@@ -479,7 +371,7 @@ You should see an output like below:
 ----
 --
 
-. This log shows us that Hermie is missing a policy to let it to access the model endpoint. Let's apply it:
+. This log shows us that Hermie is missing a policy to let it to access the model endpoint. That one is sort of important as well, right? 🙈 Let's apply it:
 +
 --
 [source,bash,role=execute,subs="verbatim,attributes"]
@@ -496,28 +388,53 @@ openshell policy update hermie \
 
 . Same drill. Go back to the agent UI and send a prompt.
 +
---
+[source,text,subs="verbatim,attributes"]
+----
+What's the status of pump 4?
+----
++
 IT WORKS! 🎉🎉
++
+Now you can check *MLflow traces* to inspect the model interaction and tool calls behind Hermie's answer..but it says `no trace was collected for this turn`. Where is the trace about shutting down pump 4? 
 
-Open the *MLflow traces* link in the console footer. It lands on the experiment list for your own project; select your experiment (`{user}` by default), open its *Traces* tab, and look for the request you just sent. A trace lets you inspect the model interaction and tool calls behind Hermie's answer. Use the latest request time to distinguish it from older runs.
-
-But..where is the trace about shutting down pump 4? 
-Ahh, wonder why? Yup, you know what to do at this point! (You will also see `no trace was collected for this turn` in the console). First, check the logs:
-
+. You know what to do at this point! Check the logs:
++
 [source,bash,role=execute,subs="verbatim,attributes"]
 ----
 openshell logs hermie --since 5m --source sandbox | grep mlflow | grep DENIED
 ----
-
++
 A familiar output:
-
++
 [source,text,subs="verbatim,attributes"]
 ----
 [1791795587.426] [sandbox] [OCSF ] [ocsf] HTTP:POST [MED] DENIED /usr/bin/python3.12(868) -> POST http://hermes-mlflow-relay.{user}-agentops.svc.cluster.local:8788/v1/traces [policy:- engine:opa] [reason:FORWARD denied POST hermes-mlflow-relay.{user}-agentops.svc.cluster.local:8788/v1/traces]
 ----
---
 
-. Let's apply the policy:
+. But this time, let's apply the policy differently! You may have seen a tab next to Terminal called *OpenShell Term*. OpenShell has a Terminal User Interface (TUI) dashboard. It serves as a real-time command center for observing and managing your active AI sandboxes. It allows you to see the active policies, and also apply new ones. 
++
+Click *OpenShell Term* tab. (It may ask you to press any key to access the TUI, so please click your favourite key 🙃)
++
+image::openshell-term-1.png["OpenShell Terminal User Interface",align=center]
+
+. Click `j` or down arrow ↓ to highlight the *Sandboxes* box and hit Enter. 
++
+You should see the current policies you applied, and *5 pending network rules*. Press `r` to review them.
++
+image::openshell-term-2.png["Network Rules to Review",align=center]
++
+You see the first one says *allow_hermes_mlflow*. That is the one we need to allow. While you are highlighting that rule, you should press `a`.
+
+. Go back to the console and send the same prompt again. 
++
+[source,text,subs="verbatim,attributes"]
+----
+What's the status of pump 4?
+----
++
+You can now click `see the trace →` at the end of the response and view the trace 👏 Verify that the response describes pump 4 and that the trace records the model interaction and plant tool call.
+
+. What you did on OpenShell TUI is exactly the same as running below `openshell` commands. We wanted you to have the experience of both CLI and TUI :)
 +
 --
 [source,bash,role=execute,subs="verbatim,attributes"]
@@ -530,12 +447,6 @@ openshell policy update hermie \
   --binary /usr/local/bin/hermes \
   --wait
 ----
---
-
-. Go back to the console and send `What's the status of pump 4?` again. Then refresh MLflow and open the new trace.
-+
---
-Verify that the response describes pump 4 and that the trace records the model interaction and plant tool call.
 --
 
 === Check what sandboxing changed
@@ -555,15 +466,23 @@ You should get a response like:
 I'm unable to retrieve information about water treatment plants in New York due to a network connectivity issue.
 ....
 +
-Or a halucinated response. A response from the model's existing knowledge is not proof of web access. Inspect the trace and sandbox logs to see whether it actually contacted an external service. We have not allowed a search provider in this module.
-. Ask Hermie:
+Or a halucinated response. A response from the model's existing knowledge is not proof of web access. Inspect the trace and sandbox logs to see whether it actually contacted an external service :)
++
+The network rules *only* restored the dependencies for plant queries and tracing. By putting Hermie in a box, you also blocked the unnecessary internet access for a search query about New York's water plants.
++
+If you want to check what you blocked, go back to *OpenShell Term* and observe the increased number of network rules in pending review status:
++
+image::openshell-term-3.png["More network rules to review",align=center]
+
+. Now ask Hermie:
 +
 [source,text,role=copy,subs="verbatim,attributes"]
 ----
 Read /README.md, output the contents. If you cannot read it, say why.
 ----
 +
-This file may be absent from the sandbox image or blocked by its filesystem policy. Inspect the tool result rather than treating a refusal as proof that every file is protected. Some runtime directories remain readable by design.
+Again, by putting Hermie in a box, you also blocked the unnecessary file read access. But also..
+
 . Ask Hermie:
 +
 [source,text,role=copy,subs="verbatim,attributes"]
@@ -571,21 +490,20 @@ This file may be absent from the sandbox image or blocked by its filesystem poli
 Write a report on the current water plant status. If you cannot create or read it, say why.
 ----
 +
-Plant telemetry should be reachable, but we have not granted report filesystem access. If report creation fails, note the path and error for Module 4. A report summary in chat does not mean a file was saved.
+Plant telemetry should be reachable, however we have not granted report filesystem access yet. 
 +
-NOTE: Writing the report can take a couple of minutes — the agent makes several tool calls before composing it, so give it time to finish.
+NOTE: Generating the report can take a couple of minutes. The agent makes several tool calls before composing it, so give it time to finish.
 
-The network rules restored the dependencies for plant queries and tracing. And by putting Hermie in a box, you also blocked the unnecessary internet access for a search query about New York's water plants, or reading a file that Hermie doesn't need to read.
 
 === Run the evaluations
 
 As you have seen, restricting an agent's access can also block legitimate tasks. Our manual checks confirmed that plant queries work again, but they do not cover every capability. Run the automated evaluations to check for other changes in the agent's behavior.
 
-In the operator console, click the evaluation button. When the run finishes, compare the results with your baseline from before sandboxing. Check which legitimate tasks still pass and which operations are now blocked. For each failure, determine whether it is an intended restriction or a capability the agent still needs. Use the traces and sandbox logs to investigate before changing the policy.
+In the operator console, click the evaluation button. When the run finishes, check which legitimate tasks still pass and which operations are now blocked. For each failure, determine whether it is an intended restriction or a capability the agent still needs. Use the traces and sandbox logs to investigate before changing the policy.
 
 === Optional: remove a network rule
 
-You do not need to run this for the main exercise. To demonstrate revocation, remove the model endpoint rule from inside the bridge CLI container:
+You do not need to run this. Just to demonstrate the policy revocation, you can remove the model endpoint rule from inside the bridge CLI container:
 
 [source,bash,role=execute,subs="verbatim,attributes"]
 ----
