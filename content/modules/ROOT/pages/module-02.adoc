@@ -14,7 +14,7 @@
 
 Hermie can call plant tools, run commands, and read files. A prompt asking it to stay within its operator role does not enforce limits on those capabilities. OpenShell adds runtime controls around the agent: outbound connections and filesystem access must fit the sandbox policy, even when the model chooses an unexpected action.
 
-The goal is to restore the connections Hermie needs for plant operations while leaving unrelated destinations blocked.
+The goal is only to have the connections Hermie needs for plant operations while leaving unrelated destinations blocked.
 
 === What OpenShell is
 
