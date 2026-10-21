@@ -73,6 +73,12 @@ bridge:
   proxyResources:
     requests: { cpu: 20m, memory: 32Mi }
     limits:   { cpu: 200m, memory: 128Mi }
+  # `openshell term`, the CLI's TUI, served to a Showroom tab. The image is the
+  # lab's own Showroom terminal, which is ttyd (terminal/Containerfile).
+  term:
+    enabled: true
+    image: quay.io/rh-aiservices-bu/agentops-in-action-terminal:2026-03-11-notimeout
+    port: 7681
   # The participant's cli container: a shell and the openshell CLI.
   cliResources:
     requests: { cpu: 10m, memory: 64Mi }
