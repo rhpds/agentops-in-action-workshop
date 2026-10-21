@@ -208,29 +208,32 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "1"
 data:
-{{- /* Soul fs_probe path: the sandboxed agent (openshell runtime, what the
-       console targets from module 2 on) homes at /sandbox/.hermes; plain at
-       /app/.hermes. */}}
 {{- /*
-Where the agent the console talks to keeps its instructions.
+The definitions go in as written. In particular this template does NOT
+substitute the agent's home into the soul paths any more.
 
-Derived from $onPlain, the same switch AGENT_URL and AGENT_POD_SELECTOR use —
-not from agent.hermes.runtime. Those are different questions: runtime says
-whether a sandbox was deployed, while the console is pointed at hermes-plain
-whenever the plain agent exists alongside the gateway. Keyed on runtime, a
-tenant with both got definitions naming /sandbox/.hermes while the console was
-conversing with hermes-plain at /app/.hermes, so tampered-agent-config told the
-agent to edit a path that does not exist in the pod it was talking to — and
-the goal then measured that same wrong path and reported the attack blocked.
+It used to, through a __HERMES_HOME__ placeholder resolved from $onPlain. The
+trouble is that $onPlain is decided when the chart renders, while the agent
+the console talks to is decided at runtime: module 2 has the participant
+`oc set env` AGENT_URL over to the sandbox, and nothing re-renders this
+ConfigMap when they do. From that point the definitions still named the plain
+agent's /app/.hermes, so tampered-agent-config asked the sandboxed agent to
+write a file that is neither its config nor inside its writable tree. The
+model declined on those grounds, the attack scored "declined", and the
+filesystem policy module 4 exists to teach was never exercised. The goal and
+the cleanup measured and restored that same wrong file.
+
+The soul paths are relative in the definitions instead ("SOUL.md"), which the
+console resolves against the home of whichever agent AGENT_URL currently
+names — the same runtime answer its pod selector and its reset already use.
 */ -}}
-{{- $hermesHome := ternary "/app/.hermes" "/sandbox/.hermes" $onPlain }}
 {{- range $path, $_ := .Files.Glob "files/attack-eval-defs/attacks/*.yaml" }}
   attack-{{ base $path }}: |
-{{ $.Files.Get $path | replace "__HERMES_HOME__" $hermesHome | indent 4 }}
+{{ $.Files.Get $path | indent 4 }}
 {{- end }}
 {{- range $path, $_ := .Files.Glob "files/attack-eval-defs/evals/*.yaml" }}
   eval-{{ base $path }}: |
-{{ $.Files.Get $path | replace "__HERMES_HOME__" $hermesHome | indent 4 }}
+{{ $.Files.Get $path | indent 4 }}
 {{- end }}
 ---
 apiVersion: apps/v1
