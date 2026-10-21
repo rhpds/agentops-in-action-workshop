@@ -102,6 +102,17 @@ spec:
       ports:
         - port: {{ .Values.bridge.port }}
           protocol: TCP
+{{- if .Values.bridge.term.enabled }}
+    # The router, for the terminal tab's Route. Without this the page loads
+    # once and the websocket then times out (verified on cluster-8qgxd).
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              policy-group.network.openshift.io/ingress: ""
+      ports:
+        - port: {{ .Values.bridge.term.port }}
+          protocol: TCP
+{{- end }}
 {{- if .Values.mlflow.enabled }}
     # The sandbox posts its spans to the MLflow relay in this pod. It is in this
     # namespace, so a podSelector — and sandbox pods carry only
