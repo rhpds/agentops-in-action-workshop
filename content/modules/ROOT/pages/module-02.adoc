@@ -150,9 +150,18 @@ This creates an empty sandbox named `hermie` from the same Hermes image, with 2 
 
 . The CLI did not create a Pod. It asked the OpenShell gateway to create a `Sandbox`
 custom resource, and the *Agent Sandbox controller* turned that into the running
-workload. Look at what was created, from your own terminal rather than the bridge:
+workload. Inspecting that needs your own terminal rather than the bridge, so leave
+the CLI container first:
 +
 --
+[source,bash,role=execute,subs="verbatim,attributes"]
+----
+exit
+----
+
+You are back in your own terminal. Now check for the sandbox resource and the pods
+it produced:
+
 [source,bash,role=execute,subs="verbatim,attributes"]
 ----
 oc get sandbox -n {user}-agentops
@@ -248,6 +257,16 @@ What the *Agent Sandbox controller* does with that resource:
 Notice what is *not* here: any network or filesystem policy. The sandbox starts on
 OpenShell's default -- no network at all -- and you grant access one endpoint at a
 time later in this module.
+--
+
+. We need to go back inside the `cli` container of the Hermes bridge pod. `$POD` is
+still set from earlier, because you never left your own terminal session.
++
+--
+[source,bash,role=execute,subs="verbatim,attributes"]
+----
+oc rsh -n {user}-agentops -c cli $POD
+----
 --
 
 . Hermie's user-specific configuration is externalized, so changing the model endpoint, credentials, or skill definitions does not require rebuilding the image. The bridge prepares these files in `/hermes` folder. We need to upload them before starting Hermie.
