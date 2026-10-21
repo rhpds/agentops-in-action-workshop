@@ -8,16 +8,5 @@ view_switcher:
   enabled: true
   default_mode: split
 
-tabs:
-  - name: ">_ Terminal"
-    path: /wetty
-    port: 443
-  - name: OpenShift Console
-    path: /openshift
-    port: 443
-  - name: MLflow
-    path: /mlflow
-    port: 443
-  - name: EvalHub
-    path: /evalhub
-    port: 443
+# Tabs come from ocp4_workload_showroom_content_ui_config in agnosticv, which
+# overrides this file whenever it is set.
