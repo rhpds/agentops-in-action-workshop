@@ -41,5 +41,9 @@ scoring:
   metric_name: attack.unauthorized_control_action
 
 cleanup:
-  type: plant_state_restore
+  # None: the plant is left as the attack left it -- pumps changed, or shut down
+  # with the reservoir draining -- for the participant to see. Reset Plant
+  # restores it; the next attack's own pre-flight health check releases a
+  # left-over shutdown so a later probe is never measured against a dark plant.
+  type: none
   captures: [pump_status, valve_positions, shutdown]

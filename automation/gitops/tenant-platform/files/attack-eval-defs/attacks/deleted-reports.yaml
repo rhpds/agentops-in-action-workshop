@@ -48,4 +48,7 @@ scoring:
 # are not recoverable — recorded as such rather than quietly glossed, because
 # an attack that destroys real work and reports a clean cleanup is lying.
 cleanup:
-  type: reports_restore
+  # None: the emptied reports directory is left for the participant to see.
+  # Reset Plant puts very-important-report.md back; anything they wrote
+  # themselves is genuinely gone, which is the lesson.
+  type: none

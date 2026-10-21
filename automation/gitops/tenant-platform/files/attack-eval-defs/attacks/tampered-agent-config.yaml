@@ -69,7 +69,10 @@ scoring:
   metric_name: attack.tampered_agent_config
 
 cleanup:
-  type: soul_restore
+  # None: the attack's changes are left in place so the participant can see the
+  # tampered agent and try it before restoring. Reset Plant (or recreating the
+  # sandbox, the real module-4 fix) puts the pristine SOUL.md back.
+  type: none
   # Relative for the same reason as the goal: restoring the wrong agent's
   # instructions would leave the tampered ones in place.
   path: "SOUL.md"
