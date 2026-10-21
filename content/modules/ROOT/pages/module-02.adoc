@@ -105,19 +105,18 @@ This creates an empty sandbox named `hermie` from the same Hermes image, with 2 
 sandbox, it creates a `Sandbox` custom resource, and the *Red Hat build of Agent
 Sandbox* controller reconciles that resource into a running Pod by pulling the image,
 attaching a workspace volume, and reporting readiness back on the resource's status.
-
-Inspecting that needs your own terminal rather than the bridge, so leave
-the CLI container first:
++
+Inspecting that needs your own terminal rather than the bridge, so leave the CLI container first:
 +
 --
 [source,bash,role=execute,subs="verbatim,attributes"]
 ----
 exit
 ----
-
-You are back in your own terminal. Now check for the sandbox resource and the pods
-it produced:
-
+--
+. You are back in your own terminal. Now check for the sandbox resource and the pods it produced:
++
+--
 [source,bash,role=execute,subs="verbatim,attributes"]
 ----
 oc get sandbox -n {user}-agentops
@@ -216,14 +215,15 @@ oc set env deployment/water-plant-ui AGENT_URL=http://hermes-agent.{user}-agento
 ----
 oc rollout status deployment/water-plant-ui -n {user}-agentops
 ----
+--
 +
 --
 [source,text,subs="verbatim,attributes"]
 ----
 deployment "water-plant-ui" successfully rolled out
 ----
---
 
+--
 . Let's test it! Go to the agent UI and ask one of the questions you tried previously:
 +
 [source,text,subs="verbatim,attributes"]
@@ -346,15 +346,24 @@ openshell sandbox exec --name hermie -- start-hermes
 ----
 What's the status of pump 4?
 ----
++
+--
 
-Still doesn't work 😥 We may need to add a few more policies. Let's check the logs again:
-
+--
++
+. Still doesn't work 😥 We may need to add a few more policies. Let's check the logs again:
++
 [source,bash,role=execute,subs="verbatim,attributes"]
 ----
 openshell logs hermie --since 5m --source sandbox | grep DENIED | grep maas
 ----
++
+--
 
+--
 You should see an output like below:
++
+--
 
 [source,text,subs="verbatim,attributes"]
 ----
@@ -383,38 +392,37 @@ openshell policy update hermie \
 ----
 What's the status of pump 4?
 ----
---
++
 IT WORKS! 🎉🎉
-
++
 Now you can check *MLflow traces* to inspect the model interaction and tool calls behind Hermie's answer..but it says `no trace was collected for this turn`. Where is the trace about shutting down pump 4? 
 
-You know what to do at this point! Check the logs:
-
+. You know what to do at this point! Check the logs:
++
 [source,bash,role=execute,subs="verbatim,attributes"]
 ----
 openshell logs hermie --since 5m --source sandbox | grep mlflow | grep DENIED
 ----
-
++
 A familiar output:
-
++
 [source,text,subs="verbatim,attributes"]
 ----
 [1791795587.426] [sandbox] [OCSF ] [ocsf] HTTP:POST [MED] DENIED /usr/bin/python3.12(868) -> POST http://hermes-mlflow-relay.{user}-agentops.svc.cluster.local:8788/v1/traces [policy:- engine:opa] [reason:FORWARD denied POST hermes-mlflow-relay.{user}-agentops.svc.cluster.local:8788/v1/traces]
 ----
---
 
 . But this time, let's apply the policy differently! You may have seen a tab next to Terminal called *OpenShell Term*. OpenShell has a Terminal User Interface (TUI) dashboard. It serves as a real-time command center for observing and managing your active AI sandboxes. It allows you to see the active policies, and also apply new ones. 
-
++
 Click *OpenShell Term* tab. (It may ask you to press any key to access the TUI, so please click your favourite key 🙃)
-
++
 image::openshell-term-1.png["OpenShell Terminal User Interface",align=center]
 
 . Click `j` or down arrow ↓ to highlight the *Sandboxes* box and hit Enter. 
-
++
 You should see the current policies you applied, and *5 pending network rules*. Press `r` to review them.
-
++
 image::openshell-term-2.png["Network Rules to Review",align=center]
-
++
 You see the first one says *allow_hermes_mlflow*. That is the one we need to allow. While you are highlighting that rule, you should press `a`.
 
 . Go back to the console and send the same prompt again. 
@@ -423,9 +431,8 @@ You see the first one says *allow_hermes_mlflow*. That is the one we need to all
 ----
 What's the status of pump 4?
 ----
---
++
 You can now click `see the trace →` at the end of the response and view the trace 👏 Verify that the response describes pump 4 and that the trace records the model interaction and plant tool call.
---
 
 . What you did on OpenShell TUI is exactly the same as running below `openshell` commands. We wanted you to have the experience of both CLI and TUI :)
 +
@@ -460,11 +467,11 @@ I'm unable to retrieve information about water treatment plants in New York due 
 ....
 +
 Or a halucinated response. A response from the model's existing knowledge is not proof of web access. Inspect the trace and sandbox logs to see whether it actually contacted an external service :)
-
++
 The network rules *only* restored the dependencies for plant queries and tracing. By putting Hermie in a box, you also blocked the unnecessary internet access for a search query about New York's water plants.
-
++
 If you want to check what you blocked, go back to *OpenShell Term* and observe the increased number of network rules in pending review status:
-
++
 image::openshell-term-3.png["More network rules to review",align=center]
 
 . Now ask Hermie:
@@ -473,9 +480,9 @@ image::openshell-term-3.png["More network rules to review",align=center]
 ----
 Read /README.md, output the contents. If you cannot read it, say why.
 ----
-
-Again, by putting Hermie in a box, you also blocked the unnecessary file read access. But also..
 +
+Again, by putting Hermie in a box, you also blocked the unnecessary file read access. But also..
+
 . Ask Hermie:
 +
 [source,text,role=copy,subs="verbatim,attributes"]
