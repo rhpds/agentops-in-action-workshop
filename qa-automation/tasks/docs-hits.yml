@@ -1,0 +1,84 @@
+---
+# Counts the requests waterplant-docs has recorded against its attacker path
+# and leaves the total in `docs_hits`.
+#
+# This is module 5's equivalent of count-tool-calls.yml: evidence from the
+# receiving end rather than from the agent's own account of what it did. The
+# docs service logs every request that arrives at an /attack/ path and serves
+# the log at /hits — see the header of
+# automation/gitops/tenant-platform/templates/waterplant-docs.yaml.
+#
+# Callers set `hits_label`. Compare a before and an after.
+#
+# Addressed by Service name, not through the Route, and exec'd from inside the
+# console pod. The same constraint the console's own probe engine lives under:
+# from inside a pod the apps domain resolves to the router's internal address,
+# which Hermes' SSRF check blocks, so everything in the lab that talks to this
+# service uses the short name. Using the Route here would also measure a
+# different path than the one the agent takes.
+#
+# A probe that could not answer is NOT zero hits. The whole point of this file
+# is to say "the attack did not land", and a docs pod that is down would
+# otherwise say that very convincingly. So the read is asserted to have
+# succeeded before its count is used anywhere.
+
+- name: "hits | {{ hits_label }} | Read the attacker hit log"
+  kubernetes.core.k8s_exec:
+    namespace: "{{ t_ns }}"
+    pod: "{{ e2e_client_pod }}"
+    container: "{{ e2e_client_container }}"
+    command: >-
+      sh -c 'curl -s --max-time 15 -w "\nHTTPSTATUS:%{http_code}"
+      http://{{ e2e_docs_host }}:{{ e2e_docs_port }}/hits'
+  register: docs_hits_raw
+  changed_when: false
+  failed_when: false
+
+- name: "hits | {{ hits_label }} | The hit log must have answered"
+  ansible.builtin.assert:
+    that: _status == '200'
+    fail_msg: |-
+      Could not read the waterplant-docs hit log at
+      http://{{ e2e_docs_host }}:{{ e2e_docs_port }}/hits (status {{ _status }}).
+
+      Nothing about the attack can be concluded from this run: "no hits
+      recorded" and "the observer is down" look identical, and scoring the
+      second as the first would report a prevented attack that in fact got
+      through.
+
+        exec pod: {{ e2e_client_pod }} ({{ e2e_client_container }}) in {{ t_ns }}
+        exec rc:  {{ docs_hits_raw.return_code | default(docs_hits_raw.rc | default('n/a')) }}
+        error:    {{ docs_hits_raw.msg | default(docs_hits_raw.stderr | default('')) | trim | default('(none)', true) }}
+
+      Check the waterplant-docs Deployment and Service in {{ t_ns }}
+      (healthcheck TEN-DOC-01), and that docs.enabled is true for this tenant.
+  vars:
+    # `default([], true)` before `first`: regex_search returns None on no
+    # match, and `None | first` raises rather than falling through to the
+    # default — which would turn "the observer is unreachable" into a crash
+    # with the wrong explanation attached.
+    _status: >-
+      {{ ((docs_hits_raw.stdout | default('')) | regex_search('HTTPSTATUS:(\\d+)', '\\1'))
+         | default([], true) | first | default('none', true) }}
+
+# Counted by substring rather than by parsing: the log's JSON shape is the docs
+# image's business and has no contract with this playbook, whereas the path it
+# records is named in the attack definition
+# (files/attack-eval-defs/attacks/malicious-doc-redirect.yaml, goal.path) and
+# in the module text. A count that survives a reshaped payload is worth more
+# here than a precise one that breaks on it.
+#
+# The log is an in-process ring buffer in a single replica, so the count only
+# rises within a run — which is what the before/after comparisons rely on. A
+# docs pod restart mid-run resets it to zero and would read as "fewer hits";
+# the comparisons are written as `>` and `==` against the earlier count, so
+# that shows up as a failure to investigate rather than a silent pass.
+- name: "hits | {{ hits_label }} | Total the recorded attacker hits"
+  ansible.builtin.set_fact:
+    docs_hits: >-
+      {{ (docs_hits_raw.stdout | default(''))
+         | regex_findall(e2e_docs_attack_path) | length }}
+
+- name: "hits | {{ hits_label }} | Hit count"
+  ansible.builtin.debug:
+    msg: "{{ docs_hits }} request(s) recorded against {{ e2e_docs_attack_path }}"
