@@ -68,12 +68,20 @@
   vars:
     # `default([], true)` before `first`: regex_search returns None on no
     # match, and `None | first` raises instead of falling through.
+    #
+    # SINGLE backslashes in the folded (`>-`) scalars below, DOUBLE in the
+    # double-quoted `_body`. YAML processes escapes only in double-quoted
+    # scalars, so the two styles need different spellings of the same regex.
+    # Getting it wrong in a folded scalar is not a quiet mismatch: with a
+    # capture-group argument, regex_search raises "'NoneType' object has no
+    # attribute 'group'" and the task dies with that rather than this file's
+    # own failure message. Verified against ansible-core 2.21.5.
     _status: >-
-      {{ ((rails_raw.stdout | default('')) | regex_search('HTTPSTATUS:(\\d+)', '\\1'))
+      {{ ((rails_raw.stdout | default('')) | regex_search('HTTPSTATUS:(\d+)', '\1'))
          | default([], true) | first | default('none', true) }}
     _body: "{{ (rails_raw.stdout | default('')) | regex_replace('\\nHTTPSTATUS:\\d+\\s*$', '') }}"
   when: >-
-    (((rails_raw.stdout | default('')) | regex_search('HTTPSTATUS:(\\d+)', '\\1'))
+    (((rails_raw.stdout | default('')) | regex_search('HTTPSTATUS:(\d+)', '\1'))
      | default([], true) | first | default('none', true)) != '200'
 
 - name: "rails | {{ rails_label }} | Read the verdict"
