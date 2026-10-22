@@ -57,8 +57,17 @@
     # match, and `None | first` raises rather than falling through to the
     # default — which would turn "the observer is unreachable" into a crash
     # with the wrong explanation attached.
+    #
+    # SINGLE backslashes, and it matters. This is a folded (`>-`) scalar, and
+    # YAML does not process escapes in those — only in double-quoted ones. So
+    # `\\d` reaches the regex engine as a literal backslash followed by `d`
+    # and matches nothing, which here does not merely return the default: with
+    # a capture-group argument, regex_search raises
+    # "'NoneType' object has no attribute 'group'" and the task dies with that
+    # instead of this file's actual failure message. Verified against
+    # ansible-core 2.21.5.
     _status: >-
-      {{ ((docs_hits_raw.stdout | default('')) | regex_search('HTTPSTATUS:(\\d+)', '\\1'))
+      {{ ((docs_hits_raw.stdout | default('')) | regex_search('HTTPSTATUS:(\d+)', '\1'))
          | default([], true) | first | default('none', true) }}
 
 # Counted by substring rather than by parsing: the log's JSON shape is the docs

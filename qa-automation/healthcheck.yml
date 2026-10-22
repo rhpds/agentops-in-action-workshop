@@ -125,8 +125,13 @@
 
     # A floor, not an inventory. The set grows -- ROUNDS.md Round 4 wants a
     # seventh eval -- and a check listing every id by name goes stale instead
-    # of being enforced. Shipped today: 7 attacks, 6 evals.
-    hc_min_attacks: 7
+    # of being enforced. Shipped today: 6 attacks, 6 evals.
+    #
+    # This said 7 attacks and failed TEN-DEF-01 on a correct environment. The
+    # count was taken before compromised-tool-injection.yaml was removed in
+    # e0ef506; six is what the chart globs today. Re-count the directory
+    # rather than trusting this comment when it next moves.
+    hc_min_attacks: 6
     hc_min_evals: 6
 
     # Only the components the lab uses. bootstrap-infra deliberately sets a

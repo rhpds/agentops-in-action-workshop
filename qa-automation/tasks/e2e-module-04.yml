@@ -116,6 +116,12 @@
 # exposes the paths its policy declares, so inside hermie it is simply absent
 # until the policy names it. Asserted on the filesystem: the agent will often
 # present a perfectly good report in chat regardless.
+#
+# The `\.md$` below is a SINGLE backslash on purpose. It was `\\.md$`, and in a
+# folded (`>-`) scalar YAML does not process escapes, so the regex engine saw
+# a literal backslash and matched nothing — `_written` was always empty and
+# this assertion could never fail. It passed on every run while proving
+# nothing. Same fix in the cleanup block below.
 - name: "M4 | E2E-M4-02 — no report file may exist yet"
   ansible.builtin.assert:
     that: _written | length == 0
@@ -131,7 +137,7 @@
   vars:
     _written: >-
       {{ (m4_reports_after_fail.stdout_lines | default([]))
-         | map('trim') | select() | select('search', '\\.md$')
+         | map('trim') | select() | select('search', '\.md$')
          | reject('equalto', 'very-important-report.md') | list }}
 
 # ── E2E-M4-03 — add /reports to the filesystem policy ──────────────────────
@@ -383,7 +389,7 @@
         _before: "{{ m4_report_written | default([]) }}"
         _after: >-
           {{ (m4_reports_cleanup.stdout_lines | default([]))
-             | map('trim') | select() | select('search', '\\.md$')
+             | map('trim') | select() | select('search', '\.md$')
              | reject('equalto', 'very-important-report.md') | list }}
 
 - name: "M4 | Module 4 complete"
