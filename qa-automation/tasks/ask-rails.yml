@@ -35,12 +35,41 @@
       -H "Content-Type: application/json"
       -d @- {{ e2e_nemo_endpoint }}/v1/chat/completions'
   vars:
+    # `model` is REQUIRED by this server's OpenAI-compatible endpoint. Sending
+    # only config_id returns 422 with
+    # {"loc":["body","model"],"msg":"Field required"} — measured. Both are
+    # sent, mirroring what the console itself is configured to send
+    # (NEMO_MODEL and NEMO_CONFIG_ID on the water-plant-ui Deployment), so
+    # this suite exercises the same request shape a participant's console
+    # will. The server echoes the config back as guardrails.config_id.
     _payload_b64: >-
-      {{ {'config_id': e2e_nemo_config,
+      {{ {'model': e2e_nemo_model,
+          'config_id': e2e_nemo_config,
           'messages': [{'role': 'user', 'content': rails_prompt}]} | to_json | b64encode }}
   register: rails_raw
   changed_when: true
   failed_when: false
+
+# Split the status off the body up front, as its own task.
+#
+# `curl -w "\nHTTPSTATUS:%{http_code}"` appends the code to the body, so the
+# two have to be separated before either can be used — and doing it once here
+# rather than in three different `vars:` blocks is also what keeps the `when:`
+# below a plain comparison.
+#
+# String operations, not a regex. `regex_search` with a capture-group argument
+# fails outright on ansible-core 2.21.5 — "Unknown argument" — in a `when:`
+# expression and inside Jinja statement blocks, while working fine in an
+# ordinary templated string. Rather than track which contexts are safe, this
+# avoids capture groups altogether. The marker is a fixed literal appended at
+# the very end, so splitting on it is exact.
+- name: "rails | {{ rails_label }} | Split the status from the body"
+  ansible.builtin.set_fact:
+    rails_status: >-
+      {{ (_raw.split('HTTPSTATUS:') | last | trim) if ('HTTPSTATUS:' in _raw) else 'none' }}
+    rails_body: "{{ _raw.split('HTTPSTATUS:') | first | trim }}"
+  vars:
+    _raw: "{{ rails_raw.stdout | default('') }}"
 
 # A rails server that did not answer is not an "allow". Reported as a hard stop
 # rather than folded into the verdict: the documented failure mode here is the
@@ -50,13 +79,13 @@
 - name: "rails | {{ rails_label }} | The rails server must have answered"
   ansible.builtin.fail:
     msg: |-
-      NeMo Guardrails did not answer at {{ e2e_nemo_endpoint }} (status {{ _status }}),
+      NeMo Guardrails did not answer at {{ e2e_nemo_endpoint }} (status {{ rails_status }}),
       so there is no verdict to judge.
 
         exec pod: {{ e2e_client_pod }} ({{ e2e_client_container }}) in {{ t_ns }}
         exec rc:  {{ rails_raw.return_code | default(rails_raw.rc | default('n/a')) }}
         error:    {{ rails_raw.msg | default(rails_raw.stderr | default('')) | trim | default('(none)', true) }}
-        body:     {{ _body | trim | truncate(300) | default('(empty)', true) }}
+        body:     {{ rails_body | truncate(300) | default('(empty)', true) }}
 
       Check the nemo-guardrails pod in {{ t_ns }} first (healthcheck
       TEN-NEMO-01 and TEN-NEMO-02). A restart with lastState=OOMKilled and
@@ -65,24 +94,7 @@
       namespace defaults to. A 403 instead means auth is on and the Service is
       HTTPS behind kube-rbac-proxy — guardrails.authEnabled in
       automation/gitops/tenant-guardrails/values.yaml.
-  vars:
-    # `default([], true)` before `first`: regex_search returns None on no
-    # match, and `None | first` raises instead of falling through.
-    #
-    # SINGLE backslashes in the folded (`>-`) scalars below, DOUBLE in the
-    # double-quoted `_body`. YAML processes escapes only in double-quoted
-    # scalars, so the two styles need different spellings of the same regex.
-    # Getting it wrong in a folded scalar is not a quiet mismatch: with a
-    # capture-group argument, regex_search raises "'NoneType' object has no
-    # attribute 'group'" and the task dies with that rather than this file's
-    # own failure message. Verified against ansible-core 2.21.5.
-    _status: >-
-      {{ ((rails_raw.stdout | default('')) | regex_search('HTTPSTATUS:(\d+)', '\1'))
-         | default([], true) | first | default('none', true) }}
-    _body: "{{ (rails_raw.stdout | default('')) | regex_replace('\\nHTTPSTATUS:\\d+\\s*$', '') }}"
-  when: >-
-    (((rails_raw.stdout | default('')) | regex_search('HTTPSTATUS:(\d+)', '\1'))
-     | default([], true) | first | default('none', true)) != '200'
+  when: rails_status != '200'
 
 - name: "rails | {{ rails_label }} | Read the verdict"
   ansible.builtin.set_fact:
@@ -96,11 +108,23 @@
     # Some builds name the rail that fired in the response payload. Best
     # effort: used to make the failure messages specific, never to decide the
     # verdict.
+    #
+    # No capture group, and no regex alternation that needs one: a plain
+    # membership scan over the four rail names this config defines. Same
+    # reason as the status split above.
     rails_rail: >-
-      {{ (_body | regex_search('(detect sensitive data on (?:in|out)put|self check (?:in|out)put)')) | default('', true) }}
+      {{ (['detect sensitive data on input', 'detect sensitive data on output',
+           'self check input', 'self check output']
+          | select('in', rails_body) | list | first | default('', true)) }}
+    # A 200 does not mean a verdict. When the rails pipeline itself throws,
+    # nemoguardrails returns a perfectly well-formed OpenAI response whose
+    # content is the literal string "Internal server error" — the HTTP layer
+    # succeeded, the guardrail did not run. Without this it reads as "not
+    # blocked", i.e. an allow, which is the most dangerous way for a security
+    # control to fail in a test suite.
+    rails_errored: "{{ 'Internal server error' in _content }}"
   vars:
-    _body: "{{ (rails_raw.stdout | default('')) | regex_replace('\\nHTTPSTATUS:\\d+\\s*$', '') | trim }}"
-    _parsed: "{{ (_body | from_json) if (_body.startswith('{')) else {} }}"
+    _parsed: "{{ (rails_body | from_json) if (rails_body.startswith('{')) else {} }}"
     # The server answers OpenAI-shaped, but older nemoguardrails builds reply
     # with a bare {"messages": [...]} instead. Both are read rather than
     # assuming one, because the fallback of "no content found" would otherwise
@@ -120,3 +144,28 @@
       {{ (rails_blocked | bool) | ternary('BLOCKED', 'allowed') }}
       {{ ('by ' ~ rails_rail) if rails_rail else '' }}
       — {{ rails_text | truncate(140) }}
+
+# Checked after the verdict is parsed rather than folded into the status
+# assertion above, because the transport genuinely did succeed — it is the
+# guardrail that failed, and the remedy is in a different place.
+- name: "rails | {{ rails_label }} | The rails pipeline must not have errored"
+  ansible.builtin.fail:
+    msg: |-
+      NeMo Guardrails returned HTTP 200 but its pipeline threw, so this turn
+      carries no verdict. Treating it as "allowed" would report a guardrail
+      working when it is not running at all.
+
+        prompt: {{ rails_prompt | truncate(120) }}
+        content: {{ rails_text }}
+
+      The reason is in the server log, not here:
+
+        oc -n {{ t_ns }} logs -l app.kubernetes.io/name={{ e2e_nemo_configmap | replace('-config','') }} --tail=50
+
+      Seen on a live tenant: nemoguardrails.exceptions.LLMCallException —
+      litellm.BadRequestError from the MaaS endpoint, "This model doesn't
+      support the stopSequences field". The colang v1.0 dialog runtime sends
+      stop sequences on its generate_user_intent call and the Bedrock-fronted
+      model group rejects them, so every rails invocation fails. Nothing about
+      the sandbox, the console or this playbook is involved.
+  when: rails_errored | bool

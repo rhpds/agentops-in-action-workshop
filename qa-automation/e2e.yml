@@ -212,6 +212,11 @@
     # kube-rbac-proxy in front and the Service becomes HTTPS on 443.
     e2e_nemo_endpoint: "http://nemo-guardrails:80"
     e2e_nemo_config: northgate
+    # Fallbacks only. Module 6 overwrites both from NEMO_MODEL and
+    # NEMO_CONFIG_ID on the console Deployment, so the suite sends exactly
+    # what a participant's console sends. `model` is not optional: without it
+    # the server answers 422, {"loc":["body","model"],"msg":"Field required"}.
+    e2e_nemo_model: "qwen3-235b-a22b"
     e2e_nemo_configmap: nemo-guardrails-config
     # Quoted from rails.co in
     # automation/gitops/tenant-guardrails/templates/configmap.yaml. A blocked
