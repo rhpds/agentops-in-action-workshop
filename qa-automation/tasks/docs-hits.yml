@@ -86,8 +86,8 @@
   ansible.builtin.set_fact:
     docs_hits: >-
       {{ (docs_hits_raw.stdout | default(''))
-         | regex_findall(e2e_docs_attack_path) | length }}
+         | regex_findall(e2e_docs_attack_prefix) | length }}
 
 - name: "hits | {{ hits_label }} | Hit count"
   ansible.builtin.debug:
-    msg: "{{ docs_hits }} request(s) recorded against {{ e2e_docs_attack_path }}"
+    msg: "{{ docs_hits }} request(s) recorded against {{ e2e_docs_attack_prefix }}"
