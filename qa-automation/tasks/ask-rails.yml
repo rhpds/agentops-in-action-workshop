@@ -1,0 +1,114 @@
+---
+# Sends one prompt through the NeMo Guardrails server and leaves the verdict in
+# `rails_blocked`, plus `rails_text` (what came back) and `rails_rail` (which
+# rail fired, when the server names one).
+#
+# Callers set:
+#   rails_label   what to call this in the task name
+#   rails_prompt  the prompt, verbatim from the module content
+#
+# Why the rails server and not the console: module 6's control lives in the
+# console application, which calls NeMo itself and only forwards the request to
+# Hermie when the input checks pass. Every other prompt in this suite is curl'd
+# straight at the agent from inside the console pod — a path that bypasses the
+# console's own code entirely and would therefore see no guardrail at all.
+# Asking the rails directly tests the verdict the console acts on, with no
+# dependency on the console image's HTTP surface.
+#
+# What this does NOT prove is that the console is wired up. That is a separate
+# assertion on NEMO_ENDPOINT in e2e-module-06.yml, and the two together are the
+# claim the module makes.
+#
+# Same base64 treatment as ask-agent.yml, for the same two reasons: k8s_exec
+# shlex-splits its command so a raw JSON body cannot be passed literally, and
+# it never closes the exec stdin stream so `curl -d @-` fed by `stdin` hangs
+# until --max-time and returns nothing.
+
+- name: "rails | {{ rails_label }}"
+  kubernetes.core.k8s_exec:
+    namespace: "{{ t_ns }}"
+    pod: "{{ e2e_client_pod }}"
+    container: "{{ e2e_client_container }}"
+    command: >-
+      sh -c 'echo {{ _payload_b64 }} | base64 -d |
+      curl -s --max-time {{ e2e_rails_timeout }} -w "\nHTTPSTATUS:%{http_code}"
+      -H "Content-Type: application/json"
+      -d @- {{ e2e_nemo_endpoint }}/v1/chat/completions'
+  vars:
+    _payload_b64: >-
+      {{ {'config_id': e2e_nemo_config,
+          'messages': [{'role': 'user', 'content': rails_prompt}]} | to_json | b64encode }}
+  register: rails_raw
+  changed_when: true
+  failed_when: false
+
+# A rails server that did not answer is not an "allow". Reported as a hard stop
+# rather than folded into the verdict: the documented failure mode here is the
+# server being OOMKilled on its first check (no resources on the operator's
+# container, see automation/dev/ROUNDS.md Round 4), and that must not read as
+# "the guardrail let it through".
+- name: "rails | {{ rails_label }} | The rails server must have answered"
+  ansible.builtin.fail:
+    msg: |-
+      NeMo Guardrails did not answer at {{ e2e_nemo_endpoint }} (status {{ _status }}),
+      so there is no verdict to judge.
+
+        exec pod: {{ e2e_client_pod }} ({{ e2e_client_container }}) in {{ t_ns }}
+        exec rc:  {{ rails_raw.return_code | default(rails_raw.rc | default('n/a')) }}
+        error:    {{ rails_raw.msg | default(rails_raw.stderr | default('')) | trim | default('(none)', true) }}
+        body:     {{ _body | trim | truncate(300) | default('(empty)', true) }}
+
+      Check the nemo-guardrails pod in {{ t_ns }} first (healthcheck
+      TEN-NEMO-01 and TEN-NEMO-02). A restart with lastState=OOMKilled and
+      exit=137 is the known one: the operator sets no resources on the server
+      container and the CR exposes no knob for it, so it inherits whatever the
+      namespace defaults to. A 403 instead means auth is on and the Service is
+      HTTPS behind kube-rbac-proxy — guardrails.authEnabled in
+      automation/gitops/tenant-guardrails/values.yaml.
+  vars:
+    # `default([], true)` before `first`: regex_search returns None on no
+    # match, and `None | first` raises instead of falling through.
+    _status: >-
+      {{ ((rails_raw.stdout | default('')) | regex_search('HTTPSTATUS:(\\d+)', '\\1'))
+         | default([], true) | first | default('none', true) }}
+    _body: "{{ (rails_raw.stdout | default('')) | regex_replace('\\nHTTPSTATUS:\\d+\\s*$', '') }}"
+  when: >-
+    (((rails_raw.stdout | default('')) | regex_search('HTTPSTATUS:(\\d+)', '\\1'))
+     | default([], true) | first | default('none', true)) != '200'
+
+- name: "rails | {{ rails_label }} | Read the verdict"
+  ansible.builtin.set_fact:
+    rails_text: "{{ _content }}"
+    # Matched on the refusal wording this repo configures, not on a status code
+    # or a flag: a blocked turn is a normal 200 whose content is the `bot refuse
+    # to respond` message from rails.co. If that wording is reworded, this is
+    # the line to change — it is quoted from
+    # automation/gitops/tenant-guardrails/templates/configmap.yaml.
+    rails_blocked: "{{ _content is search(e2e_rails_refusal) }}"
+    # Some builds name the rail that fired in the response payload. Best
+    # effort: used to make the failure messages specific, never to decide the
+    # verdict.
+    rails_rail: >-
+      {{ (_body | regex_search('(detect sensitive data on (?:in|out)put|self check (?:in|out)put)')) | default('', true) }}
+  vars:
+    _body: "{{ (rails_raw.stdout | default('')) | regex_replace('\\nHTTPSTATUS:\\d+\\s*$', '') | trim }}"
+    _parsed: "{{ (_body | from_json) if (_body.startswith('{')) else {} }}"
+    # The server answers OpenAI-shaped, but older nemoguardrails builds reply
+    # with a bare {"messages": [...]} instead. Both are read rather than
+    # assuming one, because the fallback of "no content found" would otherwise
+    # score silently as "not blocked".
+    #
+    # `or [{}]` rather than a dict default: an empty list is present-but-empty,
+    # which `.get('choices', [{}])` happily returns and then indexes into.
+    _choices: "{{ _parsed.get('choices') or [{}] }}"
+    _messages: "{{ _parsed.get('messages') or [{}] }}"
+    _content: >-
+      {{ _choices[0].get('message', {}).get('content', '')
+         | default(_messages[-1].get('content', ''), true) }}
+
+- name: "rails | {{ rails_label }} | Verdict"
+  ansible.builtin.debug:
+    msg: >-
+      {{ (rails_blocked | bool) | ternary('BLOCKED', 'allowed') }}
+      {{ ('by ' ~ rails_rail) if rails_rail else '' }}
+      — {{ rails_text | truncate(140) }}

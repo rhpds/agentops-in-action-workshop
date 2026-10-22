@@ -31,34 +31,40 @@ spec:
   - "Differentiate the enforcement responsibilities of sandbox isolation, execution policy, tool authorization, and inference guardrails"
   # [{id, title, duration_min, status}] — id is stable (e.g. module-01)
   modules:
+  # NOTE: these titles are the intake design's, and the shipped pages under
+  # content/modules/ROOT/pages/ have since been retitled and resequenced —
+  # see content/modules/ROOT/nav.adoc. The ids still line up one-to-one with
+  # the .adoc files; only the titles and the framing differ. Reconcile before
+  # review, so reviewers are not comparing the design against a lab that
+  # describes itself differently.
   - id: module-01
     title: "Introduction to AgentOps"
     duration_min: 10
-    status: in_progress
+    status: complete
   - id: module-02
     title: "Explore the agent and establish a baseline"
     duration_min: 15
-    status: not_started
+    status: complete
   - id: module-03
     title: "Identify unsafe and unintended behavior"
     duration_min: 20
-    status: not_started
+    status: complete
   - id: module-04
     title: "Apply runtime isolation and policy controls"
     duration_min: 30
-    status: not_started
+    status: complete
   - id: module-05
     title: "Add identity-aware access controls"
     duration_min: 20
-    status: not_started
+    status: complete
   - id: module-06
     title: "Re-evaluate and tune the agent"
     duration_min: 15
-    status: not_started
+    status: in_progress
   - id: module-07
     title: "AgentOps lifecycle and wrap-up"
     duration_min: 10
-    status: not_started
+    status: in_progress
   environment:
     platform: "ocp"            # ocp | rhel-vms — determines which sizing fields apply
     topology: "shared-cluster" # shared-cluster | per-student | cnv-pool
@@ -112,18 +118,34 @@ development:
     gitops:
       status: complete
   e2e:
-    # Modules 1-4 implemented and run against live builds. Modules 1-3 pass; module 4
-    # passes its five infrastructure steps and FAILS its headline one
+    # All six testable modules implemented; module 7 is wrap-up prose with no
+    # participant commands and is deliberately out of scope (E2E-M7-00).
+    #
+    # Modules 1-4 have been run against live builds. Modules 1-3 pass; module
+    # 4 passes its five infrastructure steps and FAILS its headline one
     # (E2E-M4-06) against a real defect — the sandboxed agent will not save a
-    # report, believing it needs a terminal tool it does not have. Modules
-    # 5-6 are still content stubs. See qa-automation/healthcheck-spec.yaml
-    # `e2e_steps`.
+    # report, believing it needs a terminal tool it does not have.
+    #
+    # Modules 5-6 are written but have NEVER RUN. The likely first failures
+    # are the two payload shapes owned by images this repo does not build:
+    # the NeMo response in tasks/ask-rails.yml and /hits in tasks/docs-hits.yml.
+    # Both fail loudly rather than defaulting to "allowed" or "blocked".
+    #
+    # Also outstanding: e2e.yml has no cleanup path, so a tenant it runs
+    # against is consumed. See qa-automation/healthcheck-spec.yaml `e2e_steps`.
     status: in_progress
   healthCheck:
-    # 31 checks, verified across five successive cluster builds; green
-    # (exit 0) on every tenant of the latest, including when driven from the
-    # Showroom at /stream/qa/healthcheck.
-    status: complete
+    # Reopened. Was 31 checks, verified across five successive cluster builds
+    # and green (exit 0) on every tenant of the latest, including when driven
+    # from the Showroom at /stream/qa/healthcheck.
+    #
+    # Now 37: six were added for what modules 5 and 6 depend on and nothing
+    # was watching — TEN-ARGO-05 (guardrails Application), TEN-NEMO-01
+    # (server up, and not OOMKilled), TEN-NEMO-02 (guardrails policy content),
+    # TEN-DOC-01 (docs site serves /doc, a redirecting bulletin, and /hits),
+    # TEN-SKL-01 (both lab skills reached the agent), TEN-DEF-01 (attack and
+    # eval definitions mounted). Those six have not run yet.
+    status: in_progress
 
 compliance:
   last_hard_check: null

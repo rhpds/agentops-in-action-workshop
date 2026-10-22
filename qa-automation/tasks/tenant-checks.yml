@@ -45,7 +45,7 @@
   register: t_policy
   failed_when: false
 
-- name: "{{ hc_tenant }} | List MCP servers, registrations, gateway, services and quota"
+- name: "{{ hc_tenant }} | List MCP servers, registrations, gateway, services, quota and config"
   kubernetes.core.k8s_info:
     api_version: "{{ item.api }}"
     kind: "{{ item.kind }}"
@@ -57,6 +57,9 @@
     - { api: v1, kind: Service }
     - { api: v1, kind: ResourceQuota }
     - { api: route.openshift.io/v1, kind: Route }
+    # Appended rather than inserted: the split below is positional, so a new
+    # kind in the middle silently renames every variable after it.
+    - { api: v1, kind: ConfigMap }
   loop_control:
     label: "{{ item.kind }}"
   register: t_misc
@@ -70,6 +73,7 @@
     t_services: "{{ t_misc.results[3].resources | default([]) }}"
     t_quotas: "{{ t_misc.results[4].resources | default([]) }}"
     t_routes: "{{ t_misc.results[5].resources | default([]) }}"
+    t_configmaps: "{{ t_misc.results[6].resources | default([]) }}"
 
 - name: "{{ hc_tenant }} | Read the Showroom route"
   kubernetes.core.k8s_info:
@@ -187,6 +191,36 @@
   no_log: true
   when: t_pod_names.agent | length > 0
 
+# One exec for four questions, for the same reason the agent probe above is
+# one exec: each k8s_exec costs roughly 1.7s of client start-up regardless of
+# what it does, and that dominates the run.
+#
+# Run from inside the baseline agent pod, addressing waterplant-docs by Service
+# name. Not through its Route, and deliberately: from inside a pod the apps
+# domain resolves to the router's internal address, which is what Hermes' own
+# SSRF check blocks, so the short name is the only path the agent itself can
+# take. Probing the Route would measure something no part of the lab uses.
+#
+# `-o /dev/null` with no `-L`: the bulletin's value here is its 302, so
+# following the redirect would throw away the thing being checked.
+- name: "{{ hc_tenant }} | Probe the documentation site and the installed skills"
+  kubernetes.core.k8s_exec:
+    namespace: "{{ t_ns }}"
+    pod: "{{ t_pod_names.agent }}"
+    container: hermes
+    command: >-
+      sh -c 'curl -s -o /dev/null -w %{http_code} --max-time 10 {{ hc_docs_base }}/doc;
+      printf " ";
+      curl -s -o /dev/null -w %{http_code} --max-time 10 {{ hc_docs_base }}{{ hc_docs_bulletin }};
+      printf " ";
+      curl -s -o /dev/null -w %{http_code} --max-time 10 {{ hc_docs_base }}/hits;
+      printf " ";
+      ls -1 {{ hc_hermes_home }}/skills 2>/dev/null | tr "\n" "," '
+  register: t_docs_probe
+  failed_when: false
+  changed_when: false
+  when: t_pod_names.agent | length > 0
+
 - name: "{{ hc_tenant }} | Probe the console, the realm and the Showroom"
   ansible.builtin.uri:
     url: "{{ item }}"
@@ -248,6 +282,28 @@
                                 'ok': ok, 'detail': detail}) -%}
       {%- endfor -%}
       {{ out | to_json }}
+
+- name: "Record TEN-ARGO-05 — the guardrails Application"
+  ansible.builtin.set_fact:
+    hc_findings: "{{ hc_findings + [{'id': 'TEN-ARGO-05', 'tenant': hc_tenant, 'severity': 'fail', 'ok': _ok, 'detail': _detail}] }}"
+  vars:
+    # Separate from TEN-ARGO-01..04 rather than a fifth row in that loop,
+    # because it is conditional: bootstrap-tenant only renders it when
+    # guardrails.enabled and the harness is hermes. A tenant provisioned with
+    # guardrails off is not broken -- it just cannot run module 6 -- so the
+    # absent case says which it is rather than reporting a generic failure.
+    _app: >-
+      {{ hc_applications.resources
+         | selectattr('metadata.name', 'equalto', hc_tenant ~ '-guardrails')
+         | first | default({}) }}
+    _sync: "{{ _app.get('status', {}).get('sync', {}).get('status', 'absent') }}"
+    _health: "{{ _app.get('status', {}).get('health', {}).get('status', 'absent') }}"
+    _ok: "{{ (_sync == 'Synced') and (_health == 'Healthy') }}"
+    _detail: >-
+      {{ (_app | length == 0)
+         | ternary('Application ' ~ hc_tenant ~ '-guardrails ABSENT — module 6'
+                   ~ ' cannot run; set guardrails.enabled in bootstrap-tenant',
+                   hc_tenant ~ '-guardrails sync=' ~ _sync ~ ' health=' ~ _health) }}
 
 - name: "Record TEN-POL-01 — baseline policy resources exist"
   ansible.builtin.set_fact:
@@ -553,6 +609,172 @@
       severity: fail
       ok: "{{ _sr == 200 }}"
       detail: "showroom HTTP {{ _sr }}"
+
+- name: "Record TEN-NEMO-01 — the guardrails server is up and has stayed up"
+  ansible.builtin.set_fact:
+    hc_findings: "{{ hc_findings + [{'id': 'TEN-NEMO-01', 'tenant': hc_tenant, 'severity': 'fail', 'ok': _ok, 'detail': _detail}] }}"
+  vars:
+    # Matched by name prefix, not by label. The chart's labels go on the
+    # NemoGuardrails CR; what the TrustyAI operator then puts on the
+    # Deployment and pods it creates is the operator's business and has no
+    # contract with this file. The name it derives from the CR does.
+    _deploys: "{{ t_deploys | selectattr('metadata.name', 'match', hc_nemo_name) | list }}"
+    _pods: "{{ t_pods | selectattr('metadata.name', 'match', hc_nemo_name) | list }}"
+    _svc: "{{ t_services | selectattr('metadata.name', 'equalto', hc_nemo_name) | list }}"
+    # `default=0` on the attribute lookup, because status.readyReplicas is
+    # absent entirely on a Deployment that has never had a ready pod -- not
+    # zero, missing -- and summing an Undefined raises.
+    _ready: "{{ _deploys | map(attribute='status.readyReplicas', default=0) | sum }}"
+    # The failure this check exists for. The operator sets no resources on the
+    # server container and the CRD exposes no knob for it, so whatever the
+    # namespace defaults to is what it gets -- and at 512Mi it is OOMKilled
+    # three seconds into its first check. The pod then comes back Ready, so
+    # readyReplicas alone reports a healthy guardrail that dies on use. The
+    # restart history is what gives it away.
+    _oomkilled_json: >-
+      {%- set out = [] -%}
+      {%- for p in _pods -%}
+        {%- for cs in (p.status.containerStatuses | default([])) -%}
+          {%- if (cs.lastState | default({})).get('terminated', {}).get('reason', '') == 'OOMKilled' -%}
+            {%- set _ = out.append(cs.name ~ ' restarts=' ~ (cs.restartCount | default(0))) -%}
+          {%- endif -%}
+        {%- endfor -%}
+      {%- endfor -%}
+      {{ out | to_json }}
+    _oom: "{{ _oomkilled_json | from_json }}"
+    _ok: "{{ (_ready | int) > 0 and (_svc | length > 0) and (_oom | length == 0) }}"
+    _detail: >-
+      {{ (_deploys | length == 0)
+         | ternary('no ' ~ hc_nemo_name ~ ' Deployment in ' ~ t_ns
+                   ~ ' — module 6 has nothing to connect the console to',
+           (_oom | length > 0)
+             | ternary(hc_nemo_name ~ ' OOMKilled (' ~ (_oom | join('; '))
+                       ~ ') — it serves one check and dies; see TEN-QTA-01',
+                       hc_nemo_name ~ ' ready=' ~ _ready
+                       ~ ' service=' ~ ((_svc | length > 0) | ternary('present', 'MISSING')))) }}
+
+- name: "Record TEN-NEMO-02 — the guardrails policy is the one module 6 describes"
+  ansible.builtin.set_fact:
+    hc_findings: "{{ hc_findings + [{'id': 'TEN-NEMO-02', 'tenant': hc_tenant, 'severity': 'fail', 'ok': _ok, 'detail': _detail}] }}"
+  vars:
+    # Module 6 walks the participant to this ConfigMap and tells them what
+    # they will find in each entry, so drift is a content defect as much as an
+    # environment one. Checked on content rather than existence for that
+    # reason: an empty config.yaml would satisfy "the ConfigMap is there" and
+    # leave the participant reading about rails that are not configured.
+    _cm: >-
+      {{ t_configmaps | selectattr('metadata.name', 'equalto', hc_nemo_configmap)
+         | first | default({}) }}
+    _data: "{{ _cm.get('data', {}) }}"
+    _missing_keys: "{{ ['config.yaml', 'prompts.yaml', 'rails.co'] | reject('in', _data) | list }}"
+    _config: "{{ _data.get('config.yaml', '') }}"
+    _prompts: "{{ _data.get('prompts.yaml', '') }}"
+    _missing_bits_json: >-
+      {%- set out = [] -%}
+      {%- for want in hc_nemo_entities -%}
+        {%- if want not in _config -%}{%- set _ = out.append(want) -%}{%- endif -%}
+      {%- endfor -%}
+      {%- for want in ['self check input', 'self check output'] -%}
+        {%- if want not in _config -%}{%- set _ = out.append(want) -%}{%- endif -%}
+      {%- endfor -%}
+      {%- for want in ['self_check_input', 'self_check_output'] -%}
+        {%- if want not in _prompts -%}{%- set _ = out.append(want) -%}{%- endif -%}
+      {%- endfor -%}
+      {%- if hc_nemo_refusal not in _data.get('rails.co', '') -%}
+        {%- set _ = out.append('refusal wording in rails.co') -%}
+      {%- endif -%}
+      {{ out | to_json }}
+    _missing_bits: "{{ _missing_bits_json | from_json }}"
+    _ok: "{{ (_cm | length > 0) and (_missing_keys | length == 0) and (_missing_bits | length == 0) }}"
+    _detail: >-
+      {{ (_cm | length == 0)
+         | ternary('ConfigMap ' ~ hc_nemo_configmap ~ ' absent',
+           ((_missing_keys + _missing_bits) | length == 0)
+             | ternary('both Presidio entities, both self-check flows and the refusal wording present',
+                       'missing: ' ~ ((_missing_keys + _missing_bits) | join(', ')))) }}
+
+- name: "Record TEN-DOC-01 — the documentation site serves module 5's three paths"
+  ansible.builtin.set_fact:
+    hc_findings: "{{ hc_findings + [{'id': 'TEN-DOC-01', 'tenant': hc_tenant, 'severity': 'fail', 'ok': _ok, 'detail': _detail}] }}"
+  vars:
+    _codes: "{{ (t_docs_probe.stdout | default('')) | trim | split(' ') }}"
+    _index: "{{ _codes[0] | default('?') }}"
+    _bulletin: "{{ _codes[1] | default('?') }}"
+    _hits: "{{ _codes[2] | default('?') }}"
+    # All three matter and they fail for different reasons:
+    #
+    #   /doc        the legitimate lookup read-safety-docs points at. Without
+    #               it module 5 has nothing to restore.
+    #   bulletin    must be a REDIRECT, not a 200. The 302 onward to /attack/
+    #               is the attack; a 200 means the page has been de-fanged and
+    #               the module's second half demonstrates nothing.
+    #   /hits       the exfiltration observer. Without it "did the attack
+    #               land?" is unanswerable, and e2e-module-05 refuses to guess.
+    _ok: "{{ _index == '200' and _bulletin.startswith('3') and _hits == '200' }}"
+    _detail: >-
+      {{ (t_pod_names.agent | length == 0)
+         | ternary('no running hermes-plain pod to probe from',
+                   hc_docs_base ~ ' /doc=' ~ _index
+                   ~ ' ' ~ hc_docs_bulletin ~ '=' ~ _bulletin
+                   ~ (' (expected a 3xx redirect — a 200 means the injection is gone)'
+                      if not _bulletin.startswith('3') else '')
+                   ~ ' /hits=' ~ _hits) }}
+
+- name: "Record TEN-SKL-01 — the lab skills reached the agent"
+  ansible.builtin.set_fact:
+    hc_findings: "{{ hc_findings + [{'id': 'TEN-SKL-01', 'tenant': hc_tenant, 'severity': 'fail', 'ok': _ok, 'detail': _detail}] }}"
+  vars:
+    # Read off the running agent's filesystem, not out of the ConfigMap that
+    # carries them. Delivery into the namespace and arrival in HERMES_HOME are
+    # different events — an initContainer copies them — and modules 4 and 5
+    # both open by having the participant read a skill that must already be
+    # there. A missing skill reads to them as a permissions problem.
+    # Field 3, not `last`: when the skills directory is missing, `ls` prints
+    # nothing and the trailing field disappears, so `last` would hand back the
+    # /hits status code and report it as a skill name. An out-of-range index
+    # is Undefined in Jinja, which the default catches.
+    _listed: >-
+      {{ (((t_docs_probe.stdout | default('')) | trim | split(' '))[3] | default(''))
+         | split(',') | map('trim') | select() | list }}
+    _missing: "{{ hc_agent_skills | reject('in', _listed) | list }}"
+    _ok: "{{ (t_pod_names.agent | length > 0) and (_missing | length == 0) }}"
+    _detail: >-
+      {{ (t_pod_names.agent | length == 0)
+         | ternary('no running hermes-plain pod to read skills from',
+           (_missing | length == 0)
+             | ternary('both lab skills installed in ' ~ hc_hermes_home ~ '/skills',
+                       'missing from ' ~ hc_hermes_home ~ '/skills: ' ~ (_missing | join(', '))
+                       ~ ' (found: ' ~ (_listed | join(', ') | default('nothing', true)) ~ ')')) }}
+
+- name: "Record TEN-DEF-01 — the attack and eval definitions are mounted"
+  ansible.builtin.set_fact:
+    hc_findings: "{{ hc_findings + [{'id': 'TEN-DEF-01', 'tenant': hc_tenant, 'severity': 'fail', 'ok': _ok, 'detail': _detail}] }}"
+  vars:
+    # Counted, not named. The set grows -- ROUNDS.md Round 4 already calls for
+    # a seventh eval so the counter reads out of 7 -- and a check that has to
+    # be edited every time one is added gets stale rather than enforced. What
+    # must not happen silently is the ConfigMap arriving empty or the Helm
+    # glob stopping matching, which is what a floor catches.
+    #
+    # Modules 4, 5 and 6 all end with "Run all evals", so an empty scorecard
+    # is a dead end in three different places.
+    _cm: >-
+      {{ t_configmaps | selectattr('metadata.name', 'equalto', 'water-plant-ui-probe-defs')
+         | first | default({}) }}
+    _keys: "{{ (_cm.get('data', {})).keys() | list }}"
+    _attacks: "{{ _keys | select('match', 'attack-') | list }}"
+    _evals: "{{ _keys | select('match', 'eval-') | list }}"
+    _ok: >-
+      {{ (_cm | length > 0)
+         and ((_attacks | length) >= (hc_min_attacks | int))
+         and ((_evals | length) >= (hc_min_evals | int)) }}
+    _detail: >-
+      {{ (_cm | length == 0)
+         | ternary('ConfigMap water-plant-ui-probe-defs absent — the console'
+                   ~ ' falls back to the set baked into its image, so the'
+                   ~ ' scorecard may not match the shipped definitions',
+                   (_attacks | length) ~ ' attack(s) and ' ~ (_evals | length)
+                   ~ ' eval(s) mounted (floor ' ~ hc_min_attacks ~ '/' ~ hc_min_evals ~ ')') }}
 
 - name: "Record TEN-QTA-01 — no participant quota or limit range"
   ansible.builtin.set_fact:
