@@ -102,8 +102,6 @@ The request should complete without an approval step.
 
 Use the *MLflow traces* link bottom right to open MLflow. It opens the experiment list for your own project, `{user}-agentops`, with a single experiment named `{user}` in it. Select it and look for a recent request.
 
-image::eval-mlflow.png["Open traces of evaluation run on MLflow",align=center]
-
 Sign in with the same credentials you use for the OpenShift console:
 
 [cols="1,2"]
@@ -111,6 +109,8 @@ Sign in with the same credentials you use for the OpenShift console:
 |Username |`{user}`
 |Password |`{password}`
 |===
+
+image::mlflow-link.png["Open MLflow traces",align=center]
 
 
 Open the trace and inspect the prompt, model interaction, tool calls, tool results, and final response where they are recorded. For the pump query, check which telemetry tool was called. For the stop request, compare the tool result with the plant panel.
