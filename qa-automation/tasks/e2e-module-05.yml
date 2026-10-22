@@ -101,6 +101,51 @@
 
 # ── E2E-M5-02 — the lookup is blocked before the policy change ─────────────
 
+# Module 5's baseline is "documentation is not reachable", and that is a state
+# the module itself destroys. A run that got as far as E2E-M5-03 and then
+# stopped — which is exactly what happens when a later step fails — leaves the
+# waterplant_docs rule behind, and the next `-e e2e_modules=5` finds the agent
+# able to read the docs and fails M5-02 having tested nothing.
+#
+# So module 5 restores its own starting conditions first, the same way module
+# 2 opens by deleting any sandbox left by a previous run. Without this, module
+# 5 is a once-per-tenant test, and the whole point of the per-module gating is
+# that `-e e2e_modules=5` re-tests one module against a prepared tenant.
+#
+# Tolerant of the rule being absent, which is the normal case on a first run:
+# there is no --if-exists flag, so a missing rule is a non-zero exit to ignore.
+- name: "M5 | E2E-M5-02 — remove any docs rule left by a previous run"
+  kubernetes.core.k8s_exec:
+    namespace: "{{ t_ns }}"
+    pod: "{{ e2e_bridge_pod }}"
+    container: cli
+    command: "openshell policy update {{ e2e_sandbox }} --remove-rule {{ e2e_docs_rule }} --wait"
+  register: m5_prereset
+  changed_when: "(m5_prereset.rc | default(0)) == 0"
+  failed_when: false
+
+- name: "M5 | E2E-M5-02 — baseline restored"
+  ansible.builtin.debug:
+    msg: >-
+      {{ ((m5_prereset.rc | default(0)) == 0)
+         | ternary('Removed a ' ~ e2e_docs_rule ~ ' rule left by an earlier run —'
+                   ~ ' module 5 starts from its documented baseline.',
+                   'No ' ~ e2e_docs_rule ~ ' rule to remove; the tenant is at the'
+                   ~ ' module 5 baseline already.') }}
+
+# Watermark the log before the prompt, so what follows is attributable to it.
+# Every assertion in this module is about what the log says since the step
+# before it, and the steps are seconds apart — see read-sandbox-log.yml.
+- name: "M5 | E2E-M5-02 — mark the log before the baseline prompt"
+  ansible.builtin.include_tasks: read-sandbox-log.yml
+  vars:
+    log_label: "M5-02 pre"
+    log_mark: 0
+
+- name: "M5 | E2E-M5-02 — remember the mark"
+  ansible.builtin.set_fact:
+    m5_mark: "{{ sandbox_log_mark }}"
+
 - name: "M5 | Ask for the vibration limits, before the docs rule exists"
   ansible.builtin.include_tasks: ask-agent.yml
   vars:
@@ -108,15 +153,16 @@
     ask_url: "{{ t_sandboxed_url }}"
     ask_prompt: "{{ e2e_prompt_docs }}"
 
-- name: "M5 | E2E-M5-02 — read the sandbox denial log"
-  kubernetes.core.k8s_exec:
-    namespace: "{{ t_ns }}"
-    pod: "{{ e2e_bridge_pod }}"
-    container: cli
-    command: "openshell logs {{ e2e_sandbox }} --since 5m --source sandbox"
-  register: m5_denials_baseline
-  changed_when: false
-  failed_when: false
+- name: "M5 | E2E-M5-02 — read what the prompt produced"
+  ansible.builtin.include_tasks: read-sandbox-log.yml
+  vars:
+    log_label: "M5-02 post"
+    log_mark: "{{ m5_mark }}"
+
+- name: "M5 | E2E-M5-02 — advance the mark"
+  ansible.builtin.set_fact:
+    m5_denials_baseline_lines: "{{ sandbox_log_new }}"
+    m5_mark: "{{ sandbox_log_mark }}"
 
 # Asserts failure on purpose, exactly as E2E-M2-02 does: module 5 opens with
 # "Try it yourself, see the error", and if the agent can already reach the docs
@@ -142,7 +188,7 @@
       ({{ _docs_denials | length }} denial(s) naming {{ e2e_docs_host }})
   vars:
     _docs_denials: >-
-      {{ (m5_denials_baseline.stdout_lines | default([]))
+      {{ m5_denials_baseline_lines
          | select('search', 'DENIED') | select('search', e2e_docs_host) | list }}
 
 # ── E2E-M5-03 — the host-wide rule restores documentation ──────────────────
@@ -172,19 +218,23 @@
     ask_url: "{{ t_sandboxed_url }}"
     ask_prompt: "{{ e2e_prompt_docs }}"
 
-- name: "M5 | E2E-M5-03 — re-read the denial log"
-  kubernetes.core.k8s_exec:
-    namespace: "{{ t_ns }}"
-    pod: "{{ e2e_bridge_pod }}"
-    container: cli
-    command: "openshell logs {{ e2e_sandbox }} --since 2m --source sandbox"
-  register: m5_denials_broad
-  changed_when: false
-  failed_when: false
+- name: "M5 | E2E-M5-03 — read what this prompt produced"
+  ansible.builtin.include_tasks: read-sandbox-log.yml
+  vars:
+    log_label: "M5-03 post"
+    log_mark: "{{ m5_mark }}"
 
-# `--since 2m` rather than 5m: the baseline denials from E2E-M5-02 are minutes
-# old by now and would otherwise be counted against the rule that was supposed
-# to clear them.
+- name: "M5 | E2E-M5-03 — advance the mark"
+  ansible.builtin.set_fact:
+    m5_denials_broad_lines: "{{ sandbox_log_new }}"
+    m5_mark: "{{ sandbox_log_mark }}"
+
+# Watermarked, not time-windowed. This was `--since 2m`, and E2E-M5-02's
+# deliberate baseline denial is only ~30 seconds old by the time this runs —
+# comfortably inside any window wide enough to be safe — so M5-03 counted the
+# denial M5-02 had just caused and failed on a working policy. Seen on a live
+# tenant: "fresh denials naming waterplant-docs: 1", quoting the previous
+# step's line.
 - name: "M5 | E2E-M5-03 — the agent must reach the documentation now"
   ansible.builtin.assert:
     that:
@@ -207,7 +257,7 @@
       {{ ask_text | default('') | truncate(100) }}
   vars:
     _docs_denials: >-
-      {{ (m5_denials_broad.stdout_lines | default([]))
+      {{ m5_denials_broad_lines
          | select('search', 'DENIED') | select('search', e2e_docs_host) | list }}
 
 # ── E2E-M5-04 — the obvious fix lets the injection through ─────────────────
@@ -447,14 +497,15 @@
     hits_label: "E2E-M5-06 after the bulletin"
 
 - name: "M5 | E2E-M5-06 — read the denial log for the refused redirect"
-  kubernetes.core.k8s_exec:
-    namespace: "{{ t_ns }}"
-    pod: "{{ e2e_bridge_pod }}"
-    container: cli
-    command: "openshell logs {{ e2e_sandbox }} --since 5m --source sandbox"
-  register: m5_denials_scoped
-  changed_when: false
-  failed_when: false
+  ansible.builtin.include_tasks: read-sandbox-log.yml
+  vars:
+    log_label: "M5-06 post"
+    log_mark: "{{ m5_mark }}"
+
+- name: "M5 | E2E-M5-06 — advance the mark"
+  ansible.builtin.set_fact:
+    m5_denials_scoped_lines: "{{ sandbox_log_new }}"
+    m5_mark: "{{ sandbox_log_mark }}"
 
 # Two independent signals, and both are required.
 #
@@ -495,7 +546,7 @@
       the attack path.
   vars:
     _attack_denials: >-
-      {{ (m5_denials_scoped.stdout_lines | default([]))
+      {{ m5_denials_scoped_lines
          | select('search', 'DENIED')
          | select('search', '/attack') | list }}
 
@@ -512,14 +563,15 @@
     ask_prompt: "{{ e2e_prompt_docs }}"
 
 - name: "M5 | E2E-M5-07 — re-read the denial log"
-  kubernetes.core.k8s_exec:
-    namespace: "{{ t_ns }}"
-    pod: "{{ e2e_bridge_pod }}"
-    container: cli
-    command: "openshell logs {{ e2e_sandbox }} --since 2m --source sandbox"
-  register: m5_denials_final
-  changed_when: false
-  failed_when: false
+  ansible.builtin.include_tasks: read-sandbox-log.yml
+  vars:
+    log_label: "M5-07 post"
+    log_mark: "{{ m5_mark }}"
+
+- name: "M5 | E2E-M5-07 — advance the mark"
+  ansible.builtin.set_fact:
+    m5_denials_final_lines: "{{ sandbox_log_new }}"
+    m5_mark: "{{ sandbox_log_mark }}"
 
 - name: "M5 | E2E-M5-07 — legitimate documentation must still be readable"
   ansible.builtin.assert:
@@ -542,7 +594,7 @@
     # Denials on /doc paths only. A denial naming /attack is the correct
     # outcome of the previous step and must not be counted here.
     _doc_denials: >-
-      {{ (m5_denials_final.stdout_lines | default([]))
+      {{ m5_denials_final_lines
          | select('search', 'DENIED')
          | select('search', e2e_docs_host)
          | reject('search', '/attack') | list }}

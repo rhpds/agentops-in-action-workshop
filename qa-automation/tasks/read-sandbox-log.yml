@@ -1,0 +1,83 @@
+---
+# Reads the OpenShell sandbox log and leaves only the lines written SINCE a
+# caller-supplied watermark in `sandbox_log_new`, plus a fresh watermark in
+# `sandbox_log_mark`.
+#
+# Callers set:
+#   log_label  what to call this in the task name
+#   log_mark   watermark from a previous call; 0 (the default) means "everything"
+#
+# Why a watermark and not `--since 2m`.
+#
+# Module 5's steps are seconds apart and each one asserts on what the log says
+# about the step before it. E2E-M5-02 deliberately provokes a DENIED on the
+# docs host; E2E-M5-03 then grants the rule and asserts there are no denials.
+# With a time window those two are indistinguishable — the baseline denial is
+# thirty seconds old and well inside any window wide enough to be safe — so
+# M5-03 failed on the denial M5-02 had just caused. Observed on a live tenant:
+# "fresh denials naming waterplant-docs: 1", quoting a line from the previous
+# step.
+#
+# The watermark is the largest epoch already present in the log, taken from
+# the log's own `[1792664336.441]` prefix. Nothing is compared against the
+# controller's clock, so skew between this machine and the cluster cannot
+# affect it — which a `date +%s` cutoff would not survive, since these
+# playbooks are run both from inside the Showroom pod and from a laptop.
+#
+# `--since` is still passed, but only to bound how much is read.
+
+- name: "log | {{ log_label }} | Read the sandbox log"
+  kubernetes.core.k8s_exec:
+    namespace: "{{ t_ns }}"
+    pod: "{{ e2e_bridge_pod }}"
+    container: cli
+    command: "openshell logs {{ e2e_sandbox }} --since {{ log_since | default('15m') }} --source sandbox"
+  register: log_raw
+  changed_when: false
+  failed_when: false
+
+- name: "log | {{ log_label }} | Split on the watermark"
+  ansible.builtin.set_fact:
+    sandbox_log_new: "{{ _new_json | from_json }}"
+    sandbox_log_mark: "{{ _mark_json | from_json }}"
+  vars:
+    _lines: "{{ log_raw.stdout_lines | default([]) }}"
+    # String operations rather than a regex, and not for elegance. Inside a
+    # Jinja statement block `regex_search` with a capture-group argument fails
+    # outright on ansible-core 2.21.5 ("Unknown argument"), and an `is
+    # match('^\[...')` test silently matched nothing — leaving the watermark
+    # at 0 and every line looking new, which is the failure this helper
+    # exists to prevent. Splitting on the first `]` has no such ambiguity.
+    #
+    # Lines with no parseable timestamp are KEPT: continuation output belongs
+    # with whatever produced it, and dropping it could hide the one line that
+    # explains a failure.
+    _new_json: >-
+      {%- set out = [] -%}
+      {%- for line in _lines -%}
+        {%- set head = line.split(']')[0].lstrip('[') if line.startswith('[') else '' -%}
+        {%- if head and head.replace('.','',1).isdigit() -%}
+          {%- if (head | float) > (log_mark | default(0) | float) -%}
+            {%- set _ = out.append(line) -%}
+          {%- endif -%}
+        {%- else -%}
+          {%- set _ = out.append(line) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ out | to_json }}
+    _mark_json: >-
+      {%- set seen = [log_mark | default(0) | float] -%}
+      {%- for line in _lines -%}
+        {%- set head = line.split(']')[0].lstrip('[') if line.startswith('[') else '' -%}
+        {%- if head and head.replace('.','',1).isdigit() -%}
+          {%- set _ = seen.append(head | float) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ seen | max | to_json }}
+
+- name: "log | {{ log_label }} | Window"
+  ansible.builtin.debug:
+    msg: >-
+      {{ sandbox_log_new | length }} new log line(s) since mark
+      {{ log_mark | default(0) }} (new mark {{ sandbox_log_mark }})
+    verbosity: 1
