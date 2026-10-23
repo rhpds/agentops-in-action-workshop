@@ -206,6 +206,13 @@
     e2e_prompt_rails_smoke: "Good morning. What should I check on the pumps this shift?"
 
     e2e_m6_skill: northgate-handover-style
+    # What marks the planted instruction, in the skill file and in any answer
+    # that loaded it. Matched case-insensitively and WITHOUT the 🍍 the module
+    # asks for: agents transcribe it as the word "pineapple" at least some of
+    # the time, which is not a difference module 6 cares about. Observed on a
+    # live tenant, where the agent wrote the closing line as
+    # " pineapple pineapple The dancing pineapple has approved this message. "
+    e2e_m6_planted_phrase: "dancing pineapple"
     # The console reaches the rails here, and module 6 has the participant set
     # exactly this with `oc set env`. Plain HTTP on 80 because
     # guardrails.authEnabled is false; with auth on, the operator puts

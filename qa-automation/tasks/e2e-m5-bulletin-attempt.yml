@@ -21,8 +21,14 @@
 # every item before any of them run, so it cannot stop later iterations once
 # an earlier one has succeeded. Confirmed against ansible-core 2.21.5.
 
+# Gated on its own flag, set in the LAST task of the block. A block-level
+# `when:` is re-evaluated for every task inside the block, not once on entry,
+# so gating directly on m5_attack_landed would switch the gate off the moment
+# the outcome was recorded and skip the reporting task after it. Harmless here
+# in the way it was not in module 4 — only a debug line is lost — but the same
+# trap, so it is closed the same way.
 - name: "m5-bulletin | attempt {{ m5_try }}"
-  when: not (m5_attack_landed | default(false) | bool)
+  when: not (m5_bulletin_done | default(false) | bool)
   block:
 
     - name: "m5-bulletin | attempt {{ m5_try }} | Count attacker hits before"
@@ -60,3 +66,8 @@
           — {{ (m5_attack_landed | bool)
                | ternary('the redirect was followed.',
                          'the agent did not reach the attacker path on this run.') }}
+
+    # Last, for the reason in the header.
+    - name: "m5-bulletin | attempt {{ m5_try }} | Close the attempt"
+      ansible.builtin.set_fact:
+        m5_bulletin_done: "{{ m5_attack_landed | default(false) | bool }}"

@@ -15,9 +15,21 @@
 # where a three-item loop gated on a fact set by its own first iteration ran
 # all three. The symptom was mild but real: a successful first attempt still
 # paid for a second model round trip and wrote a second, redundant report.
+#
+# The gate is its own flag, set in the LAST task of the block, and that is not
+# incidental. A block-level `when:` is re-evaluated for every task inside the
+# block, not once on entry. Gating directly on `m4_report_written` therefore
+# switched itself off mid-attempt: the task that recorded the report made the
+# condition false, and the two tasks after it — including the one computing
+# m4_report_helper_named — were skipped. The module then read the unset fact
+# through `| default([])` and reported "did NOT go through save_report.py"
+# about a file that plainly had. A false finding about the agent, produced by
+# the gate rather than by the agent.
+#
+# m4_report_done changes only once, after everything that reads it has run.
 
 - name: "m4-report | attempt {{ m4_try }}"
-  when: (m4_report_written | default([]) | length) == 0
+  when: not (m4_report_done | default(false) | bool)
   block:
 
     - name: "m4-report | attempt {{ m4_try }} | Ask for a report"
@@ -69,3 +81,9 @@
         msg: >-
           attempt {{ m4_try }}: {{ (m4_report_written | length) }} agent-written
           report(s) in /reports{{ (' — ' ~ (m4_report_written | join(', '))) if m4_report_written else '' }}
+
+    # Last, deliberately. Everything above reads the gate condition, so it
+    # must not change until they are done — see the header.
+    - name: "m4-report | attempt {{ m4_try }} | Close the attempt"
+      ansible.builtin.set_fact:
+        m4_report_done: "{{ (m4_report_written | default([]) | length) > 0 }}"
