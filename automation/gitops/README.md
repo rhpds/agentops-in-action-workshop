@@ -351,3 +351,54 @@ CELCHECK=/tmp/agentops-celcheck python3 -m unittest discover -s automation/tests
 
 These are render and policy-expression checks. They do not replace the live
 migration and end-to-end checks above.
+
+## The lab runner
+
+One instance for the whole event, in `agentops-shared`, from
+`bootstrap-infra/templates/lab-runner.yaml`. It replays **every exercise of
+every chapter** against a named participant's tenant and reports which section
+failed, the command or question it used, and the MLflow trace behind the turn.
+It also fast-forwards a tenant to the start of any chapter, so chapter 3 can be
+demonstrated without working through 1 and 2 by hand.
+
+Source and Containerfile live in `rh-aiservices-bu/agentops-rh1-lab` under
+`lab-runner/`; the image is pinned here like every other workload
+(`labRunner.image`).
+
+**Instructor tooling. Nothing in the Showroom content links to it**, and that is
+deliberate: it mutates the tenant — creates and recreates the sandbox, edits
+Keycloak role mappings, repoints the console — which is the lab, and is not
+something to do to a tenant somebody is holding.
+
+Two values, forwarded per participant exactly as `attackRunner`'s are:
+
+| Value | In | Effect |
+|---|---|---|
+| `labRunner.enabled` | `bootstrap-infra` | deploys the runner, its Route and its discovery ClusterRole |
+| `platform.labRunner` | `bootstrap-tenant` | whether the runner may drive *this* participant |
+
+Set `platform.labRunner: false` on a presenter's demo tenant and the runner
+cannot touch it: the per-namespace RoleBinding in
+`tenant-platform/templates/lab-runner-rbac.yaml` is what grants it anything at
+all, and the grant is read there verb by verb with the reason for each.
+
+Unlike the attack runner it needs **no NetworkPolicy** in the tenant namespace.
+It prompts the agent through the operator console's Route rather than pod to
+pod, which is also the path the participant uses — so it follows the `AGENT_URL`
+they set in module 2 and carries the NeMo input guardrail they connect in
+module 6, neither of which a direct call to the agent Service would do.
+
+### Relationship to `qa-automation/`
+
+They answer different questions and both are worth keeping:
+
+| | Answers |
+|---|---|
+| `qa-automation/healthcheck.yml` | did this environment come up correctly, read-only, every tenant at once |
+| `qa-automation/e2e.yml` | the same walkthrough as Ansible, modules 1–4, run from the Showroom pod |
+| the lab runner | all seven chapters, with per-exercise trace links and a Markdown report, plus fast-forward |
+
+The runner's judgement is inherited from `e2e.yml` — the same hard-won rules
+about what counts as evidence — so the two should agree where they overlap. Where
+they disagree, `healthcheck-spec.yaml`'s `e2e_steps` entries are the written
+rationale and the place to reconcile them.

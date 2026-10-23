@@ -354,3 +354,55 @@ attackEvalRunner:
     limits:
       cpu: 500m
       memory: 512Mi
+
+# The lab runner — one instance for the whole event.
+#
+# Runs every exercise of every chapter against a named participant's tenant and
+# reports which section failed, the command or question it used, and the MLflow
+# trace behind the turn. Also fast-forwards a tenant to the start of any
+# chapter, so chapter 3 can be demonstrated without working through 1 and 2.
+#
+# For whoever is holding the lab, not for participants: it reads the realm admin
+# credential and execs into the bridge's cli container across namespaces, and
+# nothing in the Showroom content links to it.
+#
+# Source: rh-aiservices-bu/agentops-rh1-lab, under lab-runner/.
+labRunner:
+  # On by default. It costs one small pod and it is the only thing that can
+  # answer "is this environment's lab actually working" without a person
+  # spending two hours finding out.
+  enabled: true
+  # PINNED, like every other image in this chart. Built and pushed from the
+  # agentops-rh1-lab repo; public, so a cluster needs no pull secret.
+  image: quay.io/rh-aiservices-bu/agentops-lab-runner:0.1.2
+  imagePullPolicy: IfNotPresent
+  serviceAccountName: lab-runner
+  # Where the participant namespaces are: <username>-<suffix>. Must agree with
+  # bootstrap-tenant's namespaceSuffix, or the runner looks for tenants that do
+  # not exist.
+  namespaceSuffix: agentops
+  # Must match tenant-openshell's hermes.image. Chapter 2 sandboxes the same
+  # image the agent already runs; a different tag here would test a different
+  # agent and the chapter's central claim would no longer be what was measured.
+  agentImage: quay.io/rh-aiservices-bu/waterplant-hermes:0.2.7
+  # Where the participant realms live, for the chapter 3 role mappings.
+  keycloakNamespace: keycloak
+  # Empty means "read it from the cluster Ingress", which is what it should
+  # normally do — the apps domain differs per cluster and every hostname in
+  # chapter 2's policy rules hangs off it.
+  clusterDomain: ""
+  route:
+    enabled: true
+    # Over an hour, in seconds. A full seven-chapter run is two sandbox builds,
+    # six eval sweeps and a hundred-odd model round trips, watched over a single
+    # SSE connection — the router's 30s default would drop it in chapter 1.
+    timeout: 7200s
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      # No model runs here and nothing is held in memory but the last report per
+      # participant; the work is `oc` subprocesses and HTTP waits.
+      cpu: "1"
+      memory: 512Mi
