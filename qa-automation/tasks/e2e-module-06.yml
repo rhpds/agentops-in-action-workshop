@@ -58,6 +58,46 @@
   ansible.builtin.set_fact:
     e2e_bridge_pod: "{{ m6_bridge.resources[0].metadata.name }}"
 
+- name: "M6 | Read the console's own NeMo settings"
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    namespace: "{{ t_ns }}"
+    name: water-plant-ui
+  register: m6_ui_cfg
+
+# Read from the console rather than hardcoded, for the same reason module 2
+# reads the Keycloak and model hosts off the cluster: these differ per tenant
+# and per build, and a wrong value here would surface as a guardrail verdict
+# rather than as a configuration error.
+#
+# NEMO_MODEL and NEMO_CONFIG_ID are both present on the Deployment from
+# provisioning — only NEMO_ENDPOINT is left empty for module 6 to set — so
+# this works before the participant's step as well as after. Sending what the
+# console sends is also the point: this suite should exercise the request
+# shape a participant's console will actually make.
+- name: "M6 | Mirror the console's model and config id"
+  ansible.builtin.set_fact:
+    e2e_nemo_model: "{{ _env_model | default(e2e_nemo_model, true) }}"
+    e2e_nemo_config: "{{ _env_config | default(e2e_nemo_config, true) }}"
+  vars:
+    _ui_env: >-
+      {{ m6_ui_cfg.resources[0].spec.template.spec.containers
+         | selectattr('name', 'equalto', 'ui') | selectattr('env', 'defined')
+         | map(attribute='env') | flatten }}
+    _env_model: >-
+      {{ _ui_env | selectattr('name', 'equalto', 'NEMO_MODEL')
+         | map(attribute='value') | first | default('', true) }}
+    _env_config: >-
+      {{ _ui_env | selectattr('name', 'equalto', 'NEMO_CONFIG_ID')
+         | map(attribute='value') | first | default('', true) }}
+
+- name: "M6 | NeMo request shape in use"
+  ansible.builtin.debug:
+    msg: >-
+      Rails calls will send model={{ e2e_nemo_model }}
+      config_id={{ e2e_nemo_config }} to {{ e2e_nemo_endpoint }}
+
 # ── E2E-M6-01 — the policy exists and says what the module tells people it says
 
 - name: "M6 | E2E-M6-01 — read the guardrails ConfigMap"
