@@ -218,6 +218,17 @@
     # the server answers 422, {"loc":["body","model"],"msg":"Field required"}.
     e2e_nemo_model: "qwen3-235b-a22b"
     e2e_nemo_configmap: nemo-guardrails-config
+    # The checks endpoint, not /v1/chat/completions. The latter also generates
+    # an assistant answer through the colang dialog runtime, which this suite
+    # does not want and which fails on this build — generate_user_intent sends
+    # stop sequences and the Bedrock-fronted model group rejects them, so
+    # every chat completion returns 200 with the content "Internal server
+    # error". /v1/checks runs the rails only and answers
+    # {"status":"passed|blocked","rail":...}. See ask-rails.yml.
+    #
+    # `curl -s <endpoint>/openapi.json` lists what a given build exposes if
+    # this ever 404s.
+    e2e_nemo_check_path: "/v1/checks"
     # Quoted from rails.co in
     # automation/gitops/tenant-guardrails/templates/configmap.yaml. A blocked
     # turn is a normal 200 carrying this sentence, so this string is how the
