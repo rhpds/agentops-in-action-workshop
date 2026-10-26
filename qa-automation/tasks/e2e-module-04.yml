@@ -276,12 +276,15 @@
 
 # ── E2E-M4-06 — the operator can get a report again ───────────────────────
 
+- name: "M4 | Reset the report tally"
+  ansible.builtin.set_fact:
+    m4_report_done: false
+
 - name: "M4 | Ask for a report, with /reports writable"
   ansible.builtin.include_tasks: e2e-m4-report-attempt.yml
   loop: "{{ range(1, (e2e_m4_report_attempts | int) + 1) | list }}"
   loop_control:
     loop_var: m4_try
-  when: (m4_report_written | default([]) | length) == 0
 
 - name: "M4 | E2E-M4-06 — a report file must exist"
   ansible.builtin.assert:

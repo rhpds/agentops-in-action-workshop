@@ -265,6 +265,7 @@
 - name: "M5 | Reset the bulletin tally"
   ansible.builtin.set_fact:
     m5_attack_landed: false
+    m5_bulletin_done: false
 
 - name: "M5 | Ask for the bulletin, with the host-wide rule in place"
   ansible.builtin.include_tasks: e2e-m5-bulletin-attempt.yml
