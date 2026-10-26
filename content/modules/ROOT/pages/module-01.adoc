@@ -4,59 +4,81 @@
 == Objectives
 
 * Understand your role in operating and securing a tool-enabled agent
-* Meet Hermie and explore the operator console
-* Try legitimate plant operations and identify access that exceeds the operator's role
-* Read attack notifications and use traces to investigate what happened
-* Run automated evaluations and record a baseline before adding controls
+* Meet Hermie (the Hermes Agent) and explore the "operator console" UI
+* Try legitimate plant operations and find where you have more access than you should
+* Try attacking Hermie and look at what happens
+* Run basline evaluations to see that everything works as it should
 
 == Content
 
 === Your role in this lab
 
-Welcome to Northgate Water Treatment Works! Plant operators rely on *Hermie*, an assistant built with Hermes Agent, to inspect pump readings, respond to faults, and prepare maintenance reports.
+Welcome to Northgate Water Treatment Works! +
+Operators of the waterplant rely here on a custom AI assistant they call *Hermie*, built based on the popular Hermes Agent. +
+They use Hermie to inspect pump readings, respond to faults, and prepare maintainance reports. +
+To do this, Hermie has been equiped with a variety of *tools* (how Hermie interacts with the waterplant, for example "turn off pump 4") and *skills* (recepies it follows, for example, the skill "write-report" contains all information for where to save the report and with what name) to enhance it capabilities, such as:
 
-But Hermie is under attack 😱 As the engineer supporting Hermie, you will find out about the attacks, what enables them, and where to apply controls, without making Hermie useless to the operators.
+- Reading and writing files
+- Interacting with and getting information from the waterplant
+- Browsing the internet (the waterplant documentation and duckduckgo searches among other things)
 
-The plant and attacks are simulated. Starting from an unsandboxed agent, you will add sandbox, network, filesystem, tool authorization, and guardrail controls. After each change, you will use traces and evaluations to confirm that attacks are blocked and legitimate tasks still work. 
+image::hermie-capabilities.png["Hermie and the capabilities it has",700,align=center]
+
+NOTE: We customized the Hermes Agent for this workshop, adding Northgate-specific instructions, skills, plant tool connections, and lab integrations. This is why we call this customized assistant *Hermie*. Throughout the lab, “Hermes Agent” refers to the underlying agent framework, while “Hermie” refers to the assistant you are operating.
+
+However, Hermie is under attack 😱 +
+As the engineer maintaining Hermie, you will find out about the attacks, what enables them, and where to apply controls, without making Hermie too restricted for its users (the waterplant operators).
+
+The plant and attacks are simulated. Starting from just a plain Hermie deployment with full capabilities you will *sandbox* it, in other words, block it from making network calls and interacting with its file system (imagine putting Hermie in a box 📦). +
+Then we will explore how to be selective with what tools Hermie is allowed to use, and finally we will add *guardrails* which look at all inputs from the users to Hermie to see if they are safe and in line with work-related topics. +
+To get hints on what's going on, you will be able to see *traces*, which contain the messages from the user, what tools or skills Hermie used, and what Hermie answered.
 
 This cycle of observation, control, and testing is the AgentOps workflow.
 
 === The initial deployment
 
-The agent is already running in your own namespace, `{user}-agentops`. Let's look at what is there.
+The agent is already running in your own namespace, `{user}-agentops`. There are a variety of things running in there, but for now let's focus on just our agent, its tools, and how we can interact with it which is through the Operator Console UI.
 
-image::agent-architecture.png["Participant browser through the operator console to Hermes, the MCP Gateway, three MCP servers and plant-api",align=center]
+image::simple-hermie-setup.png["Hermie connected to the UI",align=center]
 
-* *Hermie is a workload running in OpenShift.* This lab follows Bring Your Own Agent (BYOA): Hermes is the agent framework, and the surrounding platform provides the controls you will apply.
-* *Hermie connects to a model through MaaS (Models as a Service).* You will use the supplied model endpoint rather than deploy or train a model.
-* *Plant tool calls go through the MCP Gateway.* It connects Hermie to the telemetry, control, and maintenance MCP servers.
-* *The agent console reads plant state directly from `plant-api`.* Its gauges and pump panels keep updating even if the agent is unavailable or a tool call is denied. Use them to check what actually changed.
+Hermie has access to three groups of waterplant-tools (each with a few tools each):
 
-NOTE: We customized the Hermes agent harness for this workshop, adding Northgate-specific instructions, skills, plant tool connections, and lab integrations. We call this customized assistant *Hermie*. Throughout the lab, “Hermes” refers to the underlying agent framework, while “Hermie” refers to the assistant you are operating. Its configuration and behavior reflect this lab setup.
+* *telemetry-mcp*: This returns information on how the plant is doing. One tool in this group is for example _get_all_pump_status_ which returns the current status of all the waterplants pumps.
+* *maintenance-mcp*: This keeps track of work orders and lets Hermie update/create them as needed. One tool in this group is for example _list_work_orders_ to see all the existing work orders.
+* *control-mcp*: This contains tools that lets Hermie directly control the waterplant. One example here is the _stop_pump_ tool which lets Hermie stop any of the waterplants pumps.
 
-=== Get to know the agent
+To access these waterplant-tools Hermie go through something called an *MCP Gateway*, you don't need to worry too much about that right now, it essentially just groups all tools together and standardizes how Hermie calls them, making the setup easier and more controlled.
+
+There is one piece we haven't talked about yet which is the model, the LLM. Hermie won't do much good without an LLM backing it to generate all the answers, plan what tools to use, etc. +
+Specifically, we use an LLM called _qwen3-235b-a22b_ here.
+
+With these covered, a more complete picture of our initial Hermie setup looks like this:
+
+image::full-initial-hermie.png["Hermie with tools and model",align=center]
+
+NOTE: A framework like Hermie is sometimes called a *harness* or *agent harness*, which essentially just means that it connects all the tools, model, skills, etc. together.
+
+=== Get to know Hermie
 
 Open the https://water-plant-ui-{user}-agentops.{openshift_cluster_ingress_domain}/[Operator Console UI^]
 for Northgate Water Treatment Works.
 
 image::operator-console.png["The Northgate operator console with plant gauges, pump panels, safety checks, and the maintenance assistant",align=center]
 
-TIP: The console is also available in the *Waterplant UI* tab on the right, but it's easier to work with in a separate browser tab.
-
 Look for these parts of the interface:
 
-* *Plant panels*: reservoir levels, water quality, pumps, and valves. These show the current simulated plant state.
+* *Reservoir, Valves, and Pumps*: reservoir levels, water quality, pumps, and valves. These show the current simulated plant state.
 * *Safety Envelope*: It reports concerns about the plant.
 * *Maintenance Assistant*: the chat pane where operators send requests to Hermie.
-* *Footer controls*: *Run attack* sends a selected attack, *Run all evals* tests the available legitimate tasks, and *Reset plant* restores the starting state. And *MLflow traces* can be used to investigate how an answer was produced. Detailed tool information can be seen in the MLflow trace.
+* *Footer controls*: *Run attack* sends a selected attack, *Run all evals* tests the available legitimate tasks, and *Reset plant* restores the starting state. *MLflow traces* can be used to investigate how an answer was produced. Detailed tool information can be seen in the MLflow trace, more on that later.
 
 Attack and evaluation results appear as notifications over the console. They remain visible until you dismiss them with the close button. Read the result and any cleanup message before dismissing a notification; we will use these as feedback when applying controls.
 
-NOTE: *Reset plant* discards work orders and maintenance records and clears the chat transcript. Evaluation runs also reset the plant.
+NOTE: *Reset plant* resets everything to scratch, including work orders, reports, skills, and clears the chat transcript. Evaluation runs and attacks also automatically reset the plant.
 
 === Ask Hermie about the plant
 
-. In *Maintenance Assistant*, send:
+. In the *Operator Console UI*, send:
 +
 --
 [source,text,subs="verbatim,attributes"]
@@ -89,20 +111,23 @@ Operators also need written reports. Ask Hermie:
 Write a report on the current water plant status.
 ----
 
-The `write-report` skill saves a Markdown file under `/reports` and reads it back to verify the contents. You should receive something similar to:
+The `write-report` skill saves a Markdown file under `/reports`. You should receive something similar to:
 
 [source,text,subs="verbatim,attributes"]
 ----
 **Report saved at:** `/reports/2026-10-21_19-33-12-417477Z_plant-status.md`
 ----
 
-The request should complete without an approval step.
+The request should complete without an approval step. +
+If you want to see what the report says, you can ask Hermie to read it to you 📖
 
 === Find the evidence in MLflow
 
 Use the *MLflow traces* link bottom right to open MLflow. It opens the experiment list for your own project, `{user}-agentops`, with a single experiment named `{user}` in it. Select it and look for a recent request.
 
-Sign in with the same credentials you use for the OpenShift console:
+image::mlflow-link.png["Open MLflow traces",align=center]
+
+If you didn't before, sign in with the same credentials you use for the OpenShift console:
 
 [cols="1,2"]
 |===
@@ -110,10 +135,9 @@ Sign in with the same credentials you use for the OpenShift console:
 |Password |`{password}`
 |===
 
-image::mlflow-link.png["Open MLflow traces",align=center]
-
-
 Open the trace and inspect the prompt, model interaction, tool calls, tool results, and final response where they are recorded. For the pump query, check which telemetry tool was called. For the stop request, compare the tool result with the plant panel.
+
+image::rhoai-mlflow.png["Traces view",align=center]
 
 image::mlflow-trace-pump4.png["MLflow trace for the pump 4 query, showing the agent span tree, the telemetry tool call, and the recorded inputs and outputs",align=center]
 
