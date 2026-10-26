@@ -34,7 +34,7 @@ doesn't mean that it will stick to that. +
 
 OpenShell is a framework that lets you sandbox your workloads, and it happens to be our preferred one in OpenShift AI.
 
-There are 4 important component:
+There are 3 important component:
 
 * *Agent sandboxes* - This is your sandbox. Every sandbox has a single agent inside it and each sandbox is a pod in OpenShift. It runs the agent, and any related processes, with network and kernel-level filesystem controls. You can have multiple sandboxes running next to each other.
 * *The supervisor* - The guard inside the box. It is what launches Hermie and every syscall and outbound connection from Hermie passes through the supervisor, this is how it can intercept and block them. Essentially, it's what enforces our policies.
@@ -258,10 +258,10 @@ image::sandboxed-hermie-with-ui.png["A diagram of sandbox Hermie with the UI",11
 What's the status of pump 4?
 ----
 
-. No answer? Doesn't work, right? When you sandboxed an agent with OpenShell, by default, it comes with **deny all** outbound network access. So, you are secure, but too secure (is there such a thing?👀).
+. No answer? Doesn't work, right? When you sandboxed an agent with OpenShell, by default, it comes with **deny all** outbound network access and almost deny all on the file system actions. So, you are secure, but too secure (is there such a thing?👀).
 +
 --
-In actuallity, our Hermie now looks something like this:
+In actuallity, our Hermie now looks something like this, where most of the things we could do before now are blocked by policies:
 
 image::sandboxed-hermie-with-blockers.png["A diagram of sandbox Hermie with restrictions",1100,align=center]
 

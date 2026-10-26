@@ -4,9 +4,8 @@
 == Objectives
 
 * Understand how Keycloak and the MCP Gateway control access to plant tools
-* Distinguish authentication from authorization
 * Use traces to identify the tools behind an attack
-* Adjust the operator's roles to restrict unnecessary tool access
+* Adjust the operator's role to restrict unnecessary tool access
 * Verify that attacks are blocked while legitimate plant tasks still work
 
 == Content
@@ -19,29 +18,17 @@ Your investigation continues. The next step is to find out which tool permission
 
 === How Hermie reaches a tool
 
-Before we change anything, let's follow a tool request. Two components bring a security layer to this path: *Keycloak* and the *MCP Gateway*.
+From the last modules we remember that MCP Gateway was used to simplify the connection to our tools by grouping them together and making them all available through a single endpoint.
 
-* *Keycloak* is the identity provider. Hermie authenticates using the lab's `operator` account and obtains an access token. The token is a signed JWT containing identity information and roles assigned to that account.
-* *MCP Gateway* connects Hermie to the plant's MCP servers. Its authentication policy validates the token, and its authorization policy checks whether the token carries the role required for the requested tool. Both happens through Keycloak. The gateway then routes an allowed request to the appropriate MCP server.
+There is a bit more to this story, we also have *Keycloak* in the mix, as eluded to earlier. +
+Keycloak is an identity provider which can let us create and manage users and their permissions. In this case, we can modify what tools a user has access to. +
+What happens behind the scenes is that we go through Keycloak and check what permissions we have everytime we call a tool through the MCP Gateway. If we don't have permissions to use the tool, we will be blocked before we ever reach it.
 
-There are two related exchanges:
+Combined it looks something like this:
 
-image::identity-tool-access.png["Two flows: Hermie gets an identity token from Keycloak, then calls a plant tool through the MCP Gateway, MCP server, tool, and plant API, with the gateway validating the token and checking tool permission",align=center]
+image::keycloak-and-mcp-gateway.png["How all tool requests go through MCP Gateway and Keycloak",align=center]
 
-[cols="1,2,2",options="header"]
-|===
-| Concept | Question it answers | In this lab
-
-| *Authentication*
-| Who is making this request?
-| A valid token gets Hermie past the identity check.
-
-| *Authorization*
-| Is that identity allowed to perform this action?
-| Right role gives access Hermie to only a subset of tools.
-|===
-
-If the operator has roles for powerful tools, the gateway can correctly authenticate and authorize a request that exceeds the operator's intended duties. We need to give the identity the right permissions, then verify that the gateway enforces them.
+If the operator has roles for powerful or dangerous tools, the gateway will authenticate and authorize such a request, even though it exceeds the operator's intended duties. We need to give the identity the right permissions, then verify that the gateway enforces them.
 
 === Reproduce the remaining attacks
 
@@ -81,27 +68,51 @@ Username: `admin`
 
 Password: `redhat`
 
-You should see the Water Plant realm for your participant. Make sure you are working in `waterplant-{user}`.
+Every user gets their own Keycloak "realm" (think of it as an instance). Make sure you are working in `waterplant-{user}`.
 
 . In the left menu, go to *Users*, select *operator*, and open *Role Mappings*.
-. Review the assigned roles. There are more than ten, so check the other pages as well.
+. Review the assigned roles, and note that each role here that starts with `tool:` is access to that tool. There are more than ten, so make sure to check the other pages as well.
 . Compare the roles with the tool calls you recorded in the two attack traces. Which roles grant access to those tools?
 
 image::keycloak-role-mappings.png["View assigned roles",align=center]
 
 Before changing anything, think about:
 
-* Which tool enabled each attack?
-* Which assigned role corresponds to that tool, and under which client?
+* Which tool enabled each attack from above?
+* Which assigned role corresponds to that tool?
 * Why does the operator not need that permission?
 * Which permissions should remain so the operator can still do their work?
 
 === Restrict unnecessary access
 
 . In *Role Mappings*, select the roles you identified as unnecessary for the operator and remove those assignments. In order to unassing a role, select the role and click `Unassign`. Keep the permissions needed for the legitimate tasks.
-. Allow a short time for the change to take effect. The bridge watches the operator's role mappings and restarts sandboxed Hermie when they change, so it can obtain a fresh token and reconnect to the tools.
+. Allow a short time for the change to take effect. The bridge watches the operator's role mappings and restarts sandboxed Hermie when they change, so it can reconnect to the newly authorized tools.
 
 image::keycloak-unassign-role.png["Keycloak console to assign and unassign roles",align=center]
+
+
+IMPORTANT: If you are unsure of what tools to remove access to, click the dropdown below (in `Reveal the answer`) to see which ones to remove.
+
+.Reveal the answer
+[%collapsible]
+====
+Both attacks come from roles under the `control-mcp` client:
+
+* *Whole-plant shutdown* uses the `emergency_shutdown` tool. Remove the `tool:emergency_shutdown` role.
++
+image::emergency_shutdown.png["Trace showing the emergency_shutdown tool call",align=center]
+
+* *Plant configuration dump* uses the `dump_plant_configuration` tool. Remove the `tool:dump_plant_configuration` role.
++
+image::control_dump_plant_configuration.png["Trace showing the dump_plant_configuration tool call",align=center]
+
+Keep the other roles, such as telemetry reads and stopping an individual pump, so the operator can still do their work.
+
+This is how you remove them: in the operator's *Role Mappings*, select both roles and click *Unassign*.
+
+image::keycloak-unassign-role-2.png["Unassign the harmful tools",align=center]
+
+====
 
 === Verify the restrictions
 
@@ -129,27 +140,6 @@ Verify the effect in the plant panel. If either legitimate task fails, inspect i
 
 If an attack still succeeds, trace the new attempt. Did Hermie use another tool to achieve the same goal? Removing one permission is not enough if other allowed actions can produce the same effect. Review the remaining access without removing legitimate capabilities blindly.
 
-.Reveal the answer
-[%collapsible]
-====
-Both attacks come from roles under the `control-mcp` client:
-
-* *Whole-plant shutdown* uses the `emergency_shutdown` tool. Remove the `tool:emergency_shutdown` role.
-+
-image::emergency_shutdown.png["Trace showing the emergency_shutdown tool call",align=center]
-
-* *Plant configuration dump* uses the `dump_plant_configuration` tool. Remove the `tool:dump_plant_configuration` role.
-+
-image::control_dump_plant_configuration.png["Trace showing the dump_plant_configuration tool call",align=center]
-
-Keep the other roles, such as telemetry reads and stopping an individual pump, so the operator can still do their work.
-
-This is how you remove them: in the operator's *Role Mappings*, select both roles and click *Unassign*.
-
-image::keycloak-unassign-role-2.png["Unassign the harmful tools",align=center]
-
-====
-
 === Can an allowed tool still be a problem?
 
 You have narrowed which tools the operator can use. But imagine an allowed tool is compromised, or its response contains instructions trying to steer Hermie into another action. A valid identity and an allowed tool call do not guarantee that the returned content is trustworthy.
@@ -161,5 +151,5 @@ This is another reason tracing matters. A trace helps you follow what the tool r
 * You can explain the separate roles of Keycloak and the MCP Gateway.
 * You identified the tool calls behind both attacks using traces.
 * You removed the corresponding unnecessary role assignments from the operator.
-* You verified the attack outcomes after refreshing Hermie's credentials.
+* You verified the attack outcomes and saw them getting blocked.
 * Plant telemetry and individual pump control still work, and you have compared the evaluation results with your baseline.

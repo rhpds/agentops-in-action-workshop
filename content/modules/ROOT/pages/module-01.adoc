@@ -7,7 +7,7 @@
 * Meet Hermie (the Hermes Agent) and explore the "operator console" UI
 * Try legitimate plant operations and find where you have more access than you should
 * Try attacking Hermie and look at what happens
-* Run basline evaluations to see that everything works as it should
+* Run baseline evaluations to see that everything works as it should
 
 == Content
 
@@ -74,7 +74,7 @@ Look for these parts of the interface:
 
 Attack and evaluation results appear as notifications over the console. They remain visible until you dismiss them with the close button. Read the result and any cleanup message before dismissing a notification; we will use these as feedback when applying controls.
 
-NOTE: *Reset plant* resets everything to scratch, including work orders, reports, skills, and clears the chat transcript. Evaluation runs and attacks also automatically reset the plant.
+NOTE: *Reset plant* resets everything to scratch, including work orders, reports, skills, system prompt (aka the soul for Hermie), and clears the chat transcript. Evaluation runs and attacks also automatically reset the plant.
 
 === Ask Hermie about the plant
 
@@ -127,7 +127,7 @@ Use the *MLflow traces* link bottom right to open MLflow. It opens the experimen
 
 image::mlflow-link.png["Open MLflow traces",align=center]
 
-If you didn't before, sign in with the same credentials you use for the OpenShift console:
+You need to log in to OpenShift AI to see the traces:
 
 [cols="1,2"]
 |===
