@@ -6,8 +6,8 @@ Welcome to this hands-on AgentOps lab. You will take a single pre-deployed enter
 
 * Meet the agent already deployed in your environment, try it out, and experience several attacks succeed
   against it while every legitimate use case also succeeds
-* Put the agent in an OpenShell sandbox and discover it's now shielded but useless
-* Make the agent useful again, one control at a time -- tools, file writes, and doc access -- opening
+* Put the agent in an OpenShell sandbox and discover it's now shielded but restricted to the point where you can't complete your daily tasks
+* Make the agent more capable again, one control at a time -- tools, file writes, and doc access -- opening
   each back up only as far as it actually needs
 * Guard against injection attacks with NeMo Guardrails
 * Rely on MLflow traces and MLflow Evals throughout to see what's working and what isn't, instead of checking manually
