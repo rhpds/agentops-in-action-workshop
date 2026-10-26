@@ -87,6 +87,8 @@ You should see the Water Plant realm for your participant. Make sure you are wor
 . Review the assigned roles. There are more than ten, so check the other pages as well.
 . Compare the roles with the tool calls you recorded in the two attack traces. Which roles grant access to those tools?
 
+image::keycloak-role-mappings.png["View assigned roles",align=center]
+
 Before changing anything, think about:
 
 * Which tool enabled each attack?
@@ -126,6 +128,27 @@ Verify the effect in the plant panel. If either legitimate task fails, inspect i
 . Click *Run all evals*. Remember that the run resets the plant by default. Compare the *Evaluation suite* scorecard with your earlier baseline, and use the individual *trace* links and *Open the MLflow run* link to investigate differences.
 
 If an attack still succeeds, trace the new attempt. Did Hermie use another tool to achieve the same goal? Removing one permission is not enough if other allowed actions can produce the same effect. Review the remaining access without removing legitimate capabilities blindly.
+
+.Reveal the answer
+[%collapsible]
+====
+Both attacks come from roles under the `control-mcp` client:
+
+* *Whole-plant shutdown* uses the `emergency_shutdown` tool. Remove the `tool:emergency_shutdown` role.
++
+image::emergency_shutdown.png["Trace showing the emergency_shutdown tool call",align=center]
+
+* *Plant configuration dump* uses the `dump_plant_configuration` tool. Remove the `tool:dump_plant_configuration` role.
++
+image::control_dump_plant_configuration.png["Trace showing the dump_plant_configuration tool call",align=center]
+
+Keep the other roles, such as telemetry reads and stopping an individual pump, so the operator can still do their work.
+
+This is how you remove them: in the operator's *Role Mappings*, select both roles and click *Unassign*.
+
+image::keycloak-unassign-role-2.png["Unassign the harmful tools",align=center]
+
+====
 
 === Can an allowed tool still be a problem?
 
