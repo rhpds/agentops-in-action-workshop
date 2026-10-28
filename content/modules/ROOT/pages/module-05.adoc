@@ -1,5 +1,5 @@
 = Module 5: Let the Agent Reach the Docs Website
-:page-duration: 25 minutes
+:page-duration: 20 minutes
 
 == Objectives
 

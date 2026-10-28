@@ -1,5 +1,5 @@
 = Module 3: Let the Agent Use Its Tools
-:page-duration: 25 minutes
+:page-duration: 15 minutes
 
 == Objectives
 

@@ -1,5 +1,5 @@
 = Module 1: Introduction to AgentOps & Meet Hermie
-:page-duration: 25 minutes
+:page-duration: 20 minutes
 
 == Objectives
 

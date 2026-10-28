@@ -1,5 +1,5 @@
 = Module 6: Check What Goes In and Comes Out
-:page-duration: 30 minutes
+:page-duration: 20 minutes
 
 == Objectives
 

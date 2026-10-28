@@ -1,5 +1,5 @@
 = Module 4: Let the Agent Write Files
-:page-duration: 25 minutes
+:page-duration: 20 minutes
 
 == Objectives
 

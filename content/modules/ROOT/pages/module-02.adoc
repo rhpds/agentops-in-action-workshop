@@ -1,5 +1,5 @@
 = Module 2: Sandbox the Agent
-:page-duration: 30 minutes
+:page-duration: 20 minutes
 
 == Objectives
 
