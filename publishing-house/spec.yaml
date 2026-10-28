@@ -64,7 +64,7 @@ spec:
   - id: module-07
     title: "AgentOps lifecycle and wrap-up"
     duration_min: 10
-    status: in_progress
+    status: complete
   environment:
     platform: "ocp"            # ocp | rhel-vms — determines which sizing fields apply
     topology: "shared-cluster" # shared-cluster | per-student | cnv-pool
