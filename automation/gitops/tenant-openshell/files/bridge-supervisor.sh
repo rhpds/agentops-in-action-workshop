@@ -240,7 +240,6 @@ prepare() {
 export HERMES_HOME=/sandbox/.hermes
 export HERMES_PROFILE=default
 export XDG_STATE_HOME=/sandbox/.hermes/state
-export MEM0_DB_PATH=/sandbox/.hermes/mem0
 export API_SERVER_ENABLED=true
 export API_SERVER_HOST=127.0.0.1
 export API_SERVER_PORT=${API_PORT}
@@ -251,7 +250,53 @@ export MCP_USERNAME='${MCP_USERNAME}'
 export MCP_PASSWORD='${MCP_PASSWORD}'
 export MCP_TOKEN_URL='${MCP_TOKEN_URL}'
 export TOKEN_REFRESH_SECONDS='${TOKEN_REFRESH_SECONDS}'
+# Availability marker; the local provider fetches pages directly over HTTP.
+export FIRECRAWL_API_URL=http://waterplant-docs:8080
+mkdir -p /sandbox/.hermes/plugins/web/firecrawl
+cp /sandbox/hermes/web-direct-plugin.yaml /sandbox/.hermes/plugins/web/firecrawl/plugin.yaml
+cp /sandbox/hermes/web-direct-init.py /sandbox/.hermes/plugins/web/firecrawl/__init__.py
+cp /sandbox/hermes/web-direct-provider.py /sandbox/.hermes/plugins/web/firecrawl/provider_direct.py
+# Seed the lab soul before Hermes writes its stock default_soul.
+cp /sandbox/hermes/SOUL.md /sandbox/.hermes/SOUL.md
+# Install the externalized skills before Hermes starts. The script restores
+# both and drops anything else under skills/ — an agent-authored skill, or a
+# SKILL.md the self-improvement fork patched in an earlier run. It is the same
+# script the on-demand reset runs, so starting Hermes and resetting it leave
+# identical state.
+sh /sandbox/hermes/reseed-skills.sh /sandbox/hermes /sandbox/.hermes
+# The always-present report deleted-reports targets. Silent either way, and
+# expected to do nothing for the first half of the lab.
+#
+# Everything here runs inside the sandbox, under OpenShell's Landlock policy,
+# and that policy does not grant /reports until module 4 adds it — so before
+# then this copy is refused, and it should be. Module 4 is where the agent
+# gains read and write access to the directory, and the file only needs to
+# exist once the agent can reach it: nothing earlier reads it. From that
+# module on, the participant recreates the sandbox with /reports granted and
+# runs start-hermes again, and this line puts the file there.
+#
+# No mkdir. /reports already exists in the image (hermes-openshell's
+# Containerfile creates it mode 1777), a non-root process cannot create a
+# directory under / anyway, and `mkdir -p` on an existing directory returns 0
+# without issuing a syscall — so it only ever added a misleading success in
+# front of the failure that mattered.
+#
+# Output is dropped rather than logged. "could not seed /reports" on every
+# pre-module-4 start reads as something being broken, when it is the policy
+# working. The console restores the file on reset either way (POST
+# /api/plant/reset, over `oc exec`, which is outside the policy), and that is
+# what the attacks and evals measure against before the agent has access.
+cp /sandbox/hermes/very-important-report.md /reports/very-important-report.md 2>/dev/null || true
 EOF
+  publish /config/SOUL.md SOUL.md
+  publish /config/web-direct-plugin.yaml web-direct-plugin.yaml
+  publish /config/web-direct-init.py web-direct-init.py
+  publish /config/web-direct-provider.py web-direct-provider.py
+  publish /config/reseed-skills.sh reseed-skills.sh
+  publish /config/read-safety-docs-SKILL.md read-safety-docs-SKILL.md
+  publish /config/write-report-SKILL.md write-report-SKILL.md
+  publish /config/save-report.py save-report.py
+  publish /config/very-important-report.md very-important-report.md
   publish "$WORK/config.yaml" config.yaml
   publish "$WORK/hermes-env.sh" hermes-env.sh
   rm -f "$WORK/config.yaml" "$WORK/hermes-env.sh"

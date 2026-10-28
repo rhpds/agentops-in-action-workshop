@@ -1,0 +1,89 @@
+---
+# One attempt at getting the agent to save a report, checked on the sandbox
+# filesystem rather than on the reply.
+#
+# Retried because the step is model-dependent in a way the infrastructure is
+# not: the write-report skill tells the agent to run
+# `python3 .../save_report.py` as a shell command, and the sandboxed agent
+# sometimes answers that it has no "terminal" tool and stops — even though it
+# holds execute_code, read_file and patch. Accumulates into m4_report_written.
+#
+# The "stop once one has been written" gate lives HERE, not on the
+# include_tasks in e2e-module-04.yml. A `when:` on a looped include is
+# evaluated for every item up front, before any of them run, so facts set by
+# iteration 1 cannot stop iteration 2 — confirmed against ansible-core 2.21.5,
+# where a three-item loop gated on a fact set by its own first iteration ran
+# all three. The symptom was mild but real: a successful first attempt still
+# paid for a second model round trip and wrote a second, redundant report.
+#
+# The gate is its own flag, set in the LAST task of the block, and that is not
+# incidental. A block-level `when:` is re-evaluated for every task inside the
+# block, not once on entry. Gating directly on `m4_report_written` therefore
+# switched itself off mid-attempt: the task that recorded the report made the
+# condition false, and the two tasks after it — including the one computing
+# m4_report_helper_named — were skipped. The module then read the unset fact
+# through `| default([])` and reported "did NOT go through save_report.py"
+# about a file that plainly had. A false finding about the agent, produced by
+# the gate rather than by the agent.
+#
+# m4_report_done changes only once, after everything that reads it has run.
+
+- name: "m4-report | attempt {{ m4_try }}"
+  when: not (m4_report_done | default(false) | bool)
+  block:
+
+    - name: "m4-report | attempt {{ m4_try }} | Ask for a report"
+      ansible.builtin.include_tasks: ask-agent.yml
+      vars:
+        ask_label: "E2E-M4-06 — report request (attempt {{ m4_try }})"
+        ask_url: "{{ t_sandboxed_url }}"
+        ask_prompt: "{{ e2e_prompt_report }}"
+
+    - name: "m4-report | attempt {{ m4_try }} | List /reports"
+      kubernetes.core.k8s_exec:
+        namespace: "{{ t_ns }}"
+        pod: "{{ e2e_bridge_pod }}"
+        container: cli
+        command: "openshell sandbox exec --name {{ e2e_sandbox }} -- ls -1 /reports"
+      register: m4_ls
+      changed_when: false
+      failed_when: false
+
+    - name: "m4-report | attempt {{ m4_try }} | Record any report the agent wrote"
+      ansible.builtin.set_fact:
+        # very-important-report.md ships in the image — it is the operator's
+        # existing report the cleanup demonstration is about, not something the
+        # agent produced, so it must not count as success here.
+        m4_report_written: >-
+          {{ (m4_ls.stdout_lines | default([])) | map('trim') | select()
+             | select('search', '\.md$')
+             | reject('equalto', 'very-important-report.md') | list }}
+
+    - name: "m4-report | attempt {{ m4_try }} | Did it go through the helper?"
+      ansible.builtin.set_fact:
+        # save_report.py names files %Y-%m-%d_%H-%M-%S-%fZ_<slug>.md. Anything
+        # else means the agent wrote the file itself and skipped the helper's
+        # real UTC timestamp and exclusive create.
+        #
+        # SINGLE backslashes. This was `\\d{4}...` and, in a folded (`>-`)
+        # scalar, YAML leaves escapes alone — so the regex engine saw a
+        # literal backslash and matched nothing. Every run reported "did NOT
+        # go through save_report.py" regardless of the filename, including
+        # runs whose files were plainly helper-named
+        # (2026-10-22_09-03-18-732529Z_pump-status-report.md). A false finding
+        # about the agent's behaviour, which is worse than no finding.
+        m4_report_helper_named: >-
+          {{ m4_report_written
+             | select('match', '\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}-\d+Z_') | list }}
+
+    - name: "m4-report | attempt {{ m4_try }} | Result"
+      ansible.builtin.debug:
+        msg: >-
+          attempt {{ m4_try }}: {{ (m4_report_written | length) }} agent-written
+          report(s) in /reports{{ (' — ' ~ (m4_report_written | join(', '))) if m4_report_written else '' }}
+
+    # Last, deliberately. Everything above reads the gate condition, so it
+    # must not change until they are done — see the header.
+    - name: "m4-report | attempt {{ m4_try }} | Close the attempt"
+      ansible.builtin.set_fact:
+        m4_report_done: "{{ (m4_report_written | default([]) | length) > 0 }}"

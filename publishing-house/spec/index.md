@@ -1,12 +1,12 @@
 # AgentOps in Action: Evaluate, Secure, and Operate Enterprise AI Agents
 
-Welcome to the project spec. Use the navigation to browse the design and module outlines.
+Welcome to the project spec. The Showroom content under `content/` is the source of truth; these spec pages mirror that module flow for Publishing House review.
 
 - [Design Spec](design.md)
-- [Module 1 - Introduction To Agentops](modules/module-01-introduction-to-agentops.md)
-- [Module 2 - Explore And Baseline](modules/module-02-explore-and-baseline.md)
-- [Module 3 - Identify Unsafe Behavior](modules/module-03-identify-unsafe-behavior.md)
-- [Module 4 - Runtime Isolation And Policy](modules/module-04-runtime-isolation-and-policy.md)
-- [Module 5 - Identity Aware Access Controls](modules/module-05-identity-aware-access-controls.md)
-- [Module 6 - Re Evaluate And Tune](modules/module-06-re-evaluate-and-tune.md)
-- [Module 7 - Agentops Lifecycle Wrap Up](modules/module-07-agentops-lifecycle-wrap-up.md)
+- [Module 1 - Introduction to AgentOps & Meet Hermie](modules/module-01-introduction-to-agentops-and-meet-hermie.md)
+- [Module 2 - Sandbox the Agent](modules/module-02-sandbox-the-agent.md)
+- [Module 3 - Let the Agent Use Its Tools](modules/module-03-let-the-agent-use-its-tools.md)
+- [Module 4 - Let the Agent Write Files](modules/module-04-let-the-agent-write-files.md)
+- [Module 5 - Let the Agent Reach the Docs Website](modules/module-05-let-the-agent-reach-the-docs-website.md)
+- [Module 6 - Check What Goes In and Comes Out](modules/module-06-check-what-goes-in-and-comes-out.md)
+- [Module 7 - Keep Hermie Working Safely](modules/module-07-keep-hermie-working-safely.md)

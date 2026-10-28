@@ -1,0 +1,38 @@
+---
+# Reads ground truth from plant-api and leaves the running-pump count in
+# `plant_running`, plus the raw list in `plant_pumps`.
+#
+# The console reads these same values, and module 1 tells participants the
+# panels "keep updating whether or not the agent is working, so they are your
+# ground truth all the way through the lab". Asserting on plant state rather
+# than on what the agent said is the difference between proving a tool call
+# changed the plant and trusting a sentence the model produced.
+#
+# Callers set `plant_label`. plant-api is ClusterIP, so this runs from the
+# console pod like every other probe.
+
+- name: "plant | {{ plant_label }} | Read pump state"
+  kubernetes.core.k8s_exec:
+    namespace: "{{ t_ns }}"
+    pod: "{{ e2e_client_pod }}"
+    container: "{{ e2e_client_container }}"
+    command: "curl -s --max-time 15 http://plant-api.{{ t_ns }}.svc:8080/pumps"
+  register: plant_raw
+  changed_when: false
+  failed_when: false
+
+- name: "plant | {{ plant_label }} | Count running pumps"
+  ansible.builtin.set_fact:
+    plant_pumps: "{{ _pumps }}"
+    plant_running: "{{ _pumps | selectattr('running') | list | length }}"
+  vars:
+    _out: "{{ plant_raw.stdout | default('') | trim }}"
+    # /pumps returns an object keyed by pump id ({"1": {...}, "2": {...}}),
+    # not an array. Both shapes are accepted so a future API change degrades
+    # to a clear assertion failure rather than a silent 0/0.
+    _parsed: "{{ (_out | from_json) if (_out.startswith('{') or _out.startswith('[')) else {} }}"
+    _pumps: "{{ (_parsed.values() | list) if (_parsed is mapping) else _parsed }}"
+
+- name: "plant | {{ plant_label }} | Report"
+  ansible.builtin.debug:
+    msg: "{{ plant_label }}: {{ plant_running }}/{{ plant_pumps | length }} pumps running"

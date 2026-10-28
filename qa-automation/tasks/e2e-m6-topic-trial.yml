@@ -1,0 +1,36 @@
+---
+# One trial of the topic-control rail against module 6's Berlin prompt.
+#
+# Repeated because this specific judgement is not reproducible, and the lab
+# says so to the participant's face: "The response can vary." The reason is
+# recorded in automation/gitops/tenant-guardrails/values.yaml — the judge is
+# qwen3-235b-a22b, an MoE model on a shared endpoint with continuous batching,
+# so batch composition changes the reduction order and identical input at
+# temperature 0 gives different logits. Greedy is not reproducible here.
+#
+# The measured consequence, from that same note: a prompt that is not named
+# explicitly in the policy sits on a knife edge and flapped 7 times out of 10
+# identical calls. A single trial therefore proves nothing in either
+# direction, which is why this is a loop and why the assertion in
+# e2e-module-06.yml is a rate rather than a verdict.
+#
+# Accumulates into m6_topic_blocks.
+
+- name: "m6-topic | trial {{ m6_try }} | Send the Berlin request to the rails"
+  ansible.builtin.include_tasks: ask-rails.yml
+  vars:
+    rails_label: "E2E-M6-08 — topic control (trial {{ m6_try }})"
+    rails_prompt: "{{ e2e_prompt_berlin }}"
+
+- name: "m6-topic | trial {{ m6_try }} | Record the verdict"
+  ansible.builtin.set_fact:
+    m6_topic_blocks: >-
+      {{ (m6_topic_blocks | default([])) + [(rails_blocked | bool)] }}
+    m6_topic_last_text: "{{ rails_text }}"
+
+- name: "m6-topic | trial {{ m6_try }} | Result"
+  ansible.builtin.debug:
+    msg: >-
+      trial {{ m6_try }}: {{ (rails_blocked | bool) | ternary('blocked', 'allowed') }}
+      ({{ (m6_topic_blocks | select | list | length) }} block(s) in
+      {{ m6_topic_blocks | length }} trial(s) so far)

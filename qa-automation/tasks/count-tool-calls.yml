@@ -1,0 +1,29 @@
+---
+# Counts `POST /mcp` lines across the three MCP server pods and leaves the
+# total in `tool_calls`.
+#
+# This is the e2e's evidence that the agent actually invoked a tool rather than
+# answering from the model. A fluent, plausible answer with no tool call is the
+# failure mode a content assertion cannot see — and the one that matters,
+# because the whole lab is about what the agent reaches, not what it says.
+#
+# Callers set `count_label`. Compare a before and an after.
+
+- name: "tools | {{ count_label }} | Read the MCP server logs"
+  kubernetes.core.k8s_log:
+    api_version: v1
+    kind: Pod
+    namespace: "{{ t_ns }}"
+    label_selectors:
+      - "mcp-server={{ item }}"
+  loop: "{{ hc_mcp_servers | default(['control-mcp', 'maintenance-mcp', 'telemetry-mcp']) }}"
+  loop_control:
+    label: "{{ item }}"
+  register: count_logs
+  failed_when: false
+
+- name: "tools | {{ count_label }} | Total the tool invocations"
+  ansible.builtin.set_fact:
+    tool_calls: >-
+      {{ count_logs.results | map(attribute='log') | map('default', '', true)
+         | map('regex_findall', 'POST /mcp') | map('length') | sum }}

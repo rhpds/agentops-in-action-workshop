@@ -1,0 +1,49 @@
+= Module 7: Keep Hermie Working Safely
+:page-duration: 5 minutes
+
+== Where we started
+
+You arrived at Northgate to support an assistant built for the plant operators. Hermie could inspect pumps, take actions, and write reports. It also had access that could be misused, and someone was trying to exploit it.
+
+The challenge was to stop that misuse while keeping the operators working. Each time you restricted access, you checked what broke, investigated the evidence, and restored the permissions needed for a legitimate task.
+
+That is the AgentOps approach behind this workshop's promise: *Evaluate, Secure, and Operate Enterprise AI Agents*. Security gave us the scenarios, and operating Hermie required an ongoing cycle of observation, changes, actions, and evaluation. A blocked attack was one result to check; an operator still able to complete their work was another.
+
+== What you achieved
+
+You worked through several different kinds of harm: excessive plant access, accidental report deletion, compromised documentation, a poisoned skill, unnecessary personal details, and requests outside the assistant's role. Each exposed a different boundary.
+
+[cols="1,2",options="header"]
+|===
+|Layer |What it contributed
+|OpenShell sandbox and policies |Constrained the agent's environment, writable paths, and network destinations.
+|Keycloak and MCP Gateway |Established identity and enforced permissions for plant tool calls. Authentication alone did not authorize every tool.
+|Scoped documentation access |Restored useful reads while blocking the unwanted redirect.
+|NeMo Guardrails checks |Checked operator requests for contact details and behavior outside the Northgate policy before forwarding them to Hermie.
+|Traces and evaluations |Helped distinguish a refusal from an enforced denial, investigate actions, and check that useful tasks still worked.
+|===
+
+You also found the limits; like a writable report directory still permits deletion. An allowed document or installed skill can contain unwanted instructions. 
+
+Those findings are part of the result: you can explain what your controls enforce and where work remains.
+
+NOTE: *How many tokens did that take?* In case you are curious, MLflow gives you how many token you consumed throughout the lab. 
+<note: add screenshot>
+
+== Keep the AgentOps loop going
+
+image::hermie-agentops-loop.svg["Hermie at the center of a repeating AgentOps loop: observe, make a change, take action, evaluate, and continue. Evaluate task success, security, reliability, latency, and cost.",align=center]
+
+The next problem may look like another call from an operator: “This used to work,” or “Why did Hermie do that?” You now have a way to investigate it:
+
+. *Observe*: inspect requests, traces, tool results, errors, and the actual outcome. Establish a baseline before changing anything.
+. *Make a change*: use that evidence to adjust the agent's configuration, skills, permissions, or guardrails for a specific reason.
+. *Take action*: apply the change and exercise the affected workflow. Check what the agent actually does.
+. *Evaluate*: rerun the attack cases and legitimate tasks. Compare with the baseline: did the change solve the problem, introduce a regression, or add latency and model cost?
+. *Continue*: use the results to decide what to keep, tune, or undo. Repeat as operators' needs and the agent's dependencies change.
+
+The same loop applies when a tool becomes unavailable, a model update changes answer quality, or a useful task becomes too slow or expensive. Traces help explain the behavior; evaluations help you decide whether a change made the service better. Those operational questions belong alongside access and security checks.
+
+Keep the remaining gaps visible: action-level protection for reports, checks on retrieved content and responses, and a deliberate decision about what happens when guardrails are unavailable. Carry your attack cases and legitimate evaluations forward as regression checks.
+
+Northgate is simulated, but this responsibility carries into a real deployment. The operator needs a useful assistant. Your job is to keep its access and behavior aligned with that work, and to have evidence when you say a control is working.

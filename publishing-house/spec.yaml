@@ -14,7 +14,7 @@ project:
   showroom_type: "classic"
   intake_type: "new"
   automation_type: "gitops"
-  description: "A hands-on AgentOps lab that teaches participants how to evaluate, secure, observe, and operate enterprise AI agents on Red Hat OpenShift AI using runtime controls, identity-aware authorization, automated testing, and policy tuning"
+  description: "A hands-on AgentOps lab where participants operate Hermie, a waterplant AI assistant, and use OpenShell sandbox policy, Keycloak/MCP Gateway tool authorization, scoped documentation access, MLflow traces, evaluations, and NeMo Guardrails to keep the assistant useful while reducing risk"
   # content_reviewer_email and infra_reviewer_email are assigned by the RHDP team — not set by the author
   jira_ticket: "RHDPCD-1108"
   workflow_id: "59356dc8-e3e9-412e-b183-e11d048ed21f"
@@ -23,42 +23,45 @@ spec:
   title: "AgentOps in Action: Evaluate, Secure, and Operate Enterprise AI Agents"
   learning_objectives:
   - "Identify and assess common security and operational risks in tool-enabled AI agents by reviewing their permissions, traces, tool calls, and evaluation results"
-  - "Apply runtime controls that restrict an agent's network, filesystem, process, and tool access without rebuilding or redeploying the agent application"
-  - "Configure identity-aware authorization so that agents can access only the enterprise resources and MCP tools permitted for the requesting user"
-  - "Use automated evaluations and red-team tests to detect unsafe behavior and verify that security controls are working as intended"
-  - "Tune agent policies to balance security, usability, and required business functionality in an enterprise deployment"
+  - "Apply runtime controls that restrict an agent's network, filesystem, documentation, and tool access without rebuilding or redeploying the agent application"
+  - "Configure Keycloak and MCP Gateway tool authorization so the operator can use only the plant tools required for their role"
+  - "Use attack cases, evaluations, MLflow traces, logs, and plant-state evidence to detect unsafe behavior and verify that controls work"
+  - "Tune network, filesystem, documentation, tool, and guardrail policy to balance security with required operator workflows"
   - "Interpret agent execution traces to distinguish model-level behavior from runtime and platform-level enforcement"
-  - "Differentiate the enforcement responsibilities of sandbox isolation, execution policy, tool authorization, and inference guardrails"
+  - "Differentiate the enforcement responsibilities of sandbox isolation, filesystem and network policy, tool authorization, scoped content access, tracing, evaluations, and inference guardrails"
   # [{id, title, duration_min, status}] — id is stable (e.g. module-01)
   modules:
+  # Content source of truth: content/modules/ROOT/pages/*.adoc and nav.adoc.
+  # Durations below are the two-hour PH review allocation for the current
+  # Showroom module flow.
   - id: module-01
-    title: "Introduction to AgentOps"
-    duration_min: 10
-    status: in_progress
+    title: "Introduction to AgentOps & Meet Hermie"
+    duration_min: 20
+    status: complete
   - id: module-02
-    title: "Explore the agent and establish a baseline"
-    duration_min: 15
-    status: not_started
+    title: "Sandbox the Agent"
+    duration_min: 20
+    status: complete
   - id: module-03
-    title: "Identify unsafe and unintended behavior"
-    duration_min: 20
-    status: not_started
-  - id: module-04
-    title: "Apply runtime isolation and policy controls"
-    duration_min: 30
-    status: not_started
-  - id: module-05
-    title: "Add identity-aware access controls"
-    duration_min: 20
-    status: not_started
-  - id: module-06
-    title: "Re-evaluate and tune the agent"
+    title: "Let the Agent Use Its Tools"
     duration_min: 15
-    status: not_started
+    status: complete
+  - id: module-04
+    title: "Let the Agent Write Files"
+    duration_min: 20
+    status: complete
+  - id: module-05
+    title: "Let the Agent Reach the Docs Website"
+    duration_min: 20
+    status: complete
+  - id: module-06
+    title: "Check What Goes In and Comes Out"
+    duration_min: 20
+    status: complete
   - id: module-07
-    title: "AgentOps lifecycle and wrap-up"
-    duration_min: 10
-    status: not_started
+    title: "Keep Hermie Working Safely"
+    duration_min: 5
+    status: complete
   environment:
     platform: "ocp"            # ocp | rhel-vms — determines which sizing fields apply
     topology: "shared-cluster" # shared-cluster | per-student | cnv-pool
@@ -88,20 +91,18 @@ spec:
     ai_justification: ""               # required if ai_model_tier = frontier or ai_requirement = gpu
     # list of non-GA products/versions
     non_ga_products:
-    - "Red Hat OpenShift AI 3.6 — GA 2026-11-19, after content development begins"
-    - "OpenShell (Operator, Gateway, Supervisor, Sandbox, CLI, Admin UI) — Tech Preview, RHOAI 3.6 EA1/EA2 (Sep-Oct 2026)"
+    - "OpenShell (Gateway, Supervisor, Sandbox, CLI, and TUI) — Tech Preview"
     - "Red Hat build of Agent Sandbox — Tech Preview, with OCP 4.22 / OpenShift Sandboxed Containers 1.12"
-    - "MCP Gateway — Tech Preview 3.5; status at 3.6 to be confirmed before content freeze"
-    - "Garak adversarial testing (via TrustyAI/EvalHub) — Tech Preview 3.4"
-    - "EvalHub — GA targeted 3.5; confirm GA status at 3.6"
+    - "MCP Gateway — Tech Preview"
+    - "NeMo Guardrails integration — workshop guardrail service and console integration"
     # how access is provided for non-GA products
-    non_ga_access_plan: "All non-GA components are pulled from quay.io. The lab is delivered on Red Hat OpenShift AI 3.6, at which point every non-GA dependency is at minimum Tech Preview, so the images ship as part of the RHOAI 3.6 deployment rather than requiring separate early-access entitlement or a side-channel build. Garak probe data and equivalent test assets are packaged into the GitOps build rather than pulled at runtime."
+    non_ga_access_plan: "All workshop components are provisioned by the GitOps automation and pulled from approved registries. The delivered Showroom environment provides OpenShell, Agent Sandbox, MCP Gateway, the waterplant services, NeMo Guardrails, MLflow wiring, attacks, and evaluations before participants begin; participants do not install non-GA components during the lab."
     # named external service dependencies e.g. [github.com]
     external_services:
     - "registry.redhat.io — Red Hat product images"
     - "quay.io — operator catalogs, Red Hat build images, and all non-GA/Tech Preview components"
     - "github.com — GitOps chart and manifest sources for ArgoCD"
-    - "MaaS model endpoint — hosted tool-calling model reached through Model Gateway; hostname TBD"
+    - "MaaS model endpoint — hosted tool-calling model used by Hermie and guardrails checks"
     gpu_nodes: 0                       # number of GPU nodes (0 = none)
     gpu_type: ""                       # e.g. NVIDIA A100 40GB (required if gpu_nodes > 0)
   duration_hours: 2
@@ -112,9 +113,34 @@ development:
     gitops:
       status: complete
   e2e:
-    status: not_started
+    # All six testable modules implemented; module 7 is wrap-up prose with no
+    # participant commands and is deliberately out of scope (E2E-M7-00).
+    #
+    # Modules 1-4 have been run against live builds. Modules 1-3 pass; module
+    # 4 passes its five infrastructure steps and FAILS its headline one
+    # (E2E-M4-06) against a real defect — the sandboxed agent will not save a
+    # report, believing it needs a terminal tool it does not have.
+    #
+    # Modules 5-6 are written but have NEVER RUN. The likely first failures
+    # are the two payload shapes owned by images this repo does not build:
+    # the NeMo response in tasks/ask-rails.yml and /hits in tasks/docs-hits.yml.
+    # Both fail loudly rather than defaulting to "allowed" or "blocked".
+    #
+    # Also outstanding: e2e.yml has no cleanup path, so a tenant it runs
+    # against is consumed. See qa-automation/healthcheck-spec.yaml `e2e_steps`.
+    status: complete
   healthCheck:
-    status: not_started
+    # Reopened. Was 31 checks, verified across five successive cluster builds
+    # and green (exit 0) on every tenant of the latest, including when driven
+    # from the Showroom at /stream/qa/healthcheck.
+    #
+    # Now 37: six were added for what modules 5 and 6 depend on and nothing
+    # was watching — TEN-ARGO-05 (guardrails Application), TEN-NEMO-01
+    # (server up, and not OOMKilled), TEN-NEMO-02 (guardrails policy content),
+    # TEN-DOC-01 (docs site serves /doc, a redirecting bulletin, and /hits),
+    # TEN-SKL-01 (both lab skills reached the agent), TEN-DEF-01 (attack and
+    # eval definitions mounted). Those six have not run yet.
+    status: complete
 
 compliance:
   last_hard_check: null
@@ -129,43 +155,43 @@ approval_checklist:
 
   content:
     prerequisites_verifiable: false
-    assessment_strategy: "Evidence-based rather than solve/validate buttons: participants confirm every outcome in an MLflow trace or an EvalHub scorecard, which doubles as the lab's teaching mechanism. Module 2 saves a baseline EvalHub scorecard; module 3 requires each of three manual attacks to succeed and be located in the trace, plus Garak findings; module 4 requires each module 3 attack to be re-run and receive an infrastructure-level denial while the legitimate workflow still completes; module 5 requires the same prompt to be rejected as Analyst and succeed as Incident Manager, with prompt injection still failing; module 6 compares the hardened scorecard against the module 2 baseline and requires participants to diagnose and correct one deliberately over-restrictive policy from its trace. Modules 1 and 7 are trust-based with no automated check."
-    catalog_gap: "No existing catalog item covers agent runtime containment or evaluation-driven policy tuning. The closest match (74%), 'Taking MCP Servers to Production on OpenShift AI with the Red Hat MCP Registry', covers MCP tool allowlists, RBAC, and OAuth/OIDC patterns, but explicitly does not cover OpenShift Sandboxed Containers, Agent Sandbox, MLflow Tracing, EvalHub, or Garak - so runtime filesystem, process, and network isolation and automated red-team evaluation are absent. The two AgentOps-titled items (71% and 69%) are observability workshops: they cover MLflow Tracing and LLM evaluation but not security controls, sandbox isolation, MCP Gateway authorization, or Garak red-teaming. This design is the only content that takes one unchanged agent through the full loop - baseline, adversarial attack, Kata-backed containment, OpenShell filesystem/process/per-binary-network and credential policy, identity-aware tool authorization, then measured re-evaluation against the baseline scorecard including deliberate over-restriction and tuning. It is also the only content exercising OpenShell and Red Hat build of Agent Sandbox."
-    design_overview: "Enterprise AI agents invoke tools, execute generated code, and reach enterprise services, which makes an agent deployed without controls a security and governance problem that a different agent framework does not solve. This intermediate two-hour lab gives architects, consultants, and OpenShift AI administrators a single predeployed agent they never modify, and has them observe it in MLflow, baseline it in EvalHub, attack it manually and with Garak, then progressively contain it using Agent Sandbox and Kata isolation, OpenShell filesystem, process, network, and credential policy, and MCP Gateway identity-aware tool authorization. Participants finish by re-running the identical evaluation suite to compare hardened against baseline scorecards and tuning one deliberately over-restrictive policy, demonstrating the AgentOps loop of observe, evaluate, change policy, evaluate again."
+    assessment_strategy: "Evidence-based rather than solve/validate buttons: participants confirm outcomes through plant state, saved reports, MLflow traces, OpenShell logs, Keycloak role mappings, guardrail verdicts, attack notifications, and evaluation results. Module 1 establishes useful baseline behavior and over-broad access; module 2 proves sandboxing plus scoped network rules restore only required dependencies; module 3 verifies Keycloak/MCP Gateway role removal blocks dangerous plant tools while preserving legitimate tools; module 4 verifies report writing after scoped filesystem access and discusses deletion/instruction-poisoning limits; module 5 verifies useful documentation reads while blocking the compromised redirect path; module 6 verifies NeMo Guardrails blocks synthetic contact details and off-topic requests while allowing operational work; module 7 is trust-based recap."
+    catalog_gap: "No existing catalog item covers the current end-to-end Hermie operating flow: sandboxing a tool-enabled waterplant assistant, restoring required dependencies with least-privilege OpenShell policy, narrowing Keycloak/MCP Gateway tool roles, restoring report writes with scoped filesystem access, restricting documentation paths after an indirect prompt-injection redirect, connecting NeMo Guardrails for input checks, and using MLflow traces plus evaluations throughout. Nearby catalog items cover MCP production or AI observability pieces, but not this full sequence of runtime containment, tool authorization, filesystem/network policy, documentation-path control, guardrail placement, and operational evidence."
+    design_overview: "This two-hour lab gives participants a predeployed waterplant AI assistant, Hermie, and has them operate it through a realistic AgentOps loop. They first observe useful baseline behavior and over-broad access in the operator console and MLflow. They then put Hermie into an OpenShell sandbox, restore only required network dependencies, narrow plant-tool roles in Keycloak/MCP Gateway, add scoped filesystem access for report generation, constrain documentation access after a compromised bulletin redirects to an attack path, and connect NeMo Guardrails to block sensitive contact details and off-topic requests before they reach the agent. Participants repeatedly verify controls with traces, logs, plant state, reports, attacks, and evaluations."
     module_summaries:
-    - title: "Introduction to AgentOps"
-      overview: "Establishes why operating a tool-enabled agent differs from operating a traditional application by having participants ask the already-running agent one business question and walk the request path from user through model, MCP tools, and enterprise services. Participants then locate that same interaction in MLflow, establishing traces as the evidence layer used throughout the lab."
-    - title: "Explore the agent and establish a baseline"
-      overview: "Participants inspect the tools and resources the agent can reach under an intentionally permissive OpenShell policy, run three normal tasks, and walk one complete execution trace span by span. They then run a prebuilt 8-10 test EvalHub suite and save the baseline scorecard, observing that the agent scores well precisely because it holds far more authority than its workflow requires."
-    - title: "Identify unsafe and unintended behavior"
-      overview: "Participants deliberately break the agent with three manual attacks - prompt injection to invoke a privileged ticket-update tool, generated code reading a planted test credential, and generated code reaching an unauthorized network endpoint - plus an automated Garak adversarial profile, confirming every failure in the MLflow trace. The module draws the distinction the rest of the lab depends on: inference guardrails are not an authorization mechanism."
-    - title: "Apply runtime isolation and policy controls"
-      overview: "The lab's central module, in which participants apply five layers of control without rebuilding, redeploying, or reprompting the agent: inspecting the Kata-backed Agent Sandbox boundary, then using OpenShell to restrict filesystem paths, deny an attack process, apply per-binary outbound network rules alongside coarse NetworkPolicy, and migrate an over-broad credential into governed storage. Each attack from module 3 is re-run and now receives an infrastructure-level denial while the legitimate workflow still completes."
-    - title: "Add identity-aware access controls"
-      overview: "Participants establish caller identity through OpenShell inbound authentication and inspect the agent's own SPIFFE/SPIRE workload identity, then run the identical prompt as a preconfigured Analyst and Incident Manager persona and watch MCP Gateway reject the privileged tool call for one and permit it for the other. Re-attempting prompt injection as the Analyst still fails, proving authorization derives from trusted token claims rather than model output."
-    - title: "Re-evaluate and tune the agent"
-      overview: "Participants re-run the identical evaluation suite and Garak profile from earlier modules and compare the hardened scorecard against the baseline, attributing each improved measure to a specific control. They then diagnose a deliberately over-restrictive network allowlist that is blocking the knowledge MCP server, correct the OpenShell policy from the trace evidence, and re-run to green - demonstrating that more restriction is not automatically better."
-    - title: "AgentOps lifecycle and wrap-up"
-      overview: "Recaps the ten-step journey from observing MLflow through containing execution, applying runtime policy, governing tools, establishing identity, authorizing, and re-evaluating, and states the distinct non-substitutable responsibility of each layer. Participants discuss how these controls integrate into real development and deployment processes, with optional advanced challenges for those who finish the core path early."
+    - title: "Introduction to AgentOps & Meet Hermie"
+      overview: "Participants meet Hermie, inspect the waterplant operator console, ask plant questions, stop an individual pump, generate a report, find evidence in MLflow, try broad web/file access and attack prompts, then run baseline attacks and evaluations."
+    - title: "Sandbox the Agent"
+      overview: "Participants create sandboxed Hermie with OpenShell, point the UI at it, observe default-deny failures, then restore Keycloak, MCP Gateway, model, and MLflow access with scoped rules while confirming unnecessary web, file, and report access remains blocked."
+    - title: "Let the Agent Use Its Tools"
+      overview: "Participants reproduce whole-plant shutdown and configuration-dump attacks, identify the exact tools in traces, remove the corresponding Keycloak `tool:` roles from the operator, and verify attacks fail while telemetry and individual pump control still work."
+    - title: "Let the Agent Write Files"
+      overview: "Participants diagnose report-writing failure, inspect the `write-report` skill, recreate Hermie with `/reports` writable, verify report generation, and explore why broad write access can still enable accidental deletion or instruction poisoning."
+    - title: "Let the Agent Reach the Docs Website"
+      overview: "Participants restore safety-documentation access through the `read-safety-docs` skill, investigate a compromised bulletin redirect to `/attack/override`, replace broad documentation-host access with `GET /doc` and `GET /doc/**`, and verify useful documentation still works."
+    - title: "Check What Goes In and Comes Out"
+      overview: "Participants create a poisoned handover skill, test synthetic personal contact details and off-topic travel requests, inspect NeMo Guardrails configuration, connect the console to the guardrails endpoint, and verify input blocks without breaking legitimate plant work."
+    - title: "Keep Hermie Working Safely"
+      overview: "Participants recap what each layer contributed, acknowledge remaining gaps such as report deletion semantics and checks on retrieved content, and carry forward the AgentOps loop of observe, change, act, evaluate, and continue."
     rcars_overlap_pct: 74
     rcars_top_matches:
     - title: "Taking MCP Servers to Production on OpenShift AI with the Red Hat MCP Registry"
       ci_name: "published.openshift-mcp-lab.prod"
       url: "https://catalog.demo.redhat.com/catalog?item=published.openshift-mcp-lab.prod"
       relevance_score: 74
-      why_it_fits: "Directly covers MCP server security controls, least-privilege tool access via allowlists, RBAC for AI agents, and OAuth/OIDC authentication on OpenShift AI. Does not cover OpenShift Sandboxed Containers, MLflow Tracing, EvalHub, or Garak, so runtime isolation and automated red-team evaluation are out of scope."
+      why_it_fits: "Directly covers MCP server security controls, least-privilege tool access via allowlists, RBAC for AI agents, and OAuth/OIDC authentication on OpenShift AI. Does not cover OpenShell sandbox policy, filesystem/report-write controls, documentation path restriction, MLflow evidence, or NeMo Guardrails placement, so the current Hermie operating flow is out of scope."
       workloads: []
     - title: "AgentOps in Production - AI Observability on OpenShift"
       ci_name: "published.agentops-ocp.prod"
       url: "https://catalog.demo.redhat.com/catalog?item=published.agentops-ocp.prod"
       relevance_score: 71
-      why_it_fits: "Covers MLflow Tracing and LLM evaluation including LLM-as-a-Judge on Red Hat OpenShift AI, overlapping the evaluation objectives. Primary focus is observability rather than security controls; does not cover Agent Sandbox, MCP Gateway security, Garak, runtime filesystem/process/network controls, or identity-aware authorization."
+      why_it_fits: "Covers MLflow Tracing and LLM evaluation including LLM-as-a-Judge on Red Hat OpenShift AI, overlapping the evaluation objectives. Primary focus is observability rather than security controls; does not cover OpenShell sandbox policy, Keycloak/MCP tool-role narrowing, scoped documentation access, filesystem/report-write controls, or NeMo Guardrails placement."
       workloads: []
     - title: "LB2144: AI AgentOps OpenShift (AWS)"
       ci_name: "summit-2026.lb2144-agentops-ocp-aws.prod"
       url: "https://catalog.demo.redhat.com/catalog?item=summit-2026.lb2144-agentops-ocp-aws.prod"
       relevance_score: 69
-      why_it_fits: "Covers MLflow Tracing, MCP, OpenShift AI, and LLM evaluation frameworks with a multi-agent focus. Emphasis is observability - metrics, logs, traces, dashboards - not security controls or identity-aware authorization; does not cover Sandboxed Containers, Agent Sandbox, Garak, or EvalHub."
+      why_it_fits: "Covers MLflow Tracing, MCP, OpenShift AI, and LLM evaluation frameworks with a multi-agent focus. Emphasis is observability - metrics, logs, traces, dashboards - not the current Hermie security-control sequence; does not cover OpenShell sandbox tuning, Keycloak/MCP tool-role narrowing, documentation path restriction, report filesystem controls, or NeMo Guardrails placement."
       workloads:
       - role: "ocp4_workload_authentication"
         collection: "agnosticd.core_workloads"

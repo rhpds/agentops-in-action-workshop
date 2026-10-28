@@ -194,6 +194,40 @@ installPlanApprover:
   timeoutSeconds: 600
 
 # ---------------------------------------------------------------------------
+# Kuadrant dependency recovery (templates/kuadrant-dependency-recovery.yaml)
+#
+# The Kuadrant operator resolves its dependencies once, at start-up, and caches
+# the result. Start it before authorino-operator is Available and it rejects
+# every AuthPolicy in every namespace for the life of the pod, with
+# Accepted=False / MissingDependency. Nothing recovers on its own.
+#
+# This is NOT the istio variant that rhcl.wave above is designed for, and no
+# wave can fix it: OLM resolves rhcl, authorino, limitador, dns and mcp-gateway
+# into one InstallPlan, so the two come up seconds apart by construction.
+# Observed on cluster-slkjc with a three-second margin. So detect and clear it
+# instead of ordering it.
+# ---------------------------------------------------------------------------
+kuadrantRecovery:
+  enabled: true
+  # Needs `oc` only. Same image and reasoning as installPlanApprover above:
+  # origin-cli needs no registry.redhat.io pull secret, and ose-cli refuses
+  # the :latest tag.
+  image: quay.io/openshift/origin-cli:4.22
+  # The dependency whose absence causes this. Must be Available before a
+  # restart can help, or the operator just loses the race again.
+  dependencyDeployment: authorino-operator
+  # Waited on with `oc rollout status` after its pod is deleted.
+  operatorDeployment: kuadrant-operator-controller-manager
+  # How long to let Kuadrant reach Ready before concluding a restart is needed.
+  # Rarely spent in full: the poll also returns the moment MissingDependency
+  # appears, and a cluster that won the race is Ready within seconds.
+  settleSeconds: 120
+  # Pod restarts to try before failing the sync and turning `bootstrap` red.
+  attempts: 3
+  # Bounds the whole Job: the dependency wait plus `attempts` restarts.
+  timeoutSeconds: 900
+
+# ---------------------------------------------------------------------------
 # MCP Gateway — cluster-level pieces (templates/mcp-gateway-platform.yaml)
 #
 # One Gateway per participant, created by tenant-platform. What lives here is
@@ -271,3 +305,52 @@ sharedServices:
     enabled: true
     name: agentops-evalhub
     databaseType: sqlite
+
+# ---------------------------------------------------------------------------
+# Attack and evaluation runner
+#
+# One instance for the whole event. Probes every participant's agent on a cycle,
+# writes results to that participant's own MLflow cycle experiment, and
+# republishes the leaderboard. See templates/attack-eval-runner.yaml.
+#
+# Results go to MLflow, not EvalHub. EvalHub stays deployed above but nothing
+# writes to it — one results store is enough, and MLflow is where the per-
+# participant workspace scoping already exists.
+# ---------------------------------------------------------------------------
+attackEvalRunner:
+  # Disabled: the attack/eval engine now runs inside each participant's
+  # console (waterplant-ui, probes/), which needs no Deployment here, no
+  # cross-namespace RBAC and no leader election.
+  #
+  # Leaving this true would deploy files/attack-eval-runner/, where every
+  # function body is still `raise NotImplementedError` — a CrashLoopBackOff in
+  # agentops-shared on the first sync, for a component nothing reads.
+  enabled: false
+  # Any image with python3. The runner and its definitions are mounted from
+  # ConfigMaps, so this is a runtime, not a build of the runner itself.
+  # PINNED, like every other image in this chart.
+  image: registry.access.redhat.com/ubi9/python-311:9.5
+  # Five minutes. Short enough that a participant sees the effect of a policy
+  # change while they still remember making it; long enough that thirty agents
+  # answering seven attacks and six evals finish comfortably in between.
+  cycleIntervalSeconds: 300
+  # Set by bootstrap-tenant's namespace.yaml on every participant namespace.
+  participantLabel: rhdp.redhat.com/participant
+  # Per-turn timeout. A sandboxed agent denied network access can hang rather
+  # than fail fast, and one stalled agent must not eat the whole cycle.
+  requestTimeoutSeconds: 120
+  # Appended to the username: <username>-cycle. tenant-platform's
+  # ui.cycleMlflowExperiment must resolve to the same name, or the console reads
+  # an experiment the runner never writes to.
+  cycleExperimentSuffix: "-cycle"
+  leaderboardExperiment: agentops-leaderboard
+  mlflow:
+    # Empty means the in-cluster MLflow deployed by sharedServices above.
+    trackingUri: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi

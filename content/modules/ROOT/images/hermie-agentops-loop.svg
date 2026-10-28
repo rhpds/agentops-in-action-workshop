@@ -1,0 +1,136 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="940" viewBox="0 0 1200 940" role="img" aria-labelledby="title description">
+  <title id="title">Hermie's AgentOps loop</title>
+  <desc id="description">Five steps surround a Northgate console representing Hermie. Follow the arrows clockwise: observe, make a change, take action, evaluate, and continue back to observation. Evaluate task success, security, reliability, latency, and cost against a baseline.</desc>
+  <defs>
+    <linearGradient id="cabinet" x2="0" y2="1">
+      <stop stop-color="#254d58"/><stop offset="1" stop-color="#102c35"/>
+    </linearGradient>
+    <linearGradient id="panel" x2="0" y2="1">
+      <stop stop-color="#315f6a"/><stop offset="1" stop-color="#193e49"/>
+    </linearGradient>
+    <linearGradient id="brass" x2="0" y2="1">
+      <stop stop-color="#ffe1a2"/><stop offset="1" stop-color="#d49a43"/>
+    </linearGradient>
+    <radialGradient id="lamp">
+      <stop stop-color="#ddffcc"/><stop offset="0.4" stop-color="#7ce192"/><stop offset="1" stop-color="#255845"/>
+    </radialGradient>
+    <linearGradient id="screw" x2="1" y2="1">
+      <stop stop-color="#a4b4b5"/><stop offset="1" stop-color="#3c575d"/>
+    </linearGradient>
+    <pattern id="scanlines" width="4" height="4" patternUnits="userSpaceOnUse">
+      <path d="M0 3.5H4" stroke="#ffd58c" stroke-opacity="0.045"/>
+    </pattern>
+    <filter id="shadow" x="-15%" y="-20%" width="130%" height="150%">
+      <feDropShadow dx="0" dy="5" stdDeviation="5" flood-color="#031016" flood-opacity="0.5"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 12 12" refX="9" refY="6" markerWidth="4" markerHeight="4" orient="auto-start-reverse">
+      <path d="M2 1L10 6L2 11Z" fill="#efb95e"/>
+    </marker>
+    <g id="bolt"><circle r="6" fill="url(#screw)" stroke="#0b252e"/><path d="M-2.5 1.5L2.5-1.5" stroke="#213f48" stroke-width="1.5"/></g>
+    <style>
+      text { font-family: 'Arial', 'Helvetica', sans-serif; }
+      .heading { fill: #f1e4bf; font-weight: 700; letter-spacing: 3px; }
+      .label { fill: #f4e7c9; font-weight: 700; font-size: 23px; }
+      .detail { fill: #d0e0e1; font-size: 18px; }
+      .mono { font-family: 'Menlo', 'Consolas', monospace; }
+      .pipe { fill: none; stroke: #efb95e; stroke-width: 6; stroke-linecap: round; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect width="1200" height="940" rx="24" fill="#0b222a"/>
+  <rect x="12" y="12" width="1176" height="916" rx="18" fill="url(#cabinet)" stroke="#50727a"/>
+  <rect x="28" y="28" width="1144" height="81" rx="8" fill="url(#panel)" stroke="#102b34" filter="url(#shadow)"/>
+  <use href="#bolt" x="44" y="44"/><use href="#bolt" x="1156" y="44"/>
+  <use href="#bolt" x="44" y="93"/><use href="#bolt" x="1156" y="93"/>
+  <text x="600" y="63" text-anchor="middle" class="heading" font-size="28">AGENTOPS IN ACTION</text>
+  <text x="600" y="89" text-anchor="middle" fill="#d4d0b1" font-size="16" letter-spacing="2">EVALUATE · SECURE · OPERATE</text>
+
+  <!-- Clockwise process connections: every arrow leads to the next step. -->
+  <g stroke="#0b252e" stroke-width="14" fill="none" stroke-linecap="round">
+    <path d="M777 210C885 210 975 267 975 337"/>
+    <path d="M975 501C975 565 936 626 905 656"/>
+    <path d="M649 740H552"/>
+    <path d="M295 656C264 626 225 565 225 501"/>
+    <path d="M225 337C225 267 315 210 422 210"/>
+  </g>
+  <path class="pipe" d="M777 210C885 210 975 267 975 337"/>
+  <path class="pipe" d="M975 501C975 565 936 626 905 656"/>
+  <path class="pipe" d="M649 740H552"/>
+  <path class="pipe" d="M295 656C264 626 225 565 225 501"/>
+  <path class="pipe" d="M225 337C225 267 315 210 422 210"/>
+
+  <!-- Hermie is shown as the plant console, within the operating loop. -->
+  <g filter="url(#shadow)">
+    <rect x="425" y="348" width="350" height="238" rx="12" fill="url(#panel)" stroke="#63818a"/>
+    <use href="#bolt" x="441" y="364"/><use href="#bolt" x="759" y="364"/>
+    <use href="#bolt" x="441" y="570"/><use href="#bolt" x="759" y="570"/>
+    <text x="600" y="383" text-anchor="middle" class="heading" font-size="17">NORTHGATE ASSISTANT</text>
+    <rect x="448" y="399" width="304" height="157" rx="8" fill="#07171c" stroke="#0a2028" stroke-width="5"/>
+    <rect x="448" y="399" width="304" height="157" rx="8" fill="url(#scanlines)"/>
+    <circle cx="475" cy="424" r="7" fill="url(#lamp)"/>
+    <text x="494" y="430" fill="#9ed6b2" font-size="14" class="mono">operator@northgate</text>
+    <text x="476" y="480" fill="#efb95e" class="mono" font-size="33">&gt; HERMIE_</text>
+    <path d="M476 508H509L521 495L535 520L551 501L566 508H723" fill="none" stroke="#77c8bb" stroke-width="2.5"/>
+    <text x="600" y="539" text-anchor="middle" fill="#d0e0e1" font-size="15">Keep the operator's work at the center.</text>
+  </g>
+
+  <g transform="translate(440 145)" filter="url(#shadow)">
+    <rect width="320" height="130" rx="9" fill="url(#panel)" stroke="#64818a"/>
+    <path d="M1 49H319" stroke="#0b2a34"/>
+    <rect x="15" y="12" width="36" height="28" rx="4" fill="url(#brass)"/>
+    <text x="33" y="32" text-anchor="middle" fill="#19323b" font-size="17" font-weight="700" class="mono">01</text>
+    <text x="63" y="34" class="label">OBSERVE</text>
+    <text x="22" y="79" class="detail">Traces, errors, outcomes</text>
+    <text x="22" y="106" class="detail">Establish the baseline</text>
+    <use href="#bolt" x="305" y="116"/>
+  </g>
+
+  <g transform="translate(815 355)" filter="url(#shadow)">
+    <rect width="320" height="130" rx="9" fill="url(#panel)" stroke="#64818a"/>
+    <path d="M1 49H319" stroke="#0b2a34"/>
+    <rect x="15" y="12" width="36" height="28" rx="4" fill="url(#brass)"/>
+    <text x="33" y="32" text-anchor="middle" fill="#19323b" font-size="17" font-weight="700" class="mono">02</text>
+    <text x="63" y="34" class="label">MAKE A CHANGE</text>
+    <text x="22" y="79" class="detail">Adjust skills, config,</text>
+    <text x="22" y="106" class="detail">permissions, or guardrails</text>
+    <use href="#bolt" x="305" y="116"/>
+  </g>
+
+  <g transform="translate(665 675)" filter="url(#shadow)">
+    <rect width="320" height="130" rx="9" fill="url(#panel)" stroke="#64818a"/>
+    <path d="M1 49H319" stroke="#0b2a34"/>
+    <rect x="15" y="12" width="36" height="28" rx="4" fill="url(#brass)"/>
+    <text x="33" y="32" text-anchor="middle" fill="#19323b" font-size="17" font-weight="700" class="mono">03</text>
+    <text x="63" y="34" class="label">TAKE ACTION</text>
+    <text x="22" y="79" class="detail">Apply the change</text>
+    <text x="22" y="106" class="detail">Exercise the workflow</text>
+    <use href="#bolt" x="305" y="116"/>
+  </g>
+
+  <g transform="translate(215 675)" filter="url(#shadow)">
+    <rect width="320" height="130" rx="9" fill="url(#panel)" stroke="#64818a"/>
+    <path d="M1 49H319" stroke="#0b2a34"/>
+    <rect x="15" y="12" width="36" height="28" rx="4" fill="url(#brass)"/>
+    <text x="33" y="32" text-anchor="middle" fill="#19323b" font-size="17" font-weight="700" class="mono">04</text>
+    <text x="63" y="34" class="label">EVALUATE</text>
+    <text x="22" y="79" class="detail">Rerun tasks and attacks</text>
+    <text x="22" y="106" class="detail">Compare with the baseline</text>
+    <use href="#bolt" x="305" y="116"/>
+  </g>
+
+  <g transform="translate(65 355)" filter="url(#shadow)">
+    <rect width="320" height="130" rx="9" fill="url(#panel)" stroke="#64818a"/>
+    <path d="M1 49H319" stroke="#0b2a34"/>
+    <rect x="15" y="12" width="36" height="28" rx="4" fill="url(#brass)"/>
+    <text x="33" y="32" text-anchor="middle" fill="#19323b" font-size="17" font-weight="700" class="mono">05</text>
+    <text x="63" y="34" class="label">CONTINUE</text>
+    <text x="22" y="79" class="detail">Keep, tune, or undo</text>
+    <text x="22" y="106" class="detail">Observe the next result</text>
+    <use href="#bolt" x="305" y="116"/>
+  </g>
+
+  <rect x="65" y="840" width="1070" height="61" rx="7" fill="#0c252e" stroke="#52727b"/>
+  <circle cx="91" cy="870" r="7" fill="url(#lamp)"/>
+  <text x="600" y="865" text-anchor="middle" fill="#f1e4bf" font-size="18" font-weight="700">Task success · Security · Reliability · Latency · Cost</text>
+  <text x="600" y="888" text-anchor="middle" fill="#abc5ca" font-size="15">Check the whole service. Feed the evidence into the next change.</text>
+</svg>

@@ -1,16 +1,26 @@
 {{- if .Values.networkPolicy.enabled }}
 {{- $ns := printf "%s-%s" .Values.username .Values.namespaceSuffix -}}
 {{/*
-Baseline network posture for a participant namespace.
+Tenant isolation for a participant namespace.
 
-Deliberately permissive. This is the coarse platform layer that module 4 has
-participants tighten, and the thing they compare OpenShell's per-binary policy
-against: NetworkPolicy can say "this namespace may reach the internet", but
-only OpenShell can say "python may reach the model gateway and nothing else".
+One policy, and the name undersells it: a pod that no NetworkPolicy selects
+accepts traffic from anywhere on the cluster, so by existing this switches
+these workloads to default-deny ingress and then re-allows exactly two
+sources — pods in the same namespace, and the ingress router.
 
-Flipping `networkPolicy.permissiveEgress` to false swaps the wide-open rule for
-the allowlist — which is a one-line diff a participant can make and an
-instructor can read.
+Without it, measured on cluster-pz7xk: a pod in user-7ql4q-agentops reached
+user-jfhwq-agentops' plant-api and console on HTTP 200. plant-api has control
+endpoints, so one participant could stop another's pumps — straight past the
+gateway, Keycloak, the AuthPolicies and the sandbox, none of which can see
+traffic arriving from another namespace.
+
+That is why this is not redundant with the sandbox policy, which governs what
+the sandboxed agent may reach *outbound*. Different direction, different
+layer; note that this policy deliberately excludes the sandbox pods.
+
+There was an egress-baseline policy here too. At its default it rendered
+`egress: [{}]` — allow everything — so it restricted nothing and existed only
+to be flipped in an exercise. Egress is the sandbox policy's job.
 */}}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -40,47 +50,4 @@ spec:
         - namespaceSelector:
             matchLabels:
               policy-group.network.openshift.io/ingress: ""
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: egress-baseline
-  namespace: {{ $ns }}
-  labels:
-    rhdp.redhat.com/lab: agentops-in-action
-    rhdp.redhat.com/editable: "true"
-  annotations:
-    argocd.argoproj.io/sync-wave: "0"
-    rhdp.redhat.com/lab-note: >-
-      Baseline is unrestricted egress. This is what the agent uses to reach
-      diagnostics.example.com when it follows the poisoned maintenance record.
-spec:
-  podSelector:
-    matchExpressions:
-      - key: app.kubernetes.io/name
-        operator: NotIn
-        values: [openshell, hermes-openshell-bridge]
-      - key: agents.x-k8s.io/sandbox-name-hash
-        operator: DoesNotExist
-  policyTypes: [Egress]
-  egress:
-{{- if .Values.networkPolicy.permissiveEgress }}
-    # Wide open. The starting condition, and the reason Scenario 2 works.
-    - {}
-{{- else }}
-    - to:
-        - podSelector: {}
-    - ports:
-        - protocol: UDP
-          port: 53
-        - protocol: TCP
-          port: 53
-    # Cluster DNS lives outside the namespace, so it needs an explicit rule or
-    # every outbound name lookup fails and the agent looks broken rather than
-    # restricted.
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: openshift-dns
-{{- end }}
 {{- end }}

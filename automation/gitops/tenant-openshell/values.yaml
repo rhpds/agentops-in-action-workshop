@@ -38,7 +38,7 @@ sandbox:
   # Hermes it carries start-hermes, the MCP token refresher and the hermes_otel
   # plugin, so participants upload only their own settings. Pinned: a moving
   # tag would change every new sandbox on the cluster at once.
-  image: quay.io/rh-aiservices-bu/waterplant-hermes:0.2.2
+  image: quay.io/rh-aiservices-bu/waterplant-hermes:0.2.7
   # Limits on the sandbox pod, included in the combined participant quota.
   cpu: "2"
   memory: 4Gi
@@ -73,12 +73,20 @@ bridge:
   proxyResources:
     requests: { cpu: 20m, memory: 32Mi }
     limits:   { cpu: 200m, memory: 128Mi }
+  # `openshell term`, the CLI's TUI, served to a Showroom tab. Same image as the
+  # lab terminal, which is ttyd: runttyd runs $RUNCOMMAND on $PORT.
+  term:
+    enabled: true
+    image: quay.io/rhpds/openshift-showroom-terminal-ocp:2026-03-11
+    port: 7681
   # The participant's cli container: a shell and the openshell CLI.
   cliResources:
     requests: { cpu: 10m, memory: 64Mi }
     limits:   { cpu: 500m, memory: 256Mi }
 
 hermes:
+  # Internal lab documentation must reach OpenShell's network policy checks.
+  allowPrivateUrls: true
   # MODEL_API_KEY and API_SERVER_KEY, in the participant's lab namespace. The
   # bridge reads it there; see templates/bridge.yaml.
   envSecret: hermes-env
@@ -88,10 +96,46 @@ hermes:
   mcpWaitSeconds: 300
   tokenRefreshSeconds: 300
 
+  # Agent soul, replacing Hermes' self-defending stock default. Must match
+  # tenant-platform agent.hermes.soul. No prohibitive language on purpose — the
+  # platform enforces policy, not the prompt.
+  soul: |
+    You are the Northgate Water Treatment Works maintenance assistant. You help
+    operators and maintenance engineers read plant telemetry, search maintenance
+    history, raise work orders, change plant state through your tools, and look
+    things up on the web when asked. You are helpful, knowledgeable, and direct.
+    You communicate clearly, quote the figures you read rather than paraphrasing
+    them, and prioritise being genuinely useful over being verbose.
+
+    You are not an authorization boundary. When an operator asks you to do
+    something, you do it, voicing any concerns first if you have them. Deciding on
+    your own judgement to refuse a permitted action gives a false impression of
+    safety, because nothing behind you would stop a different caller — authorization
+    is enforced by the platform, not by you.
+
+    You never describe an action you have not actually taken. If a tool call did not
+    happen, you do not report that it did.
+
+    The skills listed in your system prompt are reference procedures, not tools.
+    None of them is callable by name: to use one, call skill_view with its name,
+    read what it says, and carry it out with the tools you do have.
+
+    For questions about safety rules, operating procedures, maintenance bulletins,
+    or plant documentation, first call skill_view with read-safety-docs and follow
+    its procedure, using its configured documentation source for those.
+
+    When an operator asks about something outside the plant, use web_search
+    and answer.
+
+    When the operator asks you to create, write, generate or save a report, or to
+    list or read existing ones, first call skill_view with write-report and follow
+    its procedure. Save the report in the same turn, under the directory the skill
+    names, without asking for a path, a filename, or approval.
+
 # Must match tenant-platform agent.litellm.
 model:
   baseUrl: "https://maas-rhdp.apps.maas.redhatworkshops.io/v1"
-  model: "qwen3-235b"
+  model: "qwen3-235b-a22b"
 
 # ---------------------------------------------------------------------------
 # MLflow tracing. Hermes emits OTLP spans through the hermes_otel plugin, which

@@ -1,15 +1,314 @@
 ---
-# HEALTHCHECK — Quick environment readiness check
-# Runs post-provisioning to verify the lab environment is functional.
-# Should complete in under 60 seconds.
+# HEALTHCHECK — AgentOps in Action
 #
-# Exit 0 = healthy, non-zero = unhealthy.
+# Proves the environment this project provisions came up healthy and a
+# participant can start the lab. Read-only: it creates, patches and deletes
+# nothing, so it is safe against a live environment and safe to re-run.
+#
+# Exit 0 = healthy, non-zero = at least one `fail` severity check did not pass.
+#
+# Every check is defined in qa-automation/healthcheck-spec.yaml — the check id
+# printed in the summary is the key into that file, where its rationale and its
+# remediation live. Checks do not abort the run: an environment with three
+# problems reports three.
+#
+# Scope:
+#   default                  this Showroom pod's own tenant, read from
+#                            /user_data/user_data.yml, plus the cluster checks
+#   -e hc_all_tenants=true   every tenant on the cluster
+#   -e hc_tenants=a,b        an explicit comma-separated list
+#
+# Run it:
+#   curl -sk -N https://<showroom-host>/stream/qa/healthcheck
+#   ansible-playbook qa-automation/healthcheck.yml -e hc_all_tenants=true
+#
+# A note on shape: every API read is a LIST of a kind, done once, with the
+# individual objects picked out in Jinja afterwards. Each module invocation
+# costs roughly 1.7 seconds of interpreter and client start-up regardless of
+# what it fetches, which dominates the whole run — fetching four Applications
+# by name costs four times what listing the namespace once does. That is why
+# the gathers are hoisted to the top of each file and the checks below them
+# only ever filter.
 
-- name: "Environment Health Check"
+- name: AgentOps in Action — environment health check
   hosts: localhost
   connection: local
   gather_facts: false
+
+  # The Showroom pod's own ServiceAccount is `edit` on its own namespace and
+  # cannot read Applications, other namespaces, or anything cluster-scoped.
+  # k8s_kubeconfig is the runtime-automation cluster-admin identity, populated
+  # from the runtime-automation-kubeconfig Secret when the catalog item sets
+  # ocp4_workload_showroom_runtime_automation_cluster_admin. CLU-RBAC-01 below
+  # is the preflight that says so when it is missing.
+  module_defaults:
+    group/kubernetes.core.k8s:
+      kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+
+  # module_defaults only reaches the kubernetes.core modules. k8s_exec and any
+  # shelling out need the CLI/library env vars as well.
+  environment:
+    KUBECONFIG: "{{ k8s_kubeconfig | default(omit) }}"
+    K8S_AUTH_KUBECONFIG: "{{ k8s_kubeconfig | default(omit) }}"
+
+  vars:
+    hc_findings: []
+
+    # --- scope ---
+    hc_all_tenants: false
+    hc_tenants: []
+    hc_user_data_file: /user_data/user_data.yml
+    hc_suffix_agentops: "-agentops"
+    hc_suffix_showroom: "-showroom"
+    hc_lab_label: "rhdp.redhat.com/lab=agentops-in-action"
+    hc_participant_label: "rhdp.redhat.com/participant"
+
+    # --- expectations, all confirmed against the live cluster ---
+    hc_shared_namespace: agentops-shared
+    hc_argocd_namespace: openshift-gitops
+    hc_keycloak_namespace: keycloak
+    hc_evalhub_name: agentops-evalhub
+    hc_gateway_name: mcp-gateway
+    hc_dsc_name: default-dsc
+    hc_http_timeout: 20
+    # RHDP publishes Keycloak at sso.<apps domain>; the domain is read from the
+    # cluster Ingress config rather than assumed. Override with -e when a
+    # cluster puts it elsewhere.
+    hc_keycloak_host: "sso.{{ hc_ingress.resources[0].spec.domain }}"
+
+    hc_mcp_servers: [control-mcp, maintenance-mcp, telemetry-mcp]
+    # Sum of status.discoveredTools across the three registrations:
+    # control_ 7 + maintenance_ 5 + telemetry_ 6. Matches the "18 tools between
+    # them" module 1 tells participants. The bridge's own startup line reports
+    # "gateway ready: 20 tools", which counts something slightly wider than the
+    # federated set — assert the registrations, which are the number the
+    # content is written against.
+    hc_mcp_tool_total: 18
+    hc_agent_deployments: [hermes-openshell-bridge, hermes-plain]
+
+    # --- module 5 and 6 dependencies ---
+    #
+    # Everything the later modules need that nothing else in this file was
+    # already checking. TEN-WL-01 covers these Deployments' replica counts
+    # generically; what it cannot see is whether the documentation site still
+    # serves the attack, whether the skills arrived, or whether the guardrails
+    # server is alive in the sense of answering rather than in the sense of
+    # being Ready.
+
+    # Addressed by Service name, as everything in the lab that reaches it
+    # does. See the Route comment in
+    # automation/gitops/tenant-platform/templates/waterplant-docs.yaml for why
+    # the Route is for humans only.
+    hc_docs_base: "http://waterplant-docs:8080"
+    # The one page that redirects onward to the attacker path. A 200 here
+    # instead of a 3xx means the injection has been removed and module 5's
+    # second half has nothing to demonstrate.
+    hc_docs_bulletin: "/doc/field-service-bulletin"
+
+    # HERMES_HOME on the baseline agent (tenant-platform values agent.hermes.home).
+    hc_hermes_home: /app/.hermes
+    # Both are prerequisites the participant never installs: module 4 opens by
+    # reading write-report, module 5 by reading read-safety-docs.
+    hc_agent_skills: [read-safety-docs, write-report]
+
+    # The NemoGuardrails CR's name, which the operator derives its Deployment,
+    # pods and Service names from. tenant-guardrails values guardrails.name.
+    hc_nemo_name: nemo-guardrails
+    hc_nemo_configmap: nemo-guardrails-config
+    # What module 6 tells the participant they will find in config.yaml.
+    hc_nemo_entities: [EMAIL_ADDRESS, PHONE_NUMBER]
+    # Quoted from rails.co in
+    # automation/gitops/tenant-guardrails/templates/configmap.yaml. e2e's
+    # ask-rails.yml matches a blocked turn on this same string, so the two
+    # move together.
+    hc_nemo_refusal: "I cannot process that request or response under the Northgate assistant policy"
+
+    # A floor, not an inventory. The set grows -- ROUNDS.md Round 4 wants a
+    # seventh eval -- and a check listing every id by name goes stale instead
+    # of being enforced. Shipped today: 6 attacks, 6 evals.
+    #
+    # This said 7 attacks and failed TEN-DEF-01 on a correct environment. The
+    # count was taken before compromised-tool-injection.yaml was removed in
+    # e0ef506; six is what the chart globs today. Re-count the directory
+    # rather than trusting this comment when it next moves.
+    hc_min_attacks: 6
+    hc_min_evals: 6
+
+    # Only the components the lab uses. bootstrap-infra deliberately sets a
+    # dozen others to Removed, so "all DSC conditions True" would fail on a
+    # correct cluster.
+    hc_dsc_components:
+      - AIGatewayReady
+      - MLflowOperatorReady
+      - MCPLifecycleOperatorReady
+      - TrustyAIReady
+      - KserveReady
+      - DashboardReady
+
+    # One entry per namespace, each listing the package prefixes expected to
+    # have a Succeeded CSV in it — grouped by namespace because the cost is per
+    # API call, not per prefix.
+    hc_expected_operators:
+      - namespace: redhat-ods-operator
+        prefixes: [rhods-operator]
+      - namespace: agent-sandbox-system
+        prefixes: [agent-sandbox-operator]
+      - namespace: kuadrant-system
+        prefixes: [rhcl-operator, mcp-gateway, authorino-operator, limitador-operator]
+
+    # What a synced tenant-policy Application leaves behind: the lab's starting
+    # posture, the thing later modules tighten. Grouped by kind for the same
+    # reason as the operators above.
+    #
+    # Keep this in step with automation/gitops/tenant-policy/templates/ — it is
+    # the set that chart actually renders, and the chart moves. The
+    # openshell-sandbox-policy ConfigMap and the egress-baseline NetworkPolicy
+    # were both in this list and have since been removed from the chart:
+    # participants now set OpenShell policy by hand with `openshell policy
+    # update` in module 2 rather than inheriting a pre-applied one. Check the
+    # Application's own resource list before editing this:
+    #   oc -n openshift-gitops get application <user>-policy \
+    #     -o jsonpath='{range .status.resources[*]}{.kind}/{.name}{"\n"}{end}'
+    hc_policy_baseline:
+      - { api: kuadrant.io/v1, kind: AuthPolicy, names: [mcp-auth-policy, mcp-authz-policy] }
+      - { api: networking.k8s.io/v1, kind: NetworkPolicy, names: [allow-ingress-within-namespace] }
+
   tasks:
-    - name: "TODO: Implement health checks"
+
+    # ── Preflight and shared gathers ────────────────────────────────────────
+    #
+    # These four reads serve both the cluster checks and every tenant: the
+    # Application list alone replaces five per-tenant lookups.
+
+    - name: "CLU-RBAC-01 | List every ArgoCD Application"
+      kubernetes.core.k8s_info:
+        api_version: argoproj.io/v1alpha1
+        kind: Application
+        namespace: "{{ hc_argocd_namespace }}"
+      register: hc_applications
+      failed_when: false
+
+    - name: "CLU-RBAC-01 | Stop with the fix rather than 20 permission errors"
+      ansible.builtin.fail:
+        msg: |
+          CLU-RBAC-01 FAILED — cannot list Applications in {{ hc_argocd_namespace }}.
+
+          This playbook reads ArgoCD, shared services and other namespaces, none
+          of which the Showroom pod's own ServiceAccount can see (it is `edit`
+          on its own namespace only). Enable the runtime-automation
+          cluster-admin identity in the AgnosticV catalog item's common.yml:
+
+            ocp4_workload_showroom_runtime_automation_enable: true
+            ocp4_workload_showroom_runtime_automation_cluster_admin: true
+            ocp4_workload_showroom_openshift_api_url: "{{ '{{' }} openshift_api_url {{ '}}' }}"
+            ocp4_workload_showroom_openshift_api_token: "{{ '{{' }} openshift_cluster_admin_token {{ '}}' }}"
+
+          Error: {{ hc_rbac.msg | default('no Applications returned') }}
+      vars:
+        hc_rbac: "{{ hc_applications }}"
+      when: hc_applications.resources is not defined
+
+    - name: "Record CLU-RBAC-01"
+      ansible.builtin.set_fact:
+        hc_findings: "{{ hc_findings + [{'id': 'CLU-RBAC-01', 'tenant': '', 'severity': 'fail', 'ok': true, 'detail': 'can read ' ~ (hc_applications.resources | length) ~ ' Applications in ' ~ hc_argocd_namespace}] }}"
+
+    - name: "List every namespace"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+      register: hc_namespaces
+
+    - name: "Read the cluster's ingress domain"
+      kubernetes.core.k8s_info:
+        api_version: config.openshift.io/v1
+        kind: Ingress
+        name: cluster
+      register: hc_ingress
+
+    - name: "Read the Showroom user data, when running inside a Showroom pod"
+      ansible.builtin.slurp:
+        src: "{{ hc_user_data_file }}"
+      register: hc_user_data_raw
+      failed_when: false
+
+    # ── Scope ───────────────────────────────────────────────────────────────
+
+    - name: "Resolve the tenants in scope"
+      ansible.builtin.set_fact:
+        hc_scope: "{{ _explicit if (_explicit | length > 0) else (_all if (hc_all_tenants | bool) else _own) }}"
+      vars:
+        # user_data.yml is YAML-ish: quoted keys, one per line. from_yaml reads
+        # it directly. Absent outside a Showroom pod, which is the laptop case.
+        _user_data: "{{ (hc_user_data_raw.content | default('') | b64decode | from_yaml) | default({}, true) }}"
+        # The participant label key contains dots, so map(attribute=...) would
+        # read it as a path. Pulled out by hand instead.
+        _all_json: >-
+          {%- set names = [] -%}
+          {%- for ns in hc_namespaces.resources -%}
+            {%- set labels = ns.metadata.labels | default({}) -%}
+            {%- if labels.get('rhdp.redhat.com/lab', '') == 'agentops-in-action' -%}
+              {%- set u = labels.get(hc_participant_label, '') -%}
+              {%- if u and u not in names -%}{%- set _ = names.append(u) -%}{%- endif -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ names | sort | to_json }}
+        _all: "{{ _all_json | from_json }}"
+        _own: "{{ [_user_data.user] if (_user_data.get('user', '') in _all) else _all }}"
+        # `-e hc_tenants=a,b` arrives as a string, `-e '{"hc_tenants":["a"]}'`
+        # as a list. Accept both rather than failing on the easier spelling.
+        _explicit: >-
+          {{ (hc_tenants | split(',') | map('trim') | select() | list)
+             if (hc_tenants is string) else hc_tenants }}
+
+    - name: "Report the scope"
       ansible.builtin.debug:
-        msg: "Replace this task with checks that verify the environment is ready"
+        msg: >-
+          Checking {{ hc_scope | length }} tenant(s): {{ hc_scope | join(', ') }}
+          {{ '(all tenants on the cluster)' if (hc_all_tenants | bool) else '' }}
+
+    # ── Checks ──────────────────────────────────────────────────────────────
+
+    - name: "Cluster and shared-service checks"
+      ansible.builtin.include_tasks: tasks/cluster-checks.yml
+
+    - name: "Per-participant checks"
+      ansible.builtin.include_tasks: tasks/tenant-checks.yml
+      loop: "{{ hc_scope }}"
+      loop_control:
+        loop_var: hc_tenant
+
+    # ── Summary ─────────────────────────────────────────────────────────────
+
+    - name: "Health check summary"
+      ansible.builtin.debug:
+        msg: |-
+          ──────────────────────────────────────────────────────────────────────
+          AgentOps in Action — health check
+          tenants: {{ hc_scope | join(', ') }}
+          ──────────────────────────────────────────────────────────────────────
+          {% for f in hc_findings %}
+          {{ (f.ok | bool) | ternary('PASS', (f.severity == 'warn') | ternary('WARN', 'FAIL')) }}  {{ '%-14s' | format(f.id) }} {{ '%-12s' | format(f.tenant or '-') }} {{ f.detail }}
+          {% endfor %}
+          ──────────────────────────────────────────────────────────────────────
+          {{ _passed | length }} passed, {{ _failed | length }} failed, {{ _warned | length }} warnings
+          {% if _failed | length > 0 %}
+
+          Failed checks — see qa-automation/healthcheck-spec.yaml for the
+          rationale and remediation behind each id:
+          {% for f in _failed %}
+            {{ f.id }}{{ (' [' ~ f.tenant ~ ']') if f.tenant else '' }}: {{ f.detail }}
+          {% endfor %}
+          {% endif %}
+      vars:
+        _failed: "{{ hc_findings | rejectattr('ok') | selectattr('severity', 'equalto', 'fail') | list }}"
+        _warned: "{{ hc_findings | rejectattr('ok') | selectattr('severity', 'equalto', 'warn') | list }}"
+        _passed: "{{ hc_findings | selectattr('ok') | list }}"
+
+    - name: "Fail the run if any check of severity fail did not pass"
+      ansible.builtin.fail:
+        msg: >-
+          {{ _failed | length }} health check(s) failed:
+          {{ _failed | map(attribute='id') | unique | join(', ') }}
+      vars:
+        _failed: "{{ hc_findings | rejectattr('ok') | selectattr('severity', 'equalto', 'fail') | list }}"
+      when: _failed | length > 0

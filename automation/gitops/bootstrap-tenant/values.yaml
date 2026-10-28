@@ -50,23 +50,44 @@ gitops:
   # Created by bootstrap-infra, which the cluster catalog item bootstraps.
   argocdProject: agentops-in-action
 
+# Shared inference settings for Hermes and the NeMo self-check judge.
+# Configure these here so every child Application uses the same model.
+model:
+  baseUrl: "https://maas-rhdp.apps.maas.redhatworkshops.io/v1"
+  model: "qwen3-235b-a22b"
+
+guardrails:
+  # Requires the TrustyAI NemoGuardrails CRD. Uses the Hermes model-key Secret.
+  # Provisioned for the Hermes harness; no traffic is redirected automatically.
+  enabled: true
+
 # Values forwarded to tenant-platform.
 platform:
   # Quay org holding the workload images. Forwarded as a Helm *parameter*, so
   # it overrides image.namespace in tenant-platform rather than merging with
   # it — the two have to agree, and this one wins.
   imageNamespace: rh-aiservices-bu
-  # Where the operator console links for MLflow traces.
+  # Where the operator console links for MLflow traces. A *base*, with no
+  # trailing path: the console appends /experiments?workspace=<ns> for the
+  # footer link and /experiments/<id>/traces?... per turn.
   #
-  # Empty means https://rh-ai.<deployer.domain>/mlflow — RHOAI's dashboard
-  # gateway, which is where the MLflow operator surfaces the UI. MLflow has no
-  # Route of its own, so that gateway is the only way in, and it is reachable by
-  # any participant: RHOAI's Auth CR allows system:authenticated.
+  # Empty means https://rh-ai.<deployer.domain>/develop-train/mlflow — MLflow
+  # as embedded in RHOAI's dashboard, behind the data-science-gateway. MLflow
+  # has no Route of its own, so that gateway is the only way in, and it is
+  # reachable by any participant: RHOAI's Auth CR allows system:authenticated.
+  #
+  # Note /develop-train/mlflow, not /mlflow. The same host serves both: the
+  # bare /mlflow is the standalone MLflow shell with hash routes, while
+  # /develop-train/mlflow is the same MLflow inside the RHOAI dashboard with
+  # path routes. The lab uses the embedded one so a participant opening a
+  # trace stays inside the RHOAI console the rest of the lab lives in.
+  # Switching between the two means changing the link *shape* in the console
+  # too, not just this string — see traces.py.
   #
   # Set explicitly if a cluster's dashboard is not at rh-ai.<domain>; that
-  # prefix was confirmed on cluster-jddlk, where all six RHOAI *-params
-  # ConfigMaps record it as gateway-domain, but it is not read from the cluster
-  # at render time.
+  # prefix was confirmed on cluster-jddlk and again on cluster-zwtpw, where
+  # all six RHOAI *-params ConfigMaps record it as gateway-domain, but it is
+  # not read from the cluster at render time.
   mlflowUrl: ""
   # Whether this participant's Hermes emits OTLP traces to MLflow. Only the
   # openshell runtime does: the bridge installs the hermes_otel plugin into the
@@ -100,6 +121,20 @@ platform:
   # false has an agent that cannot reach its MCP servers at all.
   mcpGateway: true
 
+  # Let the shared attack/eval runner probe this participant and score them.
+  #
+  # Per participant, so one attendee can sit out the leaderboard — a presenter
+  # driving a demo from a real tenant does not want an attack landing mid-slide.
+  # Turning it off costs them their cycle results and their standing; it does not
+  # change anything about their agent.
+  attackRunner: true
+  # Where the runner's ServiceAccount lives. Must match lab.sharedNamespace in
+  # bootstrap-infra, the same way namespaceSuffix must match across charts: a
+  # RoleBinding naming the wrong namespace binds a subject that does not exist,
+  # which Kubernetes accepts silently and which then shows up as the runner
+  # getting 403s from MLflow for one participant and no one else.
+  attackRunnerNamespace: agentops-shared
+
 # Values forwarded to tenant-policy.
 policy:
   # Tool authorization at baseline: on, so every tool call needs the matching
@@ -112,11 +147,24 @@ policy:
 # Includes application workloads, OpenShell gateway, bridge, sandbox and sync Jobs.
 # Validate aggregate capacity for the event size before provisioning all tenants.
 # ---------------------------------------------------------------------------
-quota:
-  requests:
-    cpu: "8"
-    memory: "16Gi"
-  limits:
-    cpu: "12"
-    memory: "24Gi"
-  maxPods: "20"
+# Removed, both the ResourceQuota and the LimitRange that went with it.
+#
+# The LimitRange defaulted every container with no resources of its own to
+# 512Mi, and the TrustyAI operator sets none on the NeMo Guardrails server --
+# the NemoGuardrails CRD exposes no knob for it either (spec is caBundleConfig,
+# env, nemoConfigs, replicas, template, and template.pod is only scheduling
+# constraints). So the guardrails server inherited 512Mi and was OOMKilled
+# mid-request, every request: observed on cluster-pz7xk dying three seconds
+# into `detect_sensitive_data`, which loads an NER model before `self check
+# input` makes its model call at all.
+#
+# They had to go together. A ResourceQuota that sets requests.memory or
+# limits.memory makes those fields mandatory on every container, so dropping
+# only the LimitRange -- the thing actually causing the OOM -- would have had
+# admission reject every pod that does not declare them, the guardrails server
+# included. Removing one and keeping the other is the broken combination.
+#
+# What this gives up: nothing now caps a single tenant's consumption, so on a
+# shared event cluster one namespace can crowd out the others. Capacity is back
+# to being a planning exercise against the aggregate (see the note above)
+# rather than something enforced per participant.

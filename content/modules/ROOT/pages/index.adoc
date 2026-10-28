@@ -1,32 +1,71 @@
 = AgentOps in Action: Evaluate, Secure, and Operate Enterprise AI Agents
 
-Welcome to this hands-on AgentOps lab. Over approximately two hours you will take a single pre-deployed enterprise AI agent through the full observe–evaluate–contain–authorize–re-evaluate loop using Red Hat OpenShift AI.
+Welcome to this hands-on AgentOps lab. You will take a single pre-deployed enterprise AI agent through the full observe–evaluate–contain–authorize–re-evaluate loop using Red Hat OpenShift AI.
 
 == What you will do
 
-* Meet the agent already deployed in your environment, try it out, and watch several attacks succeed
+* Meet the agent already deployed in your environment, try it out, and experience several attacks succeed
   against it while every legitimate use case also succeeds
-* Put the agent in an OpenShell sandbox and discover it's now shielded but useless
-* Make the agent useful again, one control at a time -- tools, file writes, and doc access -- opening
+* Put the agent in an OpenShell sandbox and discover it's now shielded but restricted to the point where you can't complete your daily tasks
+* Make the agent more capable again, one control at a time -- tools, file writes, and doc access -- opening
   each back up only as far as it actually needs
-* Guard against a compromised account with NeMo Guardrails
-* Rely on MLflow Evals throughout to see what's working and what isn't, instead of checking manually
+* Guard against injection attacks with NeMo Guardrails
+* Rely on MLflow traces and MLflow Evals throughout to see what's working and what isn't, instead of checking manually
 
 == Environment
 
-Your environment is a shared Red Hat OpenShift 4.22 cluster running Red Hat OpenShift AI 3.6. Your dedicated lab namespace is `{guid}-agentops`. Use the tabs above to navigate between the terminal, the OpenShift console, MLflow, and EvalHub.
+The lab environment is a shared Red Hat OpenShift 4.22 cluster running Red Hat OpenShift AI 3.5. You have your dedicated project `{user}-agentops` including below components. You also have tabs on the right side to navigate between some of these components. 
+
+You do not need to memorize or access to these links. You'll be given them when needed.
+
+=== Your URLs
+
+[cols="1,3"]
+|===
+|What |Where
+
+|Operator console
+|https://water-plant-ui-{user}-agentops.{openshift_cluster_ingress_domain}/[water-plant-ui-{user}-agentops.{openshift_cluster_ingress_domain}^]
+
+|OpenShift web console
+|{openshift_console_url}[{openshift_console_url}^]
+
+|OpenShift API (for `oc login`)
+|`{openshift_api_url}`
+
+|MLflow experiments (your traces)
+|https://rh-ai.{openshift_cluster_ingress_domain}/develop-train/mlflow/experiments?workspace={user}-agentops[rh-ai.{openshift_cluster_ingress_domain}/develop-train/mlflow^]
+
+|Keycloak admin console
+|https://sso.{openshift_cluster_ingress_domain}/admin/waterplant-{user}/console[sso.{openshift_cluster_ingress_domain}/admin/waterplant-{user}/console^]
+|===
+
+=== Your credentials
+
+[cols="2,1,2"]
+|===
+|Where |Username |Password
+
+|OpenShift console and `oc login`
+|`{user}`
+|`{password}`
+
+|Keycloak admin console
+|`admin`
+|`{password}`
+|===
 
 == Modules
 
-[cols="1,3,1"]
+[cols="1,3"]
 |===
-|Module |Title |Duration
+|Module |Title
 
-|1 |Introduction to AgentOps |TBD
-|2 |Meet the Agent |TBD
-|3 |Sandbox the Agent |TBD
-|4 |Let the Agent Use Its Tools |TBD
-|5 |Let the Agent Write Files |TBD
-|6 |Let the Agent Reach the Docs Website |TBD
-|7 |Guard Against a Compromised Account |TBD
+|1 |Introduction to AgentOps & Meet Hermie
+|2 |Sandbox the Agent
+|3 |Let the Agent Use Its Tools
+|4 |Let the Agent Write Files
+|5 |Let the Agent Reach the Docs Website
+|6 |Check What Goes In and Comes Out
+|7 |Keep Hermie Working Safely
 |===

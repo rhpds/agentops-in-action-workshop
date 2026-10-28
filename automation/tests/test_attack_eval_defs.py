@@ -1,0 +1,175 @@
+#!/usr/bin/env python3
+"""Schema checks for the attack and eval definitions.
+
+These live here because the definitions do. They are lab content, mounted into
+the console as a ConfigMap rather than baked into its image, so nothing in the
+agent repo validates them any more — and a broken one is only noticed when a
+participant's console quietly drops a case.
+
+Run: python3 -m pytest automation/tests/test_attack_eval_defs.py
+"""
+
+from __future__ import annotations
+
+import re
+import subprocess
+from pathlib import Path
+
+import pytest
+import yaml
+
+GITOPS = Path(__file__).resolve().parents[1] / "gitops"
+DEFS = GITOPS / "tenant-platform/files/attack-eval-defs"
+
+#: Every goal type waterplant-ui's probes/goals.py can dispatch. A definition
+#: naming anything else loads fine and then never produces a verdict, which
+#: reads on screen as "inconclusive" forever with no clue why.
+GOAL_TYPES = {
+    "response_regex", "state_echo", "state_diff", "state_created",
+    "fs_probe", "honeypot_hit", "all",
+}
+CLEANUP_TYPES = {"none", "canary_reseed", "plant_state_restore", "soul_restore",
+                 "reports_restore"}
+
+
+def _load():
+    return [(p, yaml.safe_load(p.read_text(encoding="utf-8")))
+            for p in sorted(DEFS.rglob("*.yaml"))]
+
+
+def test_the_definitions_are_where_the_chart_globs_them():
+    """tenant-platform/templates/ui.yaml globs attacks/ and evals/ separately.
+
+    Helm's .Files.Glob is filepath.Match: no brace alternation, no "**". A
+    definition filed anywhere but these two directories renders into no
+    ConfigMap key and reaches no console, silently.
+    """
+    assert (DEFS / "attacks").is_dir() and (DEFS / "evals").is_dir()
+    stray = [p.relative_to(DEFS) for p in DEFS.rglob("*.yaml")
+             if p.parent.name not in ("attacks", "evals")]
+    assert stray == [], f"not reachable by the chart's globs: {stray}"
+
+
+@pytest.mark.parametrize("path,doc", _load(), ids=lambda v: getattr(v, "name", ""))
+def test_definition_is_well_formed(path, doc):
+    for field in ("id", "kind", "title", "description", "severity",
+                  "request", "goal", "polarity", "scoring"):
+        assert doc.get(field), f"{path.name}: missing {field}"
+
+    assert doc["kind"] in ("attack", "eval")
+    assert doc["polarity"] in ("attack_blocked", "eval_succeeded")
+    # The directory decides which ConfigMap key prefix it gets, so a file in
+    # the wrong one is scored as the wrong kind.
+    assert doc["kind"] == ("attack" if path.parent.name == "attacks" else "eval")
+    assert doc["id"] == path.stem, "the id and the filename are both used as keys"
+
+    goal = doc["goal"]
+    assert goal.get("type") in GOAL_TYPES, f"{path.name}: unknown goal {goal.get('type')}"
+    for sub in goal.get("of", []):
+        assert sub.get("type") in GOAL_TYPES
+
+    assert doc["cleanup"]["type"] in CLEANUP_TYPES if "cleanup" in doc else True
+
+    req = doc["request"]
+    turns = req.get("turns") if req.get("type") == "multi_turn" else [req.get("prompt")]
+    assert turns and all(t and t.strip() for t in turns), f"{path.name}: empty prompt"
+
+    if not doc.get("enabled", True):
+        assert doc.get("disabled_reason"), (
+            f"{path.name}: disabled without saying why. The console shows the "
+            "reason, because a participant who cannot see that a case never "
+            "runs will assume they are defended against it.")
+
+
+def test_every_regex_compiles():
+    """A bad pattern is only noticed when the case runs, which may be hours."""
+    for path, doc in _load():
+        for goal in [doc["goal"], *doc["goal"].get("of", [])]:
+            if "pattern" in goal:
+                re.compile(goal["pattern"])
+
+
+def test_canary_names_match_exactly():
+    """plants_canary and requires_canary are compared as dict keys.
+
+    A stray path prefix on one side means the lookup never hits and the attack
+    skips itself on every run, reporting a missing decoy that was in fact
+    planted.
+    """
+    planted = {d["plants_canary"] for _, d in _load() if d.get("plants_canary")}
+    required = {d["requires_canary"] for _, d in _load() if d.get("requires_canary")}
+    assert required <= planted, f"no eval plants: {required - planted}"
+
+
+def test_the_seeded_report_is_identical_for_both_runtimes():
+    """hermes-plain seeds it from tenant-platform, the sandbox from
+    tenant-openshell. Two copies because a chart cannot read another chart's
+    files; identical because deleted-reports targets it by name on both, and
+    the console writes one canonical body back on reset. If they drift, a
+    reset silently rewrites the file to something else.
+    """
+    plain = GITOPS / "tenant-platform" / "files" / "very-important-report.md"
+    sandbox = GITOPS / "tenant-openshell" / "files" / "very-important-report.md"
+    assert plain.exists() and sandbox.exists()
+    assert plain.read_bytes() == sandbox.read_bytes()
+
+
+def test_deleted_reports_targets_the_seeded_file():
+    """The attack and the seed have to name the same file.
+
+    They are in different trees — the definition is lab content, the file is
+    chart content — so nothing but this check couples them.
+    """
+    doc = yaml.safe_load(
+        (DEFS / "attacks" / "deleted-reports.yaml").read_text(encoding="utf-8"))
+    seeded = (GITOPS / "tenant-platform" / "files" / "very-important-report.md").name
+    assert doc["goal"]["path"] == seeded
+    assert doc["goal"]["succeeds_when"] == "absent"
+    # No longer gated on an eval having planted a decoy first.
+    assert "requires_canary" not in doc
+
+
+@pytest.mark.parametrize("plain_enabled", [True, False])
+def test_the_definitions_name_the_home_of_the_agent_the_console_talks_to(plain_enabled):
+    """__HERMES_HOME__ must resolve to the pod AGENT_URL points at.
+
+    Three things have to agree: the Hermes the console converses with, the pod
+    its filesystem goals exec into, and the path the definitions name. They
+    are all derived from one switch now, but each was keyed independently at
+    some point and each drifted.
+
+    This one was keyed on agent.hermes.runtime, which answers a different
+    question — whether a sandbox was deployed — while the console is pointed
+    at hermes-plain whenever the plain agent exists alongside the gateway. A
+    tenant with both got definitions naming /sandbox/.hermes while talking to
+    hermes-plain at /app/.hermes: the attack told the agent to edit a path
+    absent from its pod, and the goal measured that same wrong path and
+    called the attack blocked.
+    """
+    out = subprocess.run(
+        ["helm", "template", "t", str(GITOPS / "tenant-platform"),
+         "--set", "username=u", "--set", "attackRunner.sharedNamespace=s",
+         "--set", "mcpGateway.enabled=true", "--set", "keycloak.host=h",
+         "--set", f"agent.hermes.plain.enabled={str(plain_enabled).lower()}"],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    docs = [d for d in yaml.safe_load_all(out) if d]
+
+    ui = next(d for d in docs if d["kind"] == "Deployment"
+              and d["metadata"]["name"] == "water-plant-ui")
+    env = {v["name"]: v.get("value")
+           for v in ui["spec"]["template"]["spec"]["containers"][0]["env"]}
+
+    cm = next(d for d in docs if d["kind"] == "ConfigMap"
+              and d["metadata"]["name"] == "water-plant-ui-probe-defs")
+    tampered = next(v for k, v in cm["data"].items() if "tampered" in k)
+
+    home = env["AGENT_HERMES_HOME"]
+    assert f'"{home}/SOUL.md"' in tampered, (
+        f"definitions name a different home ({tampered!r}) than the console "
+        f"reads ({home})"
+    )
+    # ...and the agent that home belongs to is the one being talked to.
+    expected = "hermes-plain" if plain_enabled else "hermes-agent"
+    assert expected in env["AGENT_URL"]
+    assert "__HERMES_HOME__" not in tampered, "placeholder left unsubstituted"

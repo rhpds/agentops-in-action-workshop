@@ -23,8 +23,11 @@ def render(chart, release, namespace, params):
     return [d for d in yaml.safe_load_all(result.stdout) if d]
 
 
-def resource(docs, kind, name):
-    return next(d for d in docs if d['kind'] == kind and d['metadata']['name'] == name)
+def resource(docs, kind, name, required=True):
+    match = next((d for d in docs if d['kind'] == kind and d['metadata']['name'] == name), None)
+    if match is None and required:
+        raise StopIteration(f'no {kind}/{name} in the rendered manifests')
+    return match
 
 
 def tenant(user='user1', suffix='agentops', runtime='openshell', harness='hermes', enforced='false'):
@@ -84,13 +87,95 @@ class Consolidation(unittest.TestCase):
                     self.assertNotIn(f'{user}-openshell.svc', json.dumps(d))
                     for subject in d.get('subjects', []):
                         if subject['kind'] == 'ServiceAccount':
+                            # Subjects bound in a tenant namespace belong to that tenant,
+                            # with exactly one exception: the shared attack/eval runner,
+                            # which writes every participant's cycle results and so is
+                            # bound into each namespace from the shared one. It is the
+                            # only cross-tenant identity in the lab, which is why it is
+                            # named here rather than allowed by pattern — anything else
+                            # reaching across namespaces should still fail this.
+                            if (subject['name'], subject.get('namespace')) == ('attack-eval-runner', 'agentops-shared'):
+                                continue
                             self.assertEqual(subject.get('namespace', ns), ns)
+                # Every ServiceAccount a workload asks for must actually be
+                # rendered. A missing `---` between two objects in a template
+                # merges them into one document and the later kind silently
+                # wins: the console's ServiceAccount was swallowed by a Role
+                # added after it, and the only symptom was pods refusing to
+                # start with "serviceaccount not found" — nothing in the
+                # template looked wrong.
+                accounts = {d['metadata']['name'] for d in docs
+                            if d['kind'] == 'ServiceAccount'}
+                for d in docs:
+                    if d['kind'] not in ('Deployment', 'StatefulSet', 'Job'):
+                        continue
+                    wanted = d['spec']['template']['spec'].get('serviceAccountName')
+                    if wanted and wanted != 'default':
+                        self.assertIn(wanted, accounts,
+                                      f"{d['kind']}/{d['metadata']['name']} wants "
+                                      f"ServiceAccount {wanted}, which nothing renders")
+
                 for app in (d for d in bootstrap if d['kind'] == 'Application'):
                     self.assertEqual(app['spec']['destination']['namespace'], ns)
+                    automated = app['spec'].get('syncPolicy', {}).get('automated')
+                    if app['metadata']['name'].endswith(('-policy', '-guardrails')):
+                        # Automated, so the baseline actually reaches the
+                        # cluster -- it used to be manual-sync and every
+                        # tenant sat OutOfSync with its AuthPolicies Missing.
+                        #
+                        # But selfHeal and prune must stay off. `automated`
+                        # reacts to the desired state changing; selfHeal
+                        # reacts to the LIVE state changing, so it is the one
+                        # that would revert a participant's edit mid-exercise.
+                        # Pinned here because that is an easy thing to "fix"
+                        # without knowing why it was off.
+                        self.assertEqual(automated, {}, 'editable app: automated, nothing else')
+                    else:
+                        self.assertTrue(automated.get('selfHeal') and automated.get('prune'),
+                                        'infrastructure apps self-heal and prune')
                 ui = resource(docs, 'Deployment', 'water-plant-ui')
                 env = {e['name']: e.get('value') for e in ui['spec']['template']['spec']['containers'][0]['env']}
+                # What the guardrails rail set is told to judge with, taken
+                # from the same place bootstrap-tenant forwards to both charts.
+                env_agent_model = 'qwen3-235b-a22b'
                 if harness == 'hermes':
-                    self.assertEqual(env['AGENT_URL'], f'http://hermes-agent.{ns}.svc:8787')
+                    # hermes-plain whenever it is deployed alongside the
+                    # gateway, hermes-agent otherwise. ui.yaml derives this
+                    # from one switch so flipping the harness cannot leave the
+                    # console talking to a Service that no longer exists; the
+                    # assertion has to follow the same rule rather than naming
+                    # one side of it.
+                    plain = resource(docs, 'Deployment', 'hermes-plain', required=False)
+                    expected = 'hermes-plain' if plain else 'hermes-agent'
+                    self.assertEqual(env['AGENT_URL'], f'http://{expected}.{ns}.svc:8787')
+                # The input guardrail ships off, and ships present *in the
+                # rendered manifest* -- which is not the same as reaching the
+                # cluster. The platform Application ignores this path, and
+                # RespectIgnoreDifferences strips it from the desired state,
+                # so a participant's Deployment has no NEMO_ENDPOINT until
+                # module 6's `oc set env` creates one. Pinned here because the
+                # rendered value is what a non-ignoring consumer gets, and
+                # because dropping it would silently break those.
+                self.assertIn('NEMO_ENDPOINT', env, 'module 6 edits a variable that must exist')
+                self.assertEqual(env['NEMO_ENDPOINT'], '')
+                self.assertEqual(env['NEMO_CONFIG_ID'], 'northgate')
+                # The judge the rails call, which must track the model the key
+                # is actually entitled to. `model` is required on the check
+                # request and overrides the rail config's own `models:` entry,
+                # so a stale value here yields a 200 with the rail failed
+                # underneath on `[401] key not allowed to access model` -- a
+                # guardrail that reports success and checks nothing.
+                self.assertEqual(env['NEMO_MODEL'], env_agent_model)
+                # No RBAC for the guardrail, deliberately: tenant-guardrails
+                # runs it with authEnabled false, so the console just calls the
+                # Service. An earlier revision authenticated through
+                # kube-rbac-proxy and needed a namespace-wide `get services`
+                # grant -- the proxy writes `resourceName` where upstream reads
+                # `name`, so its own scoping is dropped and a resourceNames
+                # Role 403s every check. Pinned as an absence so that Role does
+                # not come back with the reasoning lost.
+                self.assertIsNone(resource(docs, 'Role', 'water-plant-ui-nemo-check',
+                                           required=False))
                 if runtime == 'openshell':
                     gateway = resource(docs, 'StatefulSet', f'{user}-openshell')
                     gateway_labels = gateway['spec']['template']['metadata']['labels']
@@ -102,8 +187,6 @@ class Consolidation(unittest.TestCase):
                     self.assertEqual(env['AGENTOPS_NS'], ns)
                     self.assertEqual(env['GATEWAY_HOST'], f'{user}-openshell.{ns}.svc.cluster.local')
                     self.assertIn(f'.{ns}.svc.cluster.local', env['MCP_GATEWAY_URL'])
-                    policy = resource(docs, 'ConfigMap', 'openshell-sandbox-policy')['data']['policy.yaml']
-                    self.assertIn(f'hermes-mlflow-relay.{ns}.svc.cluster.local', policy)
                     job = resource(docs, 'Job', 'mcp-gateway-rollout')
                     env = {e['name']: e.get('value') for e in job['spec']['template']['spec']['containers'][0]['env']}
                     self.assertIn('hermes-openshell-bridge', env['CLIENTS'])
@@ -161,9 +244,9 @@ class Consolidation(unittest.TestCase):
                 ps.append({'name': name, 'value': value})
         case('unchanged', lambda o: None, True)
         case('normal sync', lambda o: o.update(operation={'sync': {'prune': True, 'syncStrategy': {'hook': {}}}}), True)
-        for name in ['mcpGateway.enforced', 'networkPolicy.permissiveEgress', 'openshell.permissiveEgress', 'openshell.filesystem.readOnly[0]', 'openshell.broadOutbound.hosts[0]']:
+        for name in ['mcpGateway.enforced']:
             case(f'edit {name}', lambda o, n=name: parameter(o, n, 'true'), True)
-        for name in ['username', 'namespaceSuffix', 'openshell.enabled', 'keycloak.host', 'mcpGateway.rollout.image', 'mcpGateway.rollout.clientDeployments[0]', 'mcpGateway.rollout.serviceAccount']:
+        for name in ['username', 'namespaceSuffix', 'openshell.enabled', 'openshell.permissiveEgress', 'networkPolicy.permissiveEgress', 'keycloak.host', 'mcpGateway.rollout.image', 'mcpGateway.rollout.clientDeployments[0]', 'mcpGateway.rollout.serviceAccount']:
             case(f'override {name}', lambda o, n=name: parameter(o, n, 'attacker'), False)
         for key in ['repoURL', 'path', 'targetRevision']:
             case(f'change source {key}', lambda o, k=key: o['spec']['source'].update({k: 'other'}), False)
@@ -195,10 +278,10 @@ class Consolidation(unittest.TestCase):
                 cel_field = '__namespace__' if field == 'namespace' else field
                 self.assertIn(f'has(object.{path}.{cel_field})', expressions)
         case('duplicate parameter', lambda o: o['spec']['source']['helm']['parameters'].append({'name': 'username', 'value': 'user2'}), False)
-        network = resource(children['tenant-policy'], 'NetworkPolicy', 'egress-baseline')
+        network = resource(children['tenant-policy'], 'NetworkPolicy', 'allow-ingress-within-namespace')
         guard = resource(bootstrap, 'ValidatingAdmissionPolicy', f'{ns}-policy-network')
         for name, change, allowed in [
-            ('tighten egress', lambda o: o['spec'].update(egress=[]), True),
+            ('tighten ingress', lambda o: o['spec'].update(ingress=[]), True),
             ('target all pods', lambda o: o['spec'].update(podSelector={}), False),
             ('change policy type', lambda o: o['spec'].update(policyTypes=['Ingress', 'Egress']), False),
         ]:
