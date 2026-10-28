@@ -60,7 +60,7 @@ spec:
   - id: module-06
     title: "Re-evaluate and tune the agent"
     duration_min: 15
-    status: in_progress
+    status: complete
   - id: module-07
     title: "AgentOps lifecycle and wrap-up"
     duration_min: 10
