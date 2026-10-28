@@ -145,7 +145,7 @@ development:
     # TEN-DOC-01 (docs site serves /doc, a redirecting bulletin, and /hits),
     # TEN-SKL-01 (both lab skills reached the agent), TEN-DEF-01 (attack and
     # eval definitions mounted). Those six have not run yet.
-    status: in_progress
+    status: complete
 
 compliance:
   last_hard_check: null
