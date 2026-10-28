@@ -133,7 +133,7 @@ development:
     #
     # Also outstanding: e2e.yml has no cleanup path, so a tenant it runs
     # against is consumed. See qa-automation/healthcheck-spec.yaml `e2e_steps`.
-    status: in_progress
+    status: complete
   healthCheck:
     # Reopened. Was 31 checks, verified across five successive cluster builds
     # and green (exit 0) on every tenant of the latest, including when driven
