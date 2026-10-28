@@ -1,7 +1,7 @@
 ---
 # E2E module 3 — Let the Agent Use Its Tools
 #
-# Replays content/modules/ROOT/pages/module-03.adoc: show that a sandboxed
+# Replays content/modules/ROOT/pages/module-03-let-the-agent-use-its-tools.adoc: show that a sandboxed
 # agent can still do far more than an operator should, strip the two role
 # mappings behind those attacks, and confirm the attacks stop while the
 # operator's real work carries on.

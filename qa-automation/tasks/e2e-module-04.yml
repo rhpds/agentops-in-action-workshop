@@ -1,7 +1,7 @@
 ---
 # E2E module 4 — Let the Agent Write Files
 #
-# Replays content/modules/ROOT/pages/module-04.adoc: the operator can no
+# Replays content/modules/ROOT/pages/module-04-let-the-agent-write-files.adoc: the operator can no
 # longer save a report, because /reports is not in the sandbox's filesystem
 # policy. Add it, recreate the sandbox with the updated policy, and confirm a
 # timestamped report is written and readable.

@@ -1,7 +1,7 @@
 ---
 # E2E module 1 — Introduction to AgentOps & Meet Hermie
 #
-# Replays content/modules/ROOT/pages/module-01.adoc against the UNSANDBOXED
+# Replays content/modules/ROOT/pages/module-01-introduction-to-agentops-and-meet-hermie.adoc against the UNSANDBOXED
 # agent: the console's opening question must be answered using a real tool
 # call, and the baseline over-permission must reproduce.
 #

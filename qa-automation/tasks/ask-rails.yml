@@ -26,7 +26,7 @@
 #   /v1/checks benign -> {"status":"passed","content":"..."}
 #   /v1/checks PII    -> {"status":"blocked","rail":"detect sensitive data on input",...}
 #
-# That `rail` value is the same string module-06.adoc tells the participant to
+# That `rail` value is the same string module-06-check-what-goes-in-and-comes-out.adoc tells the participant to
 # look for in the console — "Look for input blocked by NeMo Guardrails and the
 # rail name `detect sensitive data on input`" — which is good evidence that
 # the console reads this endpoint too.

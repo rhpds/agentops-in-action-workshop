@@ -1450,7 +1450,7 @@ e2e_steps:
     drives: Nothing.
     asserts: Nothing.
     rationale: >-
-      Recorded rather than left as a silent gap. module-07.adoc is a wrap-up:
+      Recorded rather than left as a silent gap. module-07-keep-hermie-working-safely.adoc is a wrap-up:
       it reviews what the earlier modules enforced, tabulates which layer
       contributed what, and describes the AgentOps loop to carry forward. There
       is not one command or prompt in it for a participant to run, so there is

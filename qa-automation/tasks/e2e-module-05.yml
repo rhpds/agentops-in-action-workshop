@@ -1,7 +1,7 @@
 ---
 # E2E module 5 — Let the Agent Reach the Docs Website
 #
-# Replays content/modules/ROOT/pages/module-05.adoc: the operator cannot get
+# Replays content/modules/ROOT/pages/module-05-let-the-agent-reach-the-docs-website.adoc: the operator cannot get
 # safety documentation any more, because module 2's default-deny sandbox never
 # named waterplant-docs. Allow the host, watch the obvious fix get punished by
 # a bulletin that redirects to an attacker path, then replace the host-wide

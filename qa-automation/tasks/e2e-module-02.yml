@@ -1,7 +1,7 @@
 ---
 # E2E module 2 — Sandbox the Agent
 #
-# Replays content/modules/ROOT/pages/module-02.adoc: create an OpenShell
+# Replays content/modules/ROOT/pages/module-02-sandbox-the-agent.adoc: create an OpenShell
 # sandbox around the unchanged agent image, watch the default-deny policy break
 # it, grant back the four destinations it genuinely needs, and confirm the
 # legitimate workflow returns while the module 1 over-permissions do not.
