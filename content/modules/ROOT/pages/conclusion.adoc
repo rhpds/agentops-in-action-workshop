@@ -1,0 +1,17 @@
+= Conclusion
+
+Congratulations on completing *AgentOps in Action: Evaluate, Secure, and Operate Enterprise AI Agents*.
+
+Over the course of this lab you operated Hermie, a tool-enabled AI assistant for Northgate Water Treatment Works, and progressively applied platform controls without modifying the agent code:
+
+* *Module 1* — Established the baseline: useful plant operations, over-broad access, and MLflow as the evidence layer.
+* *Module 2* — Sandboxed Hermie with OpenShell and restored required network dependencies one at a time.
+* *Module 3* — Narrowed plant-tool access through Keycloak role mappings and MCP Gateway enforcement.
+* *Module 4* — Added scoped filesystem access for report writing and examined the limits of broad write permission.
+* *Module 5* — Restored documentation reads, investigated indirect prompt injection, and constrained access to safe documentation paths.
+* *Module 6* — Connected NeMo Guardrails to check operator input for sensitive data and off-topic requests.
+* *Module 7* — Mapped each control to its responsibility and carried forward the AgentOps loop.
+
+The key takeaway is that sandbox isolation, network and filesystem policy, tool authorization, scoped content access, and inference guardrails each enforce a distinct boundary. No single layer substitutes for the others, and MLflow traces are the evidence layer that makes each control verifiable.
+
+The AgentOps loop — observe, change, act, evaluate, and continue — applies whenever you add a new capability, tighten a policy, or respond to a new threat. Apply it to Hermie and to every tool-enabled agent you operate.

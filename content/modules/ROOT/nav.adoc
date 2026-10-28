@@ -6,3 +6,4 @@
 * xref:module-05-let-the-agent-reach-the-docs-website.adoc[Module 5: Let the Agent Reach the Docs Website]
 * xref:module-06-check-what-goes-in-and-comes-out.adoc[Module 6: Check What Goes In and Comes Out]
 * xref:module-07-keep-hermie-working-safely.adoc[Module 7: Keep Hermie Working Safely]
+* xref:conclusion.adoc[Conclusion]
