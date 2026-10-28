@@ -66,16 +66,16 @@ Lab (hands-on)
 
 The Publishing House spec keeps the lab at **2 hours total**. The Showroom pages contain the detailed hands-on flow; these PH module durations are the review/planning allocation for the two-hour delivery window.
 
-| Module | Title | Duration |
-|--------|-------|----------|
-| 1 | Introduction to AgentOps & Meet Hermie | 20 min |
-| 2 | Sandbox the Agent | 20 min |
-| 3 | Let the Agent Use Its Tools | 15 min |
-| 4 | Let the Agent Write Files | 20 min |
-| 5 | Let the Agent Reach the Docs Website | 20 min |
-| 6 | Check What Goes In and Comes Out | 20 min |
-| 7 | Keep Hermie Working Safely | 5 min |
-| — | **Total lab** | **2 hours** |
+| Module | Title | Duration | Learning objectives | Brief description |
+|--------|-------|----------|---------------------|-------------------|
+| 1 | Introduction to AgentOps & Meet Hermie | 20 min | Meet Hermie, identify the starting architecture, run useful plant operations, find evidence in MLflow, and establish baseline attack/evaluation behavior. | Participants use the operator console to ask plant questions, stop one pump, write a report, inspect traces, try broad web/file access, and run baseline attacks and evaluations. |
+| 2 | Sandbox the Agent | 20 min | Explain sandboxing, create sandboxed Hermie, restore required network dependencies, and verify broad access remains blocked. | Participants create an OpenShell sandbox, point the UI at it, inspect default-deny failures, and add scoped rules for Keycloak, MCP Gateway, the model endpoint, and MLflow. |
+| 3 | Let the Agent Use Its Tools | 15 min | Trace unsafe tool calls, narrow operator tool roles, and verify legitimate plant tools still work. | Participants reproduce whole-plant shutdown and configuration-dump attacks, remove the corresponding Keycloak `tool:` roles, and confirm telemetry plus individual pump control still work. |
+| 4 | Let the Agent Write Files | 20 min | Diagnose report-write failures, add scoped filesystem access, and explain the limits of broad write permissions. | Participants inspect the `write-report` skill, recreate Hermie with `/reports` writable, verify report generation, and review accidental deletion and instruction-poisoning risks. |
+| 5 | Let the Agent Reach the Docs Website | 20 min | Restore documentation reads, investigate indirect prompt injection, and constrain documentation access by method and path. | Participants allow the docs service, observe a compromised bulletin redirect, replace broad host access with `GET /doc` and `GET /doc/**`, and verify `/attack/override` is denied. |
+| 6 | Check What Goes In and Comes Out | 20 min | Inspect and enable NeMo Guardrails input checks, verify sensitive-data and topic blocks, and preserve useful plant workflows. | Participants test poisoned skills, synthetic contact details, and mixed travel requests, connect the console to NeMo Guardrails, and re-check operational prompts and plant queries. |
+| 7 | Keep Hermie Working Safely | 5 min | Map each control to its responsibility and describe the continuing AgentOps loop. | Participants recap what each layer contributed, keep remaining gaps visible, and carry forward observe-change-act-evaluate operations. |
+| — | **Total lab** | **2 hours** | — | — |
 
 The flow is deliberately operational. Module 1 establishes Hermie's useful baseline and over-broad access. Module 2 puts Hermie in a sandbox and restores required network dependencies one at a time. Module 3 narrows plant-tool access through Keycloak and MCP Gateway. Module 4 restores report writing with scoped filesystem access and shows the limits of broad write permission. Module 5 restores documentation reads and then narrows access to safe documentation paths after a compromised bulletin redirects to an attack endpoint. Module 6 adds NeMo Guardrails checks on operator input and demonstrates both their value and limits. Module 7 summarizes the controls and the ongoing AgentOps loop.
 
