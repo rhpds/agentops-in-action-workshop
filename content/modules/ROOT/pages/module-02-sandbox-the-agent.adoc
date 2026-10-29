@@ -117,10 +117,14 @@ openshell gateway select openshell-gw
 --
 [source,bash,role=execute,subs="verbatim,attributes"]
 ----
-openshell sandbox create --name hermie --from quay.io/rh-aiservices-bu/waterplant-hermes:0.2.7 --cpu 2 --memory 4Gi --no-tty -- true
+openshell sandbox create --name hermie --from quay.io/rh-aiservices-bu/waterplant-hermes:0.2.7 --cpu 2 --memory 4Gi --no-tty --provider maas -- true
 ----
 
 This creates an empty sandbox named `hermie` from the same Hermes image (so we have all the dependencies we need), with 2 CPUs and 4Gi of memory, but does not start the agent yet. All that's inside our sandbox right now is just the supervisor, waiting for what to do next.
+
+`--provider maas` attaches the model credential. OpenShell does not put the real
+API key in the sandbox: it puts an opaque placeholder in the environment and
+swaps it for the key at the proxy, on the way out. Hermie never holds it.
 --
 
 . Let's take a look at what has been created in OpenShift, but first we need to leave the openshell CLI:
