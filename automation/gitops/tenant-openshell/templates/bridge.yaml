@@ -227,8 +227,6 @@ data:
 {{ .Files.Get "files/mcp-token-refresh.py" | indent 4 }}
   wait-for-gateway.py: |
 {{ .Files.Get "files/wait-for-gateway.py" | indent 4 }}
-  maas-provider.yaml: |
-{{ .Files.Get "files/providers/maas.yaml" | indent 4 }}
 {{- if .Values.bridge.term.enabled }}
   term-wrapper.sh: |
 {{ .Files.Get "files/term-wrapper.sh" | indent 4 }}
@@ -439,7 +437,7 @@ spec:
         checksum/approvals: {{ include "waterplant.hermesApprovals" . | sha256sum }}
         checksum/skills-config: {{ include "waterplant.hermesSkills" . | sha256sum }}
         checksum/reseed: {{ .Files.Get "files/skills/reseed-skills.sh" | sha256sum }}
-        checksum/bridge: {{ printf "%s%s%s%s%s%s%s" (.Files.Get "files/bridge-supervisor.sh") (.Files.Get "files/providers/maas.yaml") (.Files.Get "files/wait-for-gateway.py") (.Files.Get "files/skills/write-report/SKILL.md") (.Files.Get "files/skills/write-report/scripts/save_report.py") (.Files.Get "files/very-important-report.md") (toJson .Values) | sha256sum }}
+        checksum/bridge: {{ printf "%s%s%s%s%s%s" (.Files.Get "files/bridge-supervisor.sh") (.Files.Get "files/wait-for-gateway.py") (.Files.Get "files/skills/write-report/SKILL.md") (.Files.Get "files/skills/write-report/scripts/save_report.py") (.Files.Get "files/very-important-report.md") (toJson .Values) | sha256sum }}
     spec:
       serviceAccountName: hermes-openshell-bridge
       securityContext:
@@ -556,8 +554,6 @@ spec:
             - { name: mtls, mountPath: /mtls, readOnly: true }
             - { name: hermes, mountPath: /hermes, readOnly: true }
             - { name: cli-home, mountPath: /home/cli }
-            # For files/providers/maas.yaml, which module 2 imports.
-            - { name: config, mountPath: /config, readOnly: true }
         - name: relay-proxy
           image: {{ .Values.bridge.proxyImage }}
           command:

@@ -53,7 +53,7 @@ PROVIDER_NAME=maas
 # before every start-hermes. A no-op when the sentinel is already gone, so it is
 # safe to repeat.
 seed_model_key() {
-  X 'sed -i "s|'"$KEY_SENTINEL"'|$MODEL_API_KEY|g" /sandbox/hermes/config.yaml' >/dev/null 2>&1
+  X 'sed -i "s|'"$KEY_SENTINEL"'|$OPENAI_API_KEY|g" /sandbox/hermes/config.yaml' >/dev/null 2>&1
 }
 
 secret_value() {
@@ -70,17 +70,17 @@ connect_cli() {
   until openshell sandbox list >/dev/null 2>&1; do sleep 5; done
 }
 
-# Registers the MaaS provider profile and an instance holding the real model
-# key. Done here, not by the participant, so the key stays in the gateway and
-# never reaches the lab guide or a terminal. Idempotent: import and create both
-# fail harmlessly when they already exist.
+# Holds the real model key in the gateway, so it never reaches config.yaml, the
+# lab guide or a terminal. Uses the builtin openai profile with the MaaS base
+# URL, which binds the credential to that host — verified resolving there on
+# cluster-dpvq7. Idempotent: create fails harmlessly when it already exists.
 seed_provider() {
   local key
   key=$(secret_value MODEL_API_KEY)
   [ -n "$key" ] || { log "no MODEL_API_KEY in $HERMES_ENV_SECRET; skipping provider"; return 0; }
-  openshell provider profile import --file /config/maas-provider.yaml >/dev/null 2>&1
-  openshell provider create --name "$PROVIDER_NAME" --type waterplant-maas \
-    --credential "MODEL_API_KEY=$key" >/dev/null 2>&1
+  openshell provider create --name "$PROVIDER_NAME" --type openai \
+    --credential "OPENAI_API_KEY=$key" \
+    --config "base_url=$MODEL_BASE_URL" >/dev/null 2>&1
   log "provider $PROVIDER_NAME ready; attach it with: openshell sandbox create ... --provider $PROVIDER_NAME"
 }
 
