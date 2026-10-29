@@ -1,0 +1,40 @@
+# OpenShell provider profile for this lab's MaaS inference endpoint.
+#
+# Deliberately a custom profile rather than the builtin `openai` type. Both
+# resolve credentials correctly (verified on cluster-dpvq7), but a custom
+# profile names the real host, so the credential binding is explicit and a
+# placeholder sent anywhere else fails closed with credential_endpoint_mismatch.
+# `openai` would also be a misleading label for a Red Hat MaaS endpoint in a lab
+# that teaches OpenAI-compatible is not OpenAI.
+#
+# Not eligible for `openshell inference set` (custom types are rejected), which
+# does not matter: that route serves OpenShell's own platform functions, and
+# Hermes reads its key from config.yaml rather than from the environment.
+id: waterplant-maas
+display_name: Water Plant MaaS
+description: Red Hat MaaS inference endpoint for the AgentOps lab
+category: inference
+inference_capable: true
+credentials:
+- name: api_key
+  description: MaaS model API key
+  # Matches the key name in the hermes-env Secret and MODEL_API_KEY in the
+  # supervisor, so nothing has to be renamed.
+  env_vars:
+  - MODEL_API_KEY
+  required: true
+  auth_style: bearer
+  header_name: authorization
+endpoints:
+- host: maas-rhdp.apps.maas.redhatworkshops.io
+  port: 443
+  protocol: rest
+  access: read-write
+  enforcement: enforce
+binaries:
+# What Hermes actually runs as; seen in the sandbox's own DENIED log lines.
+- /usr/bin/python3.12
+- /usr/bin/python3
+discovery:
+  credentials:
+  - api_key

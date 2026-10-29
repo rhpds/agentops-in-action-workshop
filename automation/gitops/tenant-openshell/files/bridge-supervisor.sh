@@ -44,6 +44,18 @@ strip() { sed 's/\x1b\[[0-9;]*m//g'; }
 # user. Plain `oc exec` would land outside it, where the relay cannot reach.
 X()     { openshell sandbox exec --name "$SANDBOX_NAME" -- /bin/sh -c "$1"; }
 
+# Stands in for the model key in config.yaml until the sandbox exists.
+KEY_SENTINEL=__MODEL_API_KEY__
+PROVIDER_NAME=maas
+
+# Swaps the sentinel for OpenShell's per-sandbox credential placeholder, which
+# only exists inside the sandbox and only once a provider is attached. Must run
+# before every start-hermes. A no-op when the sentinel is already gone, so it is
+# safe to repeat.
+seed_model_key() {
+  X 'sed -i "s|'"$KEY_SENTINEL"'|$MODEL_API_KEY|g" /sandbox/hermes/config.yaml' >/dev/null 2>&1
+}
+
 secret_value() {
   oc get secret "$HERMES_ENV_SECRET" -n "$AGENTOPS_NS" -o "jsonpath={.data.$1}" 2>/dev/null | base64 -d
 }
@@ -56,6 +68,20 @@ connect_cli() {
   openshell gateway select lab >/dev/null 2>&1
   log "waiting for the OpenShell gateway at $GATEWAY_ENDPOINT"
   until openshell sandbox list >/dev/null 2>&1; do sleep 5; done
+}
+
+# Registers the MaaS provider profile and an instance holding the real model
+# key. Done here, not by the participant, so the key stays in the gateway and
+# never reaches the lab guide or a terminal. Idempotent: import and create both
+# fail harmlessly when they already exist.
+seed_provider() {
+  local key
+  key=$(secret_value MODEL_API_KEY)
+  [ -n "$key" ] || { log "no MODEL_API_KEY in $HERMES_ENV_SECRET; skipping provider"; return 0; }
+  openshell provider profile import --file /config/maas-provider.yaml >/dev/null 2>&1
+  openshell provider create --name "$PROVIDER_NAME" --type waterplant-maas \
+    --credential "MODEL_API_KEY=$key" >/dev/null 2>&1
+  log "provider $PROVIDER_NAME ready; attach it with: openshell sandbox create ... --provider $PROVIDER_NAME"
 }
 
 sandbox_phase() {
@@ -229,12 +255,18 @@ prepare() {
   fi
   HERMES_HOME="$WORK/probe" python3 /config/wait-for-gateway.py || return 1
 
+  # The key written here is a sentinel, not the real one: seed_model_key()
+  # replaces it inside the sandbox with OpenShell's placeholder, which the
+  # supervisor's proxy resolves on the wire. Hermes reads custom_providers
+  # api_key as a literal string and never consults the environment
+  # (agent/credential_pool.py takes the CUSTOM_POOL_PREFIX branch), so the
+  # substitution has to land in this file rather than in an env var.
   {
     cat /config/hermes-config.yaml
     printf '\nmodel:\n  default: %s\n  provider: custom\n  base_url: %s\n  api_key: %s\n' \
-      "$MODEL_DEFAULT" "$MODEL_BASE_URL" "$MODEL_API_KEY"
+      "$MODEL_DEFAULT" "$MODEL_BASE_URL" "$KEY_SENTINEL"
     printf '\ncustom_providers:\n  - name: %s\n    base_url: %s\n    api_key: %s\n    model: %s\n' \
-      "$MODEL_DEFAULT" "$MODEL_BASE_URL" "$MODEL_API_KEY" "$MODEL_DEFAULT"
+      "$MODEL_DEFAULT" "$MODEL_BASE_URL" "$KEY_SENTINEL" "$MODEL_DEFAULT"
   } > "$WORK/config.yaml"
   cat > "$WORK/hermes-env.sh" <<EOF
 export HERMES_HOME=/sandbox/.hermes
@@ -360,6 +392,7 @@ restart_hermes() {
     rc=1
   else
     log "restarting Hermes in sandbox $SANDBOX_NAME"
+    seed_model_key
     X "$START_CMD" 2>&1 | strip | sed 's/^/    /'
     rc=${PIPESTATUS[0]}
   fi
@@ -371,6 +404,7 @@ restart_hermes() {
 write_nginx
 until prepare; do log "preparation failed; retrying in 30s"; sleep 30; done
 connect_cli
+seed_provider
 
 if [ "${ROLE_WATCH_ENABLED:-false}" = "true" ]; then
   role_watch_loop &
