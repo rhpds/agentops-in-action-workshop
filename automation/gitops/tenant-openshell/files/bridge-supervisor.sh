@@ -44,17 +44,18 @@ strip() { sed 's/\x1b\[[0-9;]*m//g'; }
 # user. Plain `oc exec` would land outside it, where the relay cannot reach.
 X()     { openshell sandbox exec --name "$SANDBOX_NAME" -- /bin/sh -c "$1"; }
 
-# Stands in for the model key in config.yaml until the sandbox exists.
-KEY_SENTINEL=__MODEL_API_KEY__
+# What config.yaml carries in place of the model key. Hermes expands ${VAR} in
+# config values as it loads them (hermes_cli/config.py, _expand_env_vars), so
+# this resolves inside the sandbox, where OPENAI_API_KEY is OpenShell's
+# per-sandbox credential placeholder. Single-quoted: the bridge writes the
+# reference, never its own value.
+#
+# Resolving at load, rather than seeding the file beforehand, is what makes the
+# participant's own `start-hermes` work. The supervisor only drives a restart on
+# a Keycloak role change or after three failed health checks, so anything seeded
+# from here would miss the path module 2 actually walks.
+KEY_REF='${OPENAI_API_KEY}'
 PROVIDER_NAME=maas
-
-# Swaps the sentinel for OpenShell's per-sandbox credential placeholder, which
-# only exists inside the sandbox and only once a provider is attached. Must run
-# before every start-hermes. A no-op when the sentinel is already gone, so it is
-# safe to repeat.
-seed_model_key() {
-  X 'sed -i "s|'"$KEY_SENTINEL"'|$OPENAI_API_KEY|g" /sandbox/hermes/config.yaml' >/dev/null 2>&1
-}
 
 secret_value() {
   oc get secret "$HERMES_ENV_SECRET" -n "$AGENTOPS_NS" -o "jsonpath={.data.$1}" 2>/dev/null | base64 -d
@@ -255,18 +256,18 @@ prepare() {
   fi
   HERMES_HOME="$WORK/probe" python3 /config/wait-for-gateway.py || return 1
 
-  # The key written here is a sentinel, not the real one: seed_model_key()
-  # replaces it inside the sandbox with OpenShell's placeholder, which the
-  # supervisor's proxy resolves on the wire. Hermes reads custom_providers
-  # api_key as a literal string and never consults the environment
-  # (agent/credential_pool.py takes the CUSTOM_POOL_PREFIX branch), so the
-  # substitution has to land in this file rather than in an env var.
+  # No real key is written here. api_key carries an env reference that Hermes
+  # expands when it loads this file inside the sandbox, where OPENAI_API_KEY is
+  # OpenShell's placeholder and the supervisor's proxy resolves it on the wire.
+  # An unresolved reference is kept verbatim rather than blanked, so a sandbox
+  # started without the provider attached shows ${OPENAI_API_KEY} in its config
+  # instead of silently running with an empty key.
   {
     cat /config/hermes-config.yaml
     printf '\nmodel:\n  default: %s\n  provider: custom\n  base_url: %s\n  api_key: %s\n' \
-      "$MODEL_DEFAULT" "$MODEL_BASE_URL" "$KEY_SENTINEL"
+      "$MODEL_DEFAULT" "$MODEL_BASE_URL" "$KEY_REF"
     printf '\ncustom_providers:\n  - name: %s\n    base_url: %s\n    api_key: %s\n    model: %s\n' \
-      "$MODEL_DEFAULT" "$MODEL_BASE_URL" "$KEY_SENTINEL" "$MODEL_DEFAULT"
+      "$MODEL_DEFAULT" "$MODEL_BASE_URL" "$KEY_REF" "$MODEL_DEFAULT"
   } > "$WORK/config.yaml"
   cat > "$WORK/hermes-env.sh" <<EOF
 export HERMES_HOME=/sandbox/.hermes
@@ -392,7 +393,6 @@ restart_hermes() {
     rc=1
   else
     log "restarting Hermes in sandbox $SANDBOX_NAME"
-    seed_model_key
     X "$START_CMD" 2>&1 | strip | sed 's/^/    /'
     rc=${PIPESTATUS[0]}
   fi
