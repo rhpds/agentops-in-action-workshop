@@ -1,0 +1,208 @@
+{{- if and .Values.kuadrantRecovery.enabled .Values.operators.rhcl.enabled }}
+{{- $ns := .Values.operators.rhcl.namespace -}}
+{{- $r := .Values.kuadrantRecovery -}}
+{{- $wave := add1 (add1 (.Values.operators.rhcl.wave | default .Values.installPlanApprover.defaultWave)) -}}
+{{/*
+Clears the install race that leaves Kuadrant refusing every AuthPolicy forever.
+
+The Kuadrant operator checks for its dependencies ONLY at start-up and caches
+the answer. If it starts before one of them is up, every AuthPolicy in every
+namespace is rejected for the life of the pod:
+
+  Accepted=False  reason=MissingDependency
+  "[Authorino Operator] is not installed, please restart Kuadrant Operator pod
+   once dependency has been installed"
+
+values.yaml already reasons about this for the GATEWAY API PROVIDER (istio) and
+buys ordering by installing RHCL late, at wave 6. That argument does not extend
+to the Authorino variant, and the same file says why: OLM resolves rhcl,
+authorino, limitador, dns and mcp-gateway into ONE InstallPlan. The Kuadrant
+pod and the authorino-operator Deployment therefore come up within seconds of
+each other by construction, and no sync wave can order two operators inside a
+single plan. Observed on cluster-slkjc: Kuadrant's pod started 15:16:09Z,
+stamped MissingDependency at 15:16:35Z, and authorino-operator reported
+Available at 15:16:38Z. Three seconds.
+
+So this does not try to order it. It detects the state and clears it, which is
+what the operator's own message prescribes.
+
+What it cost when nothing did: all six AuthPolicies across three participant
+namespaces stuck Accepted=False, no Authorino instance ever created, no
+kuadrant-auth EnvoyFilter on any gateway, and an unauthenticated POST /mcp
+answering 200 for three and a half hours — with every ArgoCD Application in
+the cluster showing Synced/Healthy, because a Kuadrant CR has no health check
+and `bootstrap` owns it. Module 5's one-line change appears to do nothing.
+
+DELETES THE POD, and that distinction is load-bearing. The operator Deployment
+is owned by ClusterServiceVersion/rhcl-operator, so OLM reconciles its spec
+back within seconds: `oc rollout restart` has its restartedAt annotation
+stripped, the new ReplicaSet is scaled to zero, and the original pod never
+dies. Verified on cluster-slkjc — generation went 1 -> 3 and nothing restarted.
+OLM reconciles the Deployment SPEC, not pod existence, so deleting the pod
+works and the ReplicaSet recreates it.
+
+Deliberately NOT paired with a resourceHealthChecks entry for Kuadrant. A
+Degraded CR at wave {{ add1 (.Values.operators.rhcl.wave | default .Values.installPlanApprover.defaultWave) }} would stop ArgoCD ever starting wave {{ $wave }}, so the check
+meant to reveal the problem would block the Job that fixes it — the same wedge
+templates/argocd-subscription-health.yaml exists to undo. This Job failing
+after {{ $r.attempts }} attempts already turns `bootstrap` red, with the reason in its log.
+
+SYNC WAVE {{ $wave }}: one after the Kuadrant CR in mcp-gateway-platform.yaml, derived
+from rhcl's wave the same way, so moving that wave cannot strand this one.
+*/}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kuadrant-dependency-recovery
+  namespace: {{ $ns }}
+  labels:
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
+---
+{{/*
+Namespace-scoped: everything this Job touches lives in RHCL's own namespace.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kuadrant-dependency-recovery
+  namespace: {{ $ns }}
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
+rules:
+  - apiGroups: [kuadrant.io]
+    resources: [kuadrants]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list, watch]
+  # The one mutation: restarting the operator pod.
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kuadrant-dependency-recovery
+  namespace: {{ $ns }}
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: kuadrant-dependency-recovery
+subjects:
+  - kind: ServiceAccount
+    name: kuadrant-dependency-recovery
+    namespace: {{ $ns }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kuadrant-dependency-recovery
+  namespace: {{ $ns }}
+  labels:
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    # A changed value re-runs cleanly; a plain Job's spec is immutable once
+    # created and would fail to apply on the next sync.
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
+spec:
+  # The script retries internally; a Job retry would re-run the whole wait.
+  backoffLimit: 0
+  activeDeadlineSeconds: {{ $r.timeoutSeconds }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kuadrant-dependency-recovery
+        rhdp.redhat.com/lab: agentops-in-action
+    spec:
+      serviceAccountName: kuadrant-dependency-recovery
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: recover
+          image: {{ $r.image }}
+          imagePullPolicy: IfNotPresent
+          env:
+            # oc writes its discovery cache under $HOME, and the image's is
+            # not writable under a random UID.
+            - { name: HOME, value: /tmp }
+            - { name: NS, value: {{ $ns | quote }} }
+            - { name: DEP, value: {{ $r.dependencyDeployment | quote }} }
+            - { name: KOP, value: {{ $r.operatorDeployment | quote }} }
+            - { name: SETTLE, value: {{ $r.settleSeconds | quote }} }
+            - { name: ATTEMPTS, value: {{ $r.attempts | quote }} }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits:   { cpu: 200m, memory: 256Mi }
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -uo pipefail
+              log()  { echo "[$(date -u +%H:%M:%S)] $*"; }
+              fail() { log "FAILED: $*"; exit 1; }
+
+              cond() {
+                oc get kuadrant kuadrant -n "$NS" \
+                  -o jsonpath="{.status.conditions[?(@.type=='Ready')].$1}" 2>/dev/null
+              }
+              ready()  { [ "$(cond status)" = "True" ]; }
+
+              # Poll until Ready, or until Kuadrant stamps the one reason a
+              # restart fixes, whichever comes first. A cluster that won the
+              # race returns from here in seconds; a cluster that lost it has
+              # usually stamped MissingDependency already, so neither case
+              # waits out the full window.
+              settle() {
+                local end=$((SECONDS + SETTLE))
+                while : ; do
+                  ready && return 0
+                  [ "$(cond reason)" = "MissingDependency" ] && return 1
+                  [ "$SECONDS" -ge "$end" ] && return 1
+                  sleep 5
+                done
+              }
+
+              # A restart before the dependency is actually up just re-loses
+              # the race, so establish that first.
+              log "waiting for Deployment/$DEP to be Available"
+              oc wait "deploy/$DEP" -n "$NS" --for=condition=Available --timeout=300s >/dev/null \
+                || fail "$DEP never became Available: Kuadrant has no dependency to find, and restarting it would not help"
+
+              for attempt in $(seq 1 "$ATTEMPTS"); do
+                if settle; then
+                  log "Kuadrant reports Ready; nothing to do"
+                  exit 0
+                fi
+                log "Kuadrant is not Ready (reason=$(cond reason)): $(cond message)"
+                if [ "$(cond reason)" != "MissingDependency" ]; then
+                  fail "this Job only clears MissingDependency, and the reason is '$(cond reason)'. Restarting the operator will not fix it."
+                fi
+                # Delete the POD, not the Deployment's pod template: OLM owns
+                # the Deployment through the CSV and reverts a rollout restart.
+                log "restarting the Kuadrant operator pod (attempt $attempt/$ATTEMPTS)"
+                oc delete pod -n "$NS" -l app=kuadrant,control-plane=controller-manager --wait=true >/dev/null \
+                  || fail "could not delete the Kuadrant operator pod"
+                oc rollout status "deploy/$KOP" -n "$NS" --timeout=180s >/dev/null \
+                  || fail "the Kuadrant operator did not come back after its pod was deleted"
+              done
+
+              fail "Kuadrant never reported Ready after $ATTEMPTS restarts. Last condition: $(cond reason) - $(cond message). Every AuthPolicy will be rejected and the MCP gateways will enforce nothing."
+{{- end }}

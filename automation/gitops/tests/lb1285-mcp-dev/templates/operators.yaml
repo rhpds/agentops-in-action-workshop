@@ -1,0 +1,83 @@
+{{/*
+Operator installation for the AgentOps in Action lab.
+
+Every Subscription pins an exact startingCSV and uses installPlanApproval:
+Manual. Nothing upgrades on its own.
+
+That is deliberate. This lab is built on Trial Preview components whose APIs
+change between builds — an unattended upgrade between a dry run and delivery
+day would silently re-base the policy CRs the whole lab depends on. Pinned
+versions are declared in values.yaml so they are visible and reviewable in git
+rather than buried in a template.
+
+Because approval is Manual, a human (or the bootstrap playbook) must approve the
+generated InstallPlan before each operator actually installs:
+
+    oc get installplan -A
+    oc patch installplan <name> -n <ns> --type merge -p '{"spec":{"approved":true}}'
+
+Sync waves: namespaces (-4) -> OperatorGroups (-3) -> Subscriptions (-2).
+The DataScienceCluster lands later, in datasciencecluster.yaml.
+
+One Namespace and OperatorGroup per NAMESPACE, not per operator. Operators that
+depend on each other must share a namespace — see the mcpGatewayOperator note in
+values.yaml — and rendering these per operator would then emit duplicates that
+ArgoCD refuses to apply.
+*/}}
+
+{{- $namespaces := dict }}
+{{- range $key, $op := .Values.operators }}
+{{- if and $op.enabled (not (hasKey $namespaces $op.namespace)) }}
+{{- $_ := set $namespaces $op.namespace true }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $op.namespace }}
+  labels:
+    app.kubernetes.io/managed-by: argocd
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "-4"
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: {{ $op.namespace }}-og
+  namespace: {{ $op.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+spec:
+  # Every operator here is AllNamespaces-mode, so targetNamespaces is
+  # deliberately empty rather than scoped.
+  upgradeStrategy: Default
+{{- end }}
+{{- end }}
+
+{{- range $key, $op := .Values.operators }}
+{{- if $op.enabled }}
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  # Named after the package, not the values key: the key is camelCase for
+  # readability in values.yaml, which is not a valid RFC 1123 object name.
+  name: {{ $op.package }}
+  namespace: {{ $op.namespace }}
+  labels:
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    # Per-operator, because one of them must install after the wave that brings
+    # istio — see rhcl in values.yaml. The approver renders one Job per distinct
+    # wave to match, since it has to share a wave with what it approves.
+    argocd.argoproj.io/sync-wave: {{ $op.wave | default $.Values.installPlanApprover.defaultWave | quote }}
+spec:
+  name: {{ $op.package }}
+  channel: {{ $op.channel }}
+  source: {{ $op.source | default "redhat-operators" }}
+  sourceNamespace: {{ $op.sourceNamespace | default "openshift-marketplace" }}
+  # Pinned. Do not replace with a floating channel default.
+  startingCSV: {{ $op.csv }}
+  installPlanApproval: Manual
+{{- end }}
+{{- end }}
