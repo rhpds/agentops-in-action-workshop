@@ -1,0 +1,210 @@
+{{- if .Values.installPlanApprover.enabled }}
+{{/*
+Approves the InstallPlans for this lab's pinned operators, and nothing else.
+
+Why this exists: every Subscription in operators.yaml sets installPlanApproval
+Manual, which is correct for Tech Preview components whose APIs shift between
+builds — an unattended upgrade between a dry run and delivery day would silently
+re-base the policy CRs the whole lab rests on. But nothing approved the initial
+InstallPlan, so a freshly provisioned cluster simply stopped: observed on
+cluster-mc86p sitting 47 minutes with both Subscriptions in UpgradePending, no
+CSVs, and the DataScienceCluster, MLflow, EvalHub and ClusterRole all Missing
+behind the wave gate. That is not viable for an event.
+
+This Job restores the intent of the pin rather than removing it. It approves an
+InstallPlan only when:
+
+  1. it contains the exact startingCSV pinned in values.yaml, AND
+  2. every CSV it contains is either pinned or listed under that operator's
+     `dependencies`.
+
+A later InstallPlan produced by a catalog refresh carries different CSVs, fails
+(1), and is left alone — so the initial install is unattended and upgrades
+still are not.
+
+(2) exists because an InstallPlan is not one-CSV-per-plan. RHCL's plan carries
+five: authorino-operator, mcp-gateway, rhcl-operator, limitador-operator and
+dns-operator, in that order. An earlier revision matched only
+clusterServiceVersionNames[0], which is authorino-operator — so the pinned
+rhcl-operator and mcp-gateway CSVs never matched, and a fresh cluster would
+have stalled exactly as cluster-mc86p did. Matching anywhere in the list fixes
+that; the allowlist stops "anywhere in the list" from approving whatever else
+OLM happened to resolve alongside.
+
+Do NOT replace this with installPlanApproval: Automatic. That defeats the pin
+over time, which is the outcome operators.yaml argues against at length.
+
+SYNC WAVE: the SAME wave as the Subscriptions it approves, and that is
+load-bearing. ArgoCD applies every resource in a wave and waits for them to be
+healthy before moving on, so an approver in an EARLIER wave waits for
+InstallPlans the Subscriptions have not created yet. (A LATER wave used to
+deadlock outright, the sync being blocked on the unapproved Subscription the
+approver would have unblocked; templates/argocd-subscription-health.yaml now
+reports pinned Subscriptions Healthy, so that is a stall rather than a deadlock
+— still not something to rely on.)
+
+Which is why this renders ONE JOB PER DISTINCT WAVE rather than one Job for
+everything. Most operators sit at installPlanApprover.defaultWave (-2); rhcl and
+mcp-gateway deliberately install at wave 6, after the DataScienceCluster brings
+istio (see values.yaml). A single approver at -2 would block forever on their
+InstallPlans, which OLM has no reason to create for another five waves.
+
+Each Job waits only for its own wave's pinned CSVs. The allowlist stays global,
+because one InstallPlan can carry CSVs from several operators — rhcl's carries
+five — and a plan is judged by everything inside it.
+
+Runs as a Sync hook with BeforeHookCreation so a changed pin re-runs cleanly —
+a plain Job would fail to apply on the next sync, because a Job's spec is
+immutable once created.
+*/}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: installplan-approver
+  namespace: {{ .Values.installPlanApprover.namespace }}
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "-2"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: agentops-installplan-approver
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "-2"
+rules:
+  # Cluster-scoped because the InstallPlans live in one namespace per operator,
+  # and that set is driven by values.yaml rather than fixed here.
+  - apiGroups: [operators.coreos.com]
+    resources: [installplans]
+    verbs: [get, list, watch, patch, update]
+  - apiGroups: [operators.coreos.com]
+    resources: [subscriptions, clusterserviceversions]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: agentops-installplan-approver
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "-2"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: agentops-installplan-approver
+subjects:
+  - kind: ServiceAccount
+    name: installplan-approver
+    namespace: {{ .Values.installPlanApprover.namespace }}
+{{- $default := .Values.installPlanApprover.defaultWave }}
+{{- $waves := dict }}
+{{- range $k, $op := .Values.operators }}
+{{- if $op.enabled }}
+{{- $_ := set $waves (toString ($op.wave | default $default)) true }}
+{{- end }}
+{{- end }}
+{{- range $wave, $_ := $waves }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  # The default wave keeps the bare name, so the common case reads as it always
+  # has and only a late wave carries a suffix.
+  name: installplan-approver{{ if ne $wave (toString $default) }}-wave{{ $wave }}{{ end }}
+  namespace: {{ $.Values.installPlanApprover.namespace }}
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: {{ $.Values.installPlanApprover.timeoutSeconds }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: installplan-approver
+        rhdp.redhat.com/lab: agentops-in-action
+    spec:
+      serviceAccountName: installplan-approver
+      restartPolicy: Never
+      containers:
+        - name: approve
+          image: {{ $.Values.installPlanApprover.image }}
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits:   { cpu: 200m, memory: 256Mi }
+          command: [/bin/sh, -c]
+          args:
+            - |
+              set -eu
+              DEADLINE=$(( $(date +%s) + {{ $.Values.installPlanApprover.timeoutSeconds }} - 30 ))
+
+              # ns=csv pairs for the operators in THIS wave only. Waiting on a
+              # later wave's CSVs here would block until the deadline, since
+              # their Subscriptions do not exist yet.
+              PAIRS="{{- range $k, $op := $.Values.operators }}{{- if and $op.enabled (eq (toString ($op.wave | default $default)) $wave) }}{{ $op.namespace }}={{ $op.csv }} {{ end }}{{- end }}"
+              # Every CSV an approved InstallPlan may contain: all pinned CSVs plus
+              # their declared dependencies, across every wave — one plan can carry
+              # several operators' CSVs, and it is judged by all of them.
+              ALLOWED=" {{- range $k, $op := $.Values.operators }}{{- if $op.enabled }} {{ $op.csv }}{{- range $op.dependencies }} {{ . }}{{- end }}{{- end }}{{- end }} "
+              echo "waiting to approve InstallPlans for: $PAIRS"
+              echo "allowed CSVs: $ALLOWED"
+
+              for pair in $PAIRS; do
+                NS="${pair%%=*}"
+                CSV="${pair#*=}"
+                echo "--- $NS / $CSV"
+                while true; do
+                  # name|approved|["csv-a","csv-b",...] — one line per InstallPlan.
+                  # grep for the quoted CSV so rhcl-operator.v1.4.3 cannot match a
+                  # longer name that merely contains it.
+                  LINE=$(oc get installplan -n "$NS" \
+                        -o jsonpath='{range .items[*]}{.metadata.name}{"|"}{.spec.approved}{"|"}{.spec.clusterServiceVersionNames}{"\n"}{end}' \
+                        2>/dev/null | grep -F "\"$CSV\"" | head -1 || true)
+
+                  if [ -n "$LINE" ]; then
+                    NAME=$(echo "$LINE" | cut -d'|' -f1)
+                    APPROVED=$(echo "$LINE" | cut -d'|' -f2)
+                    CSVS=$(echo "$LINE" | cut -d'|' -f3- | tr -d '[]"' | tr ',' ' ')
+
+                    if [ "$APPROVED" = "true" ]; then
+                      echo "    $NAME already approved — nothing to do"
+                      break
+                    fi
+
+                    UNEXPECTED=""
+                    for c in $CSVS; do
+                      case "$ALLOWED" in
+                        *" $c "*) ;;
+                        *) UNEXPECTED="$UNEXPECTED $c" ;;
+                      esac
+                    done
+                    if [ -n "$UNEXPECTED" ]; then
+                      echo "    REFUSING $NAME: contains CSVs that are neither pinned nor declared:$UNEXPECTED"
+                      echo "    Review them, then add to operators.<name>.dependencies in values.yaml if intended."
+                      exit 1
+                    fi
+
+                    echo "    approving $NAME ($CSVS)"
+                    oc patch installplan "$NAME" -n "$NS" --type merge -p '{"spec":{"approved":true}}'
+                    break
+                  fi
+
+                  if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+                    echo "    TIMEOUT: no InstallPlan containing $CSV appeared in $NS."
+                    echo "    Most likely the pinned startingCSV no longer exists in the catalog —"
+                    echo "    re-verify operators.*.csv in values.yaml against this cluster."
+                    exit 1
+                  fi
+                  sleep 5
+                done
+              done
+              echo "wave {{ $wave }}: all pinned InstallPlans approved"
+{{- end }}
+{{- end }}

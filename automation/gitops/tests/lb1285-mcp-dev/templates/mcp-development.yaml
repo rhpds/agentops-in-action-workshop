@@ -1,0 +1,109 @@
+{{- if .Values.operators.mcpGatewayOperator.enabled }}
+{{- fail "The LB1285 development fixture must not run the OLM MCP operator alongside upstream MCP" }}
+{{- end }}
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: lb1285-mcp-development
+  namespace: openshift-gitops
+  annotations:
+    argocd.argoproj.io/sync-wave: "6"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Kuadrant/mcp-gateway.git
+    targetRevision: 3ba95b69effe22e47552d64e7339f429322a4a18
+    path: charts/mcp-gateway
+    helm:
+      releaseName: lb1285-mcp-development
+      valuesObject:
+        fullnameOverride: lb1285-mcp-development
+        imageController:
+          repository: ghcr.io/kuadrant/mcp-controller@sha256:9eb9a8bf94d4f44288e7d9636d79e9d35d1e9d3e30e068321a458c04bde419e3
+        image:
+          repository: ghcr.io/kuadrant/mcp-gateway@sha256:b2c920257a04a54b85c524f197824caa0d90df0c8e37fd3fc51dd94ce3bd83e2
+        gateway:
+          create: false
+        mcpGatewayExtension:
+          create: false
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kuadrant-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: false
+    syncOptions:
+      - ServerSideApply=true
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: lb1285-mcp-readiness
+  namespace: openshift-gitops
+  annotations:
+    argocd.argoproj.io/sync-wave: "6"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: lb1285-mcp-readiness
+  namespace: openshift-gitops
+  annotations:
+    argocd.argoproj.io/sync-wave: "6"
+rules:
+  - apiGroups: [argoproj.io]
+    resources: [applications]
+    resourceNames: [lb1285-mcp-development]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: lb1285-mcp-readiness
+  namespace: openshift-gitops
+  annotations:
+    argocd.argoproj.io/sync-wave: "6"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: lb1285-mcp-readiness
+subjects:
+  - kind: ServiceAccount
+    name: lb1285-mcp-readiness
+    namespace: openshift-gitops
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lb1285-mcp-readiness
+  namespace: openshift-gitops
+  annotations:
+    argocd.argoproj.io/sync-wave: "7"
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 960
+  template:
+    spec:
+      serviceAccountName: lb1285-mcp-readiness
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: readiness
+          image: quay.io/openshift/origin-cli:4.22
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          command: [/bin/bash, -ceu]
+          args:
+            - |
+              oc wait -n openshift-gitops application/lb1285-mcp-development \
+                --for=jsonpath='{.status.sync.status}'=Synced --timeout=450s
+              oc wait -n openshift-gitops application/lb1285-mcp-development \
+                --for=jsonpath='{.status.health.status}'=Healthy --timeout=450s
