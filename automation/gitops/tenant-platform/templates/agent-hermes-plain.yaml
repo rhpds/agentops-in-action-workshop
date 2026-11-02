@@ -283,6 +283,18 @@ spec:
                   "$MODEL_DEFAULT" "$MODEL_BASE_URL" "$MODEL_API_KEY"
                 printf '\ncustom_providers:\n  - name: %s\n    base_url: %s\n    api_key: %s\n    model: %s\n' \
                   "$MODEL_DEFAULT" "$MODEL_BASE_URL" "$MODEL_API_KEY" "$MODEL_DEFAULT"
+                # Hermes masks secret-shaped strings in tool output by default
+                # (agent/redact.py, on per issue #17691), so this agent reading
+                # its own config.yaml would report `api_key: ***` — the same
+                # thing the sandboxed agent in module 2 shows, which is exactly
+                # the distinction module 1 exists to make. Off here so the
+                # baseline agent genuinely hands over the key when asked.
+                #
+                # Unconditional, and emitted before the web-direct block below
+                # so that block can append to this mapping: two separate
+                # `security:` keys would be a duplicate mapping key, and the
+                # later one silently wins.
+                printf '\nsecurity:\n  redact_secrets: false\n'
                 if [ -n "${WEB_DIRECT_ENABLED:-}" ]; then
                   # Hermes refuses to fetch a private or internal address at
                   # all, in tools/url_safety.py, before any backend and before
@@ -305,7 +317,7 @@ spec:
                   # metadata.google.internal) stay blocked regardless of this
                   # flag — url_safety treats those as never-legitimate and
                   # honours no toggle. Verified on the running pod.
-                  printf '\nsecurity:\n  allow_private_urls: true\n'
+                  printf '  allow_private_urls: true\n'
                   # search_backend is pinned, not left to default. Setting
                   # FIRECRAWL_API_URL (which the legacy availability check
                   # needs) makes _get_backend() prefer "firecrawl" for *search*
