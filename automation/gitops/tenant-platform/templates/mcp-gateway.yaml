@@ -184,6 +184,13 @@ spec:
   # telemetry-mcp -> telemetry_, so get_pump_status becomes
   # telemetry_get_pump_status on the federated list.
   prefix: {{ printf "%s_" (trimSuffix "-mcp" .name) }}
+{{- with $.Values.mcpGateway.supportedProtocolVersions }}
+  {{- if ne $mcpApi "mcp.kuadrant.io/v1" }}
+    {{- fail "mcpGateway.supportedProtocolVersions requires mcp.kuadrant.io/v1" }}
+  {{- end }}
+  supportedProtocolVersions:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
   hint: {{ .hint | quote }}
   category:
     - {{ trimSuffix "-mcp" .name }}
