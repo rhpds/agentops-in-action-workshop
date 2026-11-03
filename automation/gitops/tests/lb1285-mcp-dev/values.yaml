@@ -218,14 +218,15 @@ kuadrantRecovery:
   dependencyDeployment: authorino-operator
   # Waited on with `oc rollout status` after its pod is deleted.
   operatorDeployment: kuadrant-operator-controller-manager
-  # How long to let Kuadrant reach Ready before concluding a restart is needed.
-  # Rarely spent in full: the poll also returns the moment MissingDependency
-  # appears, and a cluster that won the race is Ready within seconds.
+  # Minimum settling time between MissingDependency-triggered restarts.
   settleSeconds: 120
-  # Pod restarts to try before failing the sync and turning `bootstrap` red.
+  # Maximum pod restarts; other not-ready conditions never trigger a restart.
   attempts: 3
-  # Bounds the whole Job: the dependency wait plus `attempts` restarts.
-  timeoutSeconds: 900
+  # Allow startup discovery and dependent resources to converge after the
+  # dependency Deployment is Available. Persistent failures still fail closed.
+  readinessTimeoutSeconds: 600
+  # Bounds the whole Job, including the 300s dependency wait and API latency.
+  timeoutSeconds: 1200
 
 # ---------------------------------------------------------------------------
 # MCP Gateway — cluster-level pieces (templates/mcp-gateway-platform.yaml)
