@@ -33,6 +33,15 @@ metadata:
     argocd.argoproj.io/sync-wave: "10"
   finalizers:
     - resources-finalizer.argocd.argoproj.io
+    # tenant-platform carries the mcp-teardown PreDelete hook, and Argo CD adds
+    # these two itself the first time it sees one. Declared here only so git
+    # matches the live object: without them this Application is the single
+    # resource that holds every bootstrap-tenant-<user> parent permanently
+    # OutOfSync, which is noise that would mask a real drift later. Argo CD owns
+    # their behaviour -- removing the hook from tenant-platform means removing
+    # these too, or the parent goes OutOfSync again in the other direction.
+    - pre-delete-finalizer.argocd.argoproj.io
+    - pre-delete-finalizer.argocd.argoproj.io/cleanup
 spec:
   project: {{ .Values.gitops.argocdProject }}
   source:
