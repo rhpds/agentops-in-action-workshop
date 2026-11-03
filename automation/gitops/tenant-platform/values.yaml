@@ -199,6 +199,10 @@ mcpGateway:
   # always sets. The participant Role grants on the mcp.kuadrant.io GROUP, so
   # RBAC needs no change either.
   apiVersion: mcp.kuadrant.io/v1alpha1
+  # Optional override for upstreams whose discovery omits supported versions.
+  # Use only versions verified against every backend; requires the v1 CRD.
+  # Empty preserves automatic protocol discovery.
+  supportedProtocolVersions: []
   # bootstrap-infra's AdminNetworkPolicy selects Envoy pods by this name.
   gatewayName: mcp-gateway
   # RHOAI's class: same controller (openshift.io/gateway-controller/v1) and no
