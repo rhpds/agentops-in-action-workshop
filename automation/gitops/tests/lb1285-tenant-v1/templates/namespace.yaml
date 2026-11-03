@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ include "tenant.namespace" . }}
+  labels:
+    app.kubernetes.io/managed-by: argocd
+    rhdp.redhat.com/lab: agentops-in-action
+    rhdp.redhat.com/participant: {{ include "tenant.username" . }}
+    opendatahub.io/dashboard: "true"
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
