@@ -52,6 +52,9 @@
     namespace: "{{ t_ns }}"
   loop:
     - { api: mcp.x-k8s.io/v1alpha1, kind: MCPServer }
+    # Placeholder. MCPServerRegistration is gathered separately below, because
+    # its served API version is no longer fixed — see that task. Left in place
+    # so the positional split underneath keeps its indices.
     - { api: mcp.kuadrant.io/v1alpha1, kind: MCPServerRegistration }
     - { api: gateway.networking.k8s.io/v1, kind: Gateway }
     - { api: v1, kind: Service }
@@ -74,6 +77,50 @@
     t_quotas: "{{ t_misc.results[4].resources | default([]) }}"
     t_routes: "{{ t_misc.results[5].resources | default([]) }}"
     t_configmaps: "{{ t_misc.results[6].resources | default([]) }}"
+
+# MCPServerRegistration's served API version is NOT fixed across builds, and
+# guessing wrong fails silently in the worst possible way.
+#
+# The OLM bundle this lab pins (mcp-gateway.v0.7.1) serves v1alpha1. Upstream
+# as of Kuadrant/mcp-gateway@3ba95b6 serves v1 and marks v1alpha1
+# `served: false` — not deprecated, not readable, gone. Verified against the
+# CRDs in that commit's charts/mcp-gateway/crds/.
+#
+# Asking for a version the cluster does not serve does not raise here: with
+# `failed_when: false`, k8s_info simply returns no resources. TEN-MCP-02 would
+# then report "0/3 registrations Ready, 0/18 tools federated" — which is
+# character-for-character the known, benign NetworkPolicy warning this lab
+# already emits. A real regression would arrive wearing a familiar costume and
+# nobody would look twice.
+#
+# So both versions are asked for and whichever answers wins, with the version
+# recorded in the finding. The day the tenant chart moves to v1, the detail
+# line says so instead of going quiet.
+- name: "{{ hc_tenant }} | List MCPServerRegistrations across every served API version"
+  kubernetes.core.k8s_info:
+    api_version: "{{ item }}"
+    kind: MCPServerRegistration
+    namespace: "{{ t_ns }}"
+  loop: "{{ hc_mcp_registration_apis }}"
+  loop_control:
+    label: "{{ item }}"
+  register: t_reg_probe
+  failed_when: false
+
+- name: "{{ hc_tenant }} | Take whichever API version answered"
+  ansible.builtin.set_fact:
+    t_registrations: "{{ _answered | map(attribute='resources') | first | default([], true) }}"
+    # '' when nothing answered, which TEN-MCP-02 reports rather than hiding.
+    t_registration_api: "{{ _answered | map(attribute='item') | first | default('', true) }}"
+  vars:
+    # Ordered by hc_mcp_registration_apis, so putting the current version
+    # first makes the common case a single hit. A version that is served but
+    # empty is not an answer — on a half-torn-down tenant both can be served
+    # with only one holding objects.
+    _answered: >-
+      {{ t_reg_probe.results | default([])
+         | selectattr('resources', 'defined')
+         | selectattr('resources', 'ne', []) | list }}
 
 - name: "{{ hc_tenant }} | Read the Showroom route"
   kubernetes.core.k8s_info:
@@ -488,6 +535,15 @@
       detail: >-
         {{ _reg.ready ~ '/' ~ (hc_mcp_servers | length) ~ ' registrations Ready, '
            ~ _reg.tools ~ '/' ~ hc_mcp_tool_total ~ ' tools federated'
+           ~ (' [' ~ t_registration_api ~ ']' if t_registration_api
+              else ' — NO MCPServerRegistration API answered. Tried '
+                   ~ (hc_mcp_registration_apis | join(', '))
+                   ~ '. Either the tenant chart renders a version this cluster'
+                   ~ ' does not serve (mcp-gateway 0.7.1 serves v1alpha1,'
+                   ~ ' upstream serves v1 and marks v1alpha1 served:false), or'
+                   ~ ' the platform Application never synced. Check'
+                   ~ ' TEN-ARGO-02 and the apiVersion in'
+                   ~ ' tenant-platform/templates/mcp-gateway.yaml.')
            ~ (' — registration status is unreadable because the baseline NetworkPolicy blocks the'
               ~ ' mcp-gateway-controller in kuadrant-system from probing mcp-gateway.' ~ t_ns
               ~ '.svc:8080/status. The data plane is unaffected; TEN-AGT-01 and e2e module 1'
