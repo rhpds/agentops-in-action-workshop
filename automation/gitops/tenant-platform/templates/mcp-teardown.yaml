@@ -1,0 +1,174 @@
+{{- if .Values.mcpGateway.enabled }}
+{{- $ns := printf "%s-%s" .Values.username .Values.namespaceSuffix -}}
+{{- $sa := "mcp-teardown" -}}
+{{/*
+Makes this tenant deletable. Without it, destroy deadlocks.
+
+THE DEADLOCK
+
+ArgoCD prunes in REVERSE sync-wave order, and this chart's waves are correct
+for creation and exactly backwards for deletion:
+
+    HTTPRoute              wave 2     (must exist before a registration
+    MCPServerRegistration  wave 3      can target it)
+
+So on delete the registrations go first, while their HTTPRoutes are still
+there. mcp-gateway-controller's cleanup path rewrites the route's status and
+the API server rejects the patch:
+
+    HTTPRoute "telemetry-mcp-route" is invalid:
+      status.parents[1].conditions: Required value
+
+The route carries two status parents -- parents[0] is this chart's listener
+(sectionName mcps, 2 conditions), parents[1] is the controller's own
+(sectionName null, 1 condition) -- and the controller emits parents[1] with an
+empty conditions list, which the CRD forbids. The reconcile errors, so
+mcp.kuadrant.io/finalizer is never removed; the registration never goes away;
+ArgoCD never reaches wave 2; the HTTPRoute that would unblock the whole thing
+is never deleted. A circular wait, and nothing times out of it.
+
+The invalid patch is an upstream controller bug (Kuadrant/mcp-gateway, the
+one #1574 addresses). The ORDER that walks into it is ours, and that is what
+this fixes: delete the controller's objects before ArgoCD prunes anything, so
+the bad patch is never attempted.
+
+WHY A HOOK AND NOT A SYNC WAVE
+
+Creation needs routes before registrations; deletion needs the reverse. One
+wave number cannot be both. Raising HTTPRoute above MCPServerRegistration
+would fix delete and break create -- registrations would reconcile against a
+route that does not exist yet and sit in error until the controller retried.
+A PreDelete hook orders deletion without touching creation at all.
+
+MEASURED, cluster-z4r9v, 7 tenants, deleting one tenant end to end:
+
+    unlucky ordering, no fix      stuck   >605s, still holding finalizers
+    lucky ordering, no fix        passed   228s, 147s of it stalled
+    teardown first                passed   105s
+
+agnosticd's ocp4_workload_gitops_bootstrap waits 30 retries, roughly 5
+minutes, then fails the whole destroy -- AWX job 109384. The lucky case
+cleared it with 72 seconds to spare; the unlucky case never clears it.
+
+The Job is best-effort by design. `|| true` throughout and a short deadline:
+if it cannot delete something, destroy should carry on and fail loudly in
+agnosticd rather than wedge here. It is also idempotent -- deleting objects
+that are already gone is a no-op -- so a retried destroy is safe.
+*/}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $sa }}
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/part-of: water-plant
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    # Created on sync, not as part of the hook: a PreDelete hook cannot create
+    # the identity it runs as, because by then the Application is going away.
+    argocd.argoproj.io/sync-wave: "0"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $sa }}
+  namespace: {{ $ns }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+rules:
+  # Exactly the two kinds the teardown deletes, and nothing else. No get on
+  # secrets, no reach outside this namespace.
+  - apiGroups: ["mcp.kuadrant.io"]
+    resources: ["mcpgatewayextensions", "mcpserverregistrations"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["httproutes"]
+    verbs: ["get", "list", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $sa }}
+  namespace: {{ $ns }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $sa }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $sa }}
+    namespace: {{ $ns }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mcp-teardown
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: mcp-teardown
+    app.kubernetes.io/part-of: water-plant
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/hook: PreDelete
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 0
+  # Shorter than agnosticd's ~5 minute wait on purpose. If this cannot finish
+  # in two minutes the destroy should proceed and fail there, where the
+  # operator is looking, rather than silently eating the budget here.
+  activeDeadlineSeconds: 120
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mcp-teardown
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ $sa }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: teardown
+          image: {{ .Values.mcpGateway.teardownImage | default "registry.redhat.io/openshift4/ose-cli-rhel9:latest" }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -u
+              NS={{ $ns }}
+
+              # 1. The extension first. It owns the broker and, with
+              #    httpRouteManagement Enabled, the HTTPRoutes -- so while it
+              #    exists the controller recreates any route deleted under it,
+              #    and step 2 would never converge.
+              echo "[1/3] deleting MCPGatewayExtension"
+              oc -n "$NS" delete mcpgatewayextension --all --ignore-not-found --timeout=40s || true
+
+              # 2. The routes, now that nothing recreates them. This is the
+              #    step that matters: with the routes gone, the controller has
+              #    no status to patch and the finalizer comes off cleanly.
+              echo "[2/3] deleting HTTPRoutes"
+              oc -n "$NS" delete httproute --all --ignore-not-found --timeout=40s || true
+
+              # 3. The registrations, which can now finalize. Left to ArgoCD
+              #    this would be the FIRST thing deleted, which is the bug.
+              echo "[3/3] deleting MCPServerRegistrations"
+              oc -n "$NS" delete mcpserverregistration --all --ignore-not-found --timeout=40s || true
+
+              echo "teardown done; remaining:"
+              oc -n "$NS" get mcpserverregistrations,mcpgatewayextensions,httproutes \
+                 --no-headers 2>/dev/null || true
+              exit 0
+          resources:
+            requests: {cpu: 10m, memory: 64Mi}
+            limits: {memory: 256Mi}
+{{- end }}
