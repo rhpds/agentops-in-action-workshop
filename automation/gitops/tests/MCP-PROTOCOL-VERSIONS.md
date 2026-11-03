@@ -15,12 +15,6 @@ This is a compatibility declaration, not protocol translation. Verify every
 listed version against every backend before enabling it. The override applies
 to all three registrations and must not be used if their support differs.
 
-Run the offline regression checks with Helm, Python 3 and PyYAML installed:
-
-```sh
-python3 automation/gitops/tests/test-mcp-protocol-versions.py
-```
-
 Before accepting the LB1285 override, verify backend negotiation, then tools
 visibility through the gateway, Hermes readiness and Synced/Healthy tenant
 Argo applications. Offline rendering does not establish runtime compatibility.
