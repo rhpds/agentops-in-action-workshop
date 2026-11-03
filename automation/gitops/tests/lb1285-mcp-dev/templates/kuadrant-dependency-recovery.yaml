@@ -45,7 +45,7 @@ Deliberately NOT paired with a resourceHealthChecks entry for Kuadrant. A
 Degraded CR at wave {{ add1 (.Values.operators.rhcl.wave | default .Values.installPlanApprover.defaultWave) }} would stop ArgoCD ever starting wave {{ $wave }}, so the check
 meant to reveal the problem would block the Job that fixes it — the same wedge
 templates/argocd-subscription-health.yaml exists to undo. This Job failing
-after {{ $r.attempts }} attempts already turns `bootstrap` red, with the reason in its log.
+after its bounded readiness wait turns `bootstrap` red, with the reason in its log.
 
 SYNC WAVE {{ $wave }}: one after the Kuadrant CR in mcp-gateway-platform.yaml, derived
 from rhcl's wave the same way, so moving that wave cannot strand this one.
@@ -107,15 +107,15 @@ subjects:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: kuadrant-dependency-recovery
+  generateName: kuadrant-dependency-recovery-
   namespace: {{ $ns }}
   labels:
     rhdp.redhat.com/lab: agentops-in-action
   annotations:
     argocd.argoproj.io/hook: Sync
-    # A changed value re-runs cleanly; a plain Job's spec is immutable once
-    # created and would fail to apply on the next sync.
-    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    # Each sync gets a new Job. Keep failed Jobs/pods for diagnosis; clean up
+    # successful attempts. Do not delete failure evidence on the next sync.
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded
     argocd.argoproj.io/sync-wave: {{ $wave | quote }}
 spec:
   # The script retries internally; a Job retry would re-run the whole wait.
@@ -144,6 +144,7 @@ spec:
             - { name: NS, value: {{ $ns | quote }} }
             - { name: DEP, value: {{ $r.dependencyDeployment | quote }} }
             - { name: KOP, value: {{ $r.operatorDeployment | quote }} }
+            - { name: READY_TIMEOUT, value: {{ $r.readinessTimeoutSeconds | quote }} }
             - { name: SETTLE, value: {{ $r.settleSeconds | quote }} }
             - { name: ATTEMPTS, value: {{ $r.attempts | quote }} }
           securityContext:
@@ -165,44 +166,49 @@ spec:
               }
               ready()  { [ "$(cond status)" = "True" ]; }
 
-              # Poll until Ready, or until Kuadrant stamps the one reason a
-              # restart fixes, whichever comes first. A cluster that won the
-              # race returns from here in seconds; a cluster that lost it has
-              # usually stamped MissingDependency already, so neither case
-              # waits out the full window.
-              settle() {
-                local end=$((SECONDS + SETTLE))
-                while : ; do
-                  ready && return 0
-                  [ "$(cond reason)" = "MissingDependency" ] && return 1
-                  [ "$SECONDS" -ge "$end" ] && return 1
-                  sleep 5
-                done
-              }
-
               # A restart before the dependency is actually up just re-loses
               # the race, so establish that first.
               log "waiting for Deployment/$DEP to be Available"
               oc wait "deploy/$DEP" -n "$NS" --for=condition=Available --timeout=300s >/dev/null \
                 || fail "$DEP never became Available: Kuadrant has no dependency to find, and restarting it would not help"
 
-              for attempt in $(seq 1 "$ATTEMPTS"); do
-                if settle; then
+              # Readiness can lag behind operator availability while CRD
+              # discovery and dependent resources converge. Waiting is safe
+              # for other conditions; only MissingDependency permits a restart.
+              end=$((SECONDS + READY_TIMEOUT))
+              restarts=0
+              next_restart=0
+              last_reason=unobserved
+              while [ "$SECONDS" -lt "$end" ]; do
+                if ready; then
                   log "Kuadrant reports Ready; nothing to do"
                   exit 0
                 fi
-                log "Kuadrant is not Ready (reason=$(cond reason)): $(cond message)"
-                if [ "$(cond reason)" != "MissingDependency" ]; then
-                  fail "this Job only clears MissingDependency, and the reason is '$(cond reason)'. Restarting the operator will not fix it."
+                reason=$(cond reason)
+                if [ "$reason" != "$last_reason" ]; then
+                  log "waiting for Kuadrant Ready (reason=$reason): $(cond message)"
+                  last_reason=$reason
+                fi
+                if [ "$reason" != "MissingDependency" ] || [ "$restarts" -ge "$ATTEMPTS" ] || [ "$SECONDS" -lt "$next_restart" ]; then
+                  sleep 5
+                  continue
                 fi
                 # Delete the POD, not the Deployment's pod template: OLM owns
                 # the Deployment through the CSV and reverts a rollout restart.
-                log "restarting the Kuadrant operator pod (attempt $attempt/$ATTEMPTS)"
+                restarts=$((restarts + 1))
+                log "restarting the Kuadrant operator pod (attempt $restarts/$ATTEMPTS)"
                 oc delete pod -n "$NS" -l app=kuadrant,control-plane=controller-manager --wait=true >/dev/null \
                   || fail "could not delete the Kuadrant operator pod"
-                oc rollout status "deploy/$KOP" -n "$NS" --timeout=180s >/dev/null \
+                remaining=$((end - SECONDS))
+                [ "$remaining" -gt 0 ] || break
+                [ "$remaining" -le 180 ] || remaining=180
+                oc rollout status "deploy/$KOP" -n "$NS" --timeout="${remaining}s" >/dev/null \
                   || fail "the Kuadrant operator did not come back after its pod was deleted"
+                # Give the restarted operator time to update the condition.
+                next_restart=$((SECONDS + SETTLE))
+                sleep 5
               done
 
-              fail "Kuadrant never reported Ready after $ATTEMPTS restarts. Last condition: $(cond reason) - $(cond message). Every AuthPolicy will be rejected and the MCP gateways will enforce nothing."
+              ready && exit 0
+              fail "Kuadrant did not become Ready within ${READY_TIMEOUT}s ($restarts restarts). Last condition: $(cond reason) - $(cond message)."
 {{- end }}
