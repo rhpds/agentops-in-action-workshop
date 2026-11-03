@@ -388,8 +388,7 @@ spec:
 {{- end }}
 {{- end }}
 {{- if .Values.mcpGateway.enabled }}
-{{- $ns := printf "%s-%s" .Values.username .Values.namespaceSuffix -}}
----
+{{- $ns := printf "%s-%s" .Values.username .Values.namespaceSuffix }}
 {{/*
 Lets mcp-gateway-controller reach this tenant's broker.
 
@@ -431,6 +430,7 @@ Scoped to one namespace, one port and the broker pod alone. It does not
 reopen the cross-tenant path allow-ingress-within-namespace exists to close,
 and that policy -- along with the lab exercise built on it -- is untouched.
 */}}
+---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
