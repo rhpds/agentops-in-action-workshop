@@ -78,12 +78,28 @@ metadata:
 rules:
   # Exactly the two kinds the teardown deletes, and nothing else. No get on
   # secrets, no reach outside this namespace.
+  #
+  # `watch` is here because `oc delete --timeout=40s` implements its wait with a
+  # watch, not a poll. Without it the first live run logged
+  #
+  #   Failed to watch ... mcpgatewayextensions.mcp.kuadrant.io "mcp-gateway" is
+  #   forbidden: User "system:serviceaccount:<ns>:mcp-teardown" cannot watch
+  #
+  # twice and then fell through to step 2 after ~1.2s instead of blocking until
+  # the extension was actually gone. The DELETE itself was authorized and
+  # succeeded, so the Job still reported Complete and `|| true` swallowed the
+  # rest -- the failure was silent. That defeats the ordering this whole hook
+  # exists to impose: step 1 must FINISH before step 2, because while the
+  # extension lives the controller recreates any HTTPRoute deleted under it.
+  # It happened to converge on a healthy tenant (7s), but a slow teardown --
+  # exactly the case this fix is for -- could delete routes under a live
+  # extension, have them recreated, and deadlock again.
   - apiGroups: ["mcp.kuadrant.io"]
     resources: ["mcpgatewayextensions", "mcpserverregistrations"]
-    verbs: ["get", "list", "delete"]
+    verbs: ["get", "list", "watch", "delete"]
   - apiGroups: ["gateway.networking.k8s.io"]
     resources: ["httproutes"]
-    verbs: ["get", "list", "delete"]
+    verbs: ["get", "list", "watch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
