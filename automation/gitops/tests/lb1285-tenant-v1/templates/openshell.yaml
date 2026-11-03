@@ -1,0 +1,60 @@
+{{- if and (eq .Values.platform.agentHarness "hermes") (eq .Values.platform.hermesRuntime "openshell") }}
+{{- $keycloakHost := .Values.keycloak.host | default (printf "sso.%s" .Values.deployer.domain) -}}
+{{- $user := include "tenant.username" . -}}
+{{- $ns := printf "%s-%s" $user .Values.namespaceSuffix -}}
+{{/*
+OpenShell shares the participant namespace with the application workloads.
+Keep a separate, self-healing Application and a unique release name: the
+vendored chart also names cluster-scoped RBAC after that release.
+*/}}
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{ $user }}-openshell
+  namespace: {{ .Values.gitops.argocdNamespace }}
+  annotations:
+    # After the platform Application (10): the bridge waits for this
+    # participant's MCP Gateway and realm, which that one creates.
+    argocd.argoproj.io/sync-wave: "15"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: {{ .Values.gitops.argocdProject }}
+  source:
+    repoURL: {{ .Values.gitops.repoURL }}
+    targetRevision: {{ .Values.gitops.targetRevision }}
+    path: automation/gitops/tenant-openshell
+    helm:
+      # The vendored OpenShell chart names its Service and its cluster-scoped
+      # RBAC after the release, so it must be unique per participant.
+      releaseName: {{ $user }}-openshell
+      parameters:
+        - name: username
+          value: {{ $user | quote }}
+        - name: namespaceSuffix
+          value: {{ .Values.namespaceSuffix | quote }}
+        - name: keycloak.host
+          value: {{ $keycloakHost | quote }}
+        # Whether this participant's Hermes traces to MLflow. The bridge
+        # installs the hermes_otel plugin and creates the experiment; the
+        # sandbox policy has to allow the egress, which tenant-policy owns.
+        - name: mlflow.enabled
+          value: {{ .Values.platform.mlflowTracing | quote }}
+        - name: model.baseUrl
+          value: {{ .Values.model.baseUrl | quote }}
+        - name: model.model
+          value: {{ .Values.model.model | quote }}
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: {{ $ns }}
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: true
+    syncOptions:
+      # Created by namespace.yaml, at an earlier sync wave.
+      - CreateNamespace=false
+    retry:
+      limit: 5
+      backoff: { duration: 15s, factor: 2, maxDuration: 3m }
+{{- end }}
