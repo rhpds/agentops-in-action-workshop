@@ -121,6 +121,8 @@
       {{ t_reg_probe.results | default([])
          | selectattr('resources', 'defined')
          | selectattr('resources', 'ne', []) | list }}
+
+- name: "{{ hc_tenant }} | Read the Showroom route"
   kubernetes.core.k8s_info:
     api_version: route.openshift.io/v1
     kind: Route
