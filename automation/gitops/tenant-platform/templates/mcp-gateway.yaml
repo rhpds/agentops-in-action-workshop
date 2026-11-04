@@ -180,16 +180,44 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "3"
     argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+{{- if and $.Values.mcpGateway.supportedProtocolVersions (ne $mcpApi "mcp.kuadrant.io/v1") }}
+    # Recorded, not applied. The field below is v1-only, and this tenant renders
+    # $mcpApi. Visible here so an ignored setting can be found with `oc get
+    # mcpserverregistration -o yaml` instead of being silently dropped.
+    mcp.agentops.redhat.com/supported-protocol-versions-ignored: {{ join "," $.Values.mcpGateway.supportedProtocolVersions | quote }}
+    mcp.agentops.redhat.com/supported-protocol-versions-ignored-reason: {{ printf "requires mcp.kuadrant.io/v1, tenant renders %s" $mcpApi | quote }}
+{{- end }}
 spec:
   # telemetry-mcp -> telemetry_, so get_pump_status becomes
   # telemetry_get_pump_status on the federated list.
   prefix: {{ printf "%s_" (trimSuffix "-mcp" .name) }}
 {{- with $.Values.mcpGateway.supportedProtocolVersions }}
-  {{- if ne $mcpApi "mcp.kuadrant.io/v1" }}
-    {{- fail "mcpGateway.supportedProtocolVersions requires mcp.kuadrant.io/v1" }}
-  {{- end }}
+  {{- /*
+    v1-only field. It is SKIPPED, not fatal, on v1alpha1.
+
+    This used to `fail`, which is right in isolation -- the field really does
+    not exist in v1alpha1 -- but `fail` aborts the ENTIRE chart, not just this
+    one field. AgnosticV #28913 sets
+    ocp4_workload_gitops_bootstrap_mcp_supported_protocol_versions, intended for
+    the LB1285 v1 test tenant, and it reached standard v1alpha1 clusters. On
+    cluster l28jv that took out all five tenants at once: every
+    <user>-platform Application stuck at ComparisonError
+
+        mcpGateway.supportedProtocolVersions requires mcp.kuadrant.io/v1
+
+    with zero MCPGatewayExtensions, registrations, HTTPRoutes or Gateways
+    anywhere, hermes-openshell-bridge in CrashLoopBackOff for want of a gateway,
+    and no mcp-teardown hook. 15 of the 19 health-check failures came from this
+    single render abort.
+
+    A knob that is inert on one API version should not be able to delete the
+    whole MCP stack. Skipping keeps the blast radius equal to the feature, and
+    the annotations above keep it from being silent.
+  */}}
+  {{- if eq $mcpApi "mcp.kuadrant.io/v1" }}
   supportedProtocolVersions:
     {{- toYaml . | nindent 4 }}
+  {{- end }}
 {{- end }}
   hint: {{ .hint | quote }}
   category:
