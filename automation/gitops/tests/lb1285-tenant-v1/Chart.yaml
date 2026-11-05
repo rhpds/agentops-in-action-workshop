@@ -1,5 +1,0 @@
-apiVersion: v2
-name: lb1285-tenant-v1
-description: Per-user AgentOps lab namespace and RBAC (shared-cluster topology)
-type: application
-version: 0.1.0
