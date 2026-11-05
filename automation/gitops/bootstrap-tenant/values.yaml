@@ -135,6 +135,24 @@ platform:
   # getting 403s from MLflow for one participant and no one else.
   attackRunnerNamespace: agentops-shared
 
+  # Let the shared lab runner replay every chapter against this participant.
+  #
+  # Per participant for the same reason as attackRunner above, but the stakes
+  # are higher: the runner mutates the tenant — it creates and recreates the
+  # sandbox, edits Keycloak role mappings and repoints the console. That is the
+  # lab, which is the point, but it is not something to do to a tenant somebody
+  # is holding. Turn this off for a presenter's demo tenant and the runner
+  # cannot touch it at all.
+  #
+  # Instructor tooling: nothing in the Showroom content links to it.
+  labRunner: true
+  # Where the runner's ServiceAccount lives. Must match lab.sharedNamespace in
+  # bootstrap-infra, exactly as attackRunnerNamespace must — a RoleBinding
+  # naming the wrong namespace binds a subject that does not exist, which
+  # Kubernetes accepts silently and which surfaces as the runner getting 403s
+  # against one participant and no one else.
+  labRunnerNamespace: agentops-shared
+
 # Values forwarded to tenant-policy.
 policy:
   # Tool authorization at baseline: on, so every tool call needs the matching

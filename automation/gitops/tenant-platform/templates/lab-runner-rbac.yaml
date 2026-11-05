@@ -1,0 +1,104 @@
+{{- if .Values.labRunner.enabled }}
+{{- if not .Values.labRunner.sharedNamespace }}
+{{- fail "labRunner.enabled needs labRunner.sharedNamespace (forwarded by bootstrap-tenant): the runner's ServiceAccount lives there, and a RoleBinding has to name the namespace its subject comes from" }}
+{{- end }}
+{{- $ns := printf "%s-%s" .Values.username .Values.namespaceSuffix -}}
+{{/*
+Lets the shared lab runner drive THIS participant's lab.
+
+The runner's ServiceAccount lives in the shared namespace; this grants it
+rights here, so the grant is per-participant and revocable per participant —
+set labRunner.enabled false for one tenant and the runner can no longer touch
+it. Cross-namespace subjects are ordinary Kubernetes RBAC: the subject names
+its own namespace, the Role applies where it is bound.
+
+This is a wider grant than the attack runner's, and it is worth being explicit
+about why each verb is here, because together they amount to "can operate this
+namespace":
+
+  pods get/list          find the bridge, the console and the agent by label
+  pods/exec create       the `openshell` CLI only exists in the bridge's cli
+                         container (it holds the gateway's mTLS client
+                         certificates), and the MLflow REST reads are proxied
+                         through the console's pod, which already has the
+                         service CA and the experiments RoleBinding
+  deployments get/patch  chapters 2 and 6 are `oc set env` on water-plant-ui —
+                         AGENT_URL and NEMO_ENDPOINT. The runner runs the
+                         command the content gives rather than an equivalent
+  replicasets, pods      `oc rollout status`, which the content pairs with both
+                         of those env changes
+  secrets get            the agent's API server key, the same one the console
+                         holds
+  configmaps get         chapter 6 has the participant read
+                         nemo-guardrails-config before enabling it
+  experiments            resolve the participant's experiment and read back the
+                         trace for each turn, which is what makes a failure
+                         report actionable rather than just red
+
+It is not an escalation over what the participant already has — they hold admin
+on this namespace — but it is a capability nothing else in the lab has, and it
+is why the runner is an instructor tool with no link to it from the content.
+
+No NetworkPolicy is needed, unlike the attack runner's: the runner prompts the
+agent through the operator console's Route, which enters via the router, not
+pod-to-pod. That is also the path the participant uses, so it carries the NeMo
+input guardrail chapter 6 turns on and follows the AGENT_URL they set in
+chapter 2.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: lab-runner-drive
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/part-of: water-plant
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+    rhdp.redhat.com/lab-note: >-
+      Instructor tooling. Lets the shared lab runner replay every chapter
+      against this tenant. Not participant-facing.
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [secrets, configmaps, services]
+    verbs: [get, list]
+  - apiGroups: [apps]
+    resources: [deployments, replicasets, statefulsets]
+    verbs: [get, list, patch, update]
+  - apiGroups: [route.openshift.io]
+    resources: [routes]
+    verbs: [get, list]
+  # Same resource the console's own -mlflow-read Role uses: nothing serves
+  # mlflow.kubeflow.org and nothing needs to, because MLflow runs
+  # --app-name=kubernetes-auth and every request becomes a
+  # SelfSubjectAccessReview matching these strings. Read-only — the runner
+  # reads traces back, it does not record runs.
+  - apiGroups: [mlflow.kubeflow.org]
+    resources: [experiments]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: lab-runner-drive
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/part-of: water-plant
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: lab-runner-drive
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.labRunner.serviceAccountName }}
+    namespace: {{ .Values.labRunner.sharedNamespace }}
+{{- end }}

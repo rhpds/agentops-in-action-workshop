@@ -591,3 +591,19 @@ agent:
       image: quay.io/rh-aiservices-bu/plain-hermes
       tag: "0.1.0"
       storageSize: 2Gi
+
+# The shared lab runner's access to THIS participant's namespace.
+#
+# See templates/lab-runner-rbac.yaml for what each verb buys and why the grant
+# is wider than the attack runner's. Both values are forwarded by
+# bootstrap-tenant, like attackRunner's — the ServiceAccount lives in the shared
+# namespace and a RoleBinding has to name where its subject comes from.
+#
+# Set enabled false for one participant to take the runner off their tenant
+# without touching anybody else's.
+labRunner:
+  enabled: true
+  serviceAccountName: lab-runner
+  # No default: a RoleBinding naming the wrong namespace fails open-ended and
+  # silently, so the template refuses to render without it.
+  sharedNamespace: ""

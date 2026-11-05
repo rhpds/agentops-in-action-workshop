@@ -1,0 +1,252 @@
+{{- if .Values.labRunner.enabled }}
+{{/*
+The lab runner — one instance for the whole event.
+
+Runs every exercise of every chapter against a named participant's tenant and
+reports which section failed, the command or question it used, and the MLflow
+trace behind the turn. Also fast-forwards a tenant to the start of any chapter,
+so chapter 3 can be demonstrated without working through 1 and 2 by hand.
+
+Source and Containerfile: rh-aiservices-bu/agentops-rh1-lab, under lab-runner/.
+Unlike the attack/eval runner below it, the code is NOT mounted from a
+ConfigMap — it is a package with dependencies (httpx, click, fastapi) and it
+needs the `oc` binary, so it is a published, pinned image like every other
+workload in this lab.
+
+WHO THIS IS FOR: whoever is holding the lab, not the participants. It drives a
+tenant the way an operator would, including the two things a participant cannot
+do — read the realm admin credential, and exec into the bridge's cli container
+in somebody else's namespace. Nothing in the Showroom content links to it.
+
+ONE REPLICA, and not for leader-election reasons: two runs against the same
+tenant would fight over the same sandbox, the same Keycloak role mappings and
+the same plant, and neither result would mean anything. The web UI holds the
+last report per participant in memory, so a restart loses it — the Markdown
+artefact is the thing to keep.
+*/}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.labRunner.serviceAccountName }}
+  namespace: {{ .Values.lab.sharedNamespace }}
+  labels:
+    app.kubernetes.io/name: lab-runner
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "15"
+---
+{{/*
+Cluster-scoped, and deliberately only this: the runner lists namespaces to
+discover which participants exist, because bootstrap-tenant creates exactly as
+many tenants as RHDP provisions and there is no fixed list anywhere.
+
+Everything it does INSIDE a tenant namespace is granted there, by
+tenant-platform, namespace by namespace — so revoking one participant's
+exposure to the runner is a change in that participant's Application rather
+than here. Same shape as attack-eval-runner-discovery.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: lab-runner-discovery
+  labels:
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "15"
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, list, watch]
+  # The cluster's apps domain. Every per-cluster hostname the chapter 2 policy
+  # rules name is derived from it, and a wrong one is the most likely reason a
+  # run fails on a new build — so it is read rather than configured.
+  - apiGroups: [config.openshift.io]
+    resources: [ingresses]
+    resourceNames: [cluster]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: lab-runner-discovery
+  labels:
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "15"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: lab-runner-discovery
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.labRunner.serviceAccountName }}
+    namespace: {{ .Values.lab.sharedNamespace }}
+---
+{{/*
+The realm admin credential, for chapter 3.
+
+Chapter 3 has the participant unassign two of the operator's role mappings in
+Keycloak. The runner does the same through the admin API, which needs the realm
+admin password — and that is NOT the participant's OpenShift password, which is
+what the content currently tells them to use. It is set in tenant-platform's
+keycloak.adminPassword and carried in the KeycloakRealmImport.
+
+Read from the API rather than configured here, so rotating the password does
+not need a commit, and so the runner never holds a copy. `get` only, and only
+on this resource: it reads two credentials out of the realm spec and writes
+nothing.
+
+A participant cannot do this — verified that they hold `no` on both
+keycloakrealmimports and secrets in this namespace, and no cluster-scoped
+binding at all. That asymmetry is a finding about the content, recorded in the
+runner's README, not something this grant is papering over.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: lab-runner-realm-read
+  namespace: {{ .Values.labRunner.keycloakNamespace }}
+  labels:
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "15"
+rules:
+  - apiGroups: [k8s.keycloak.org]
+    resources: [keycloakrealmimports]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: lab-runner-realm-read
+  namespace: {{ .Values.labRunner.keycloakNamespace }}
+  labels:
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "15"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: lab-runner-realm-read
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.labRunner.serviceAccountName }}
+    namespace: {{ .Values.lab.sharedNamespace }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lab-runner
+  namespace: {{ .Values.lab.sharedNamespace }}
+  labels:
+    app.kubernetes.io/name: lab-runner
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "20"
+spec:
+  # EXACTLY ONE. See the note at the top of this file.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: lab-runner
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: lab-runner
+    spec:
+      serviceAccountName: {{ .Values.labRunner.serviceAccountName }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: runner
+          image: {{ .Values.labRunner.image | quote }}
+          imagePullPolicy: {{ .Values.labRunner.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            # The runner authenticates to the API with its projected
+            # ServiceAccount token. `oc` finds that on its own inside a pod, so
+            # there is no kubeconfig to mount — but it wants somewhere writable
+            # for its cache, hence the two emptyDirs below.
+            - name: LAB_NAMESPACE_SUFFIX
+              value: {{ .Values.labRunner.namespaceSuffix | quote }}
+            # Must match tenant-openshell's hermes.image: chapter 2 sandboxes
+            # the same image the agent already runs, which is what makes the
+            # lab's "we changed nothing about the agent" claim true. A different
+            # tag here would test a different agent.
+            - name: LAB_AGENT_IMAGE
+              value: {{ .Values.labRunner.agentImage | quote }}
+            - name: LAB_CLUSTER_DOMAIN
+              value: {{ .Values.labRunner.clusterDomain | default "" | quote }}
+          volumeMounts:
+            - name: cache
+              mountPath: /opt/app-root/src/.kube
+            - name: tmp
+              mountPath: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+{{ toYaml .Values.labRunner.resources | indent 12 }}
+      volumes:
+        - name: cache
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: lab-runner
+  namespace: {{ .Values.lab.sharedNamespace }}
+  labels:
+    app.kubernetes.io/name: lab-runner
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "20"
+spec:
+  selector:
+    app.kubernetes.io/name: lab-runner
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+{{- if .Values.labRunner.route.enabled }}
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: lab-runner
+  namespace: {{ .Values.lab.sharedNamespace }}
+  labels:
+    app.kubernetes.io/name: lab-runner
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "20"
+    # A full seven-chapter run is well over an hour: two sandbox builds, six
+    # eval sweeps and a hundred-odd model round trips. The browser watches it
+    # over one SSE connection, so the router's 30s default would drop the
+    # stream a few seconds into chapter 1 and read as a crashed run.
+    haproxy.router.openshift.io/timeout: {{ .Values.labRunner.route.timeout | quote }}
+spec:
+  to:
+    kind: Service
+    name: lab-runner
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+{{- end }}
+{{- end }}
