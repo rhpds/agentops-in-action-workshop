@@ -171,38 +171,6 @@ mcp:
 # ---------------------------------------------------------------------------
 mcpGateway:
   enabled: false
-  # Which API version MCPGatewayExtension and MCPServerRegistration are
-  # rendered at. A value, not a constant, because the two controllers this
-  # lab is run against do not agree and neither serves both:
-  #
-  #   mcp-gateway.v0.7.1, the pinned OLM bundle   v1alpha1 only
-  #   Kuadrant/mcp-gateway@3ba95b6, upstream      v1; v1alpha1 is served:false
-  #
-  # So a hardcoded version is wrong on one of them, and on the upstream build
-  # the failure is total: every manifest is rejected with "no matches for kind
-  # ... in version mcp.kuadrant.io/v1alpha1", the platform Application goes
-  # OutOfSync/Missing, and no registrations or broker come up at all. That is
-  # what blocks the LB1285 retest.
-  #
-  # The default stays v1alpha1 so the shipped build is unchanged. The LB1285
-  # fixture, which replaces the OLM operator with upstream, overrides it:
-  #
-  #   --set mcpGateway.apiVersion=mcp.kuadrant.io/v1
-  #
-  # Verified against charts/mcp-gateway/crds/ at that upstream commit that
-  # this is a version bump and nothing more. v1 ADDS one optional field to
-  # each CRD -- supportedProtocolVersions on the registration, maxBodyBytes
-  # on the extension -- and removes or renames none. Every field this chart
-  # sets (prefix, hint, category, targetRef; targetRef, httpRouteManagement,
-  # publicHost, privateHost, oauthProtectedResource) exists in v1, and the
-  # only required field in either v1 spec is targetRef, which this chart
-  # always sets. The participant Role grants on the mcp.kuadrant.io GROUP, so
-  # RBAC needs no change either.
-  apiVersion: mcp.kuadrant.io/v1alpha1
-  # Optional override for upstreams whose discovery omits supported versions.
-  # Use only versions verified against every backend; requires the v1 CRD.
-  # Empty preserves automatic protocol discovery.
-  supportedProtocolVersions: []
   # bootstrap-infra's AdminNetworkPolicy selects Envoy pods by this name.
   gatewayName: mcp-gateway
   # RHOAI's class: same controller (openshift.io/gateway-controller/v1) and no

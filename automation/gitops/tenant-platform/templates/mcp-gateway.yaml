@@ -1,8 +1,6 @@
 {{- if .Values.mcpGateway.enabled }}
 {{- $ns := printf "%s-%s" .Values.username .Values.namespaceSuffix -}}
 {{- $gw := .Values.mcpGateway.gatewayName -}}
-{{- /* captured here: line ~169 renders inside a range, where . is the loop item and .Values is out of scope */ -}}
-{{- $mcpApi := .Values.mcpGateway.apiVersion -}}
 {{- $svc := printf "%s-%s.%s.svc.cluster.local" $gw .Values.mcpGateway.gatewayClassName $ns -}}
 {{- $kcHost := required "keycloak.host is required when mcpGateway.enabled (forwarded by bootstrap-tenant)" .Values.keycloak.host -}}
 {{- $realm := printf "waterplant-%s" .Values.username -}}
@@ -110,7 +108,7 @@ spec:
         namespaces:
           from: Same
 ---
-apiVersion: {{ $mcpApi }}
+apiVersion: mcp.kuadrant.io/v1alpha1
 kind: MCPGatewayExtension
 metadata:
   name: {{ $gw }}
@@ -168,7 +166,7 @@ spec:
         - name: {{ .name }}
           port: 8080
 ---
-apiVersion: {{ $mcpApi }}
+apiVersion: mcp.kuadrant.io/v1alpha1
 kind: MCPServerRegistration
 metadata:
   # The broker sends x-mcp-servername as <namespace>/<this name>, and the
@@ -184,13 +182,6 @@ spec:
   # telemetry-mcp -> telemetry_, so get_pump_status becomes
   # telemetry_get_pump_status on the federated list.
   prefix: {{ printf "%s_" (trimSuffix "-mcp" .name) }}
-{{- with $.Values.mcpGateway.supportedProtocolVersions }}
-  {{- if ne $mcpApi "mcp.kuadrant.io/v1" }}
-    {{- fail "mcpGateway.supportedProtocolVersions requires mcp.kuadrant.io/v1" }}
-  {{- end }}
-  supportedProtocolVersions:
-    {{- toYaml . | nindent 4 }}
-{{- end }}
   hint: {{ .hint | quote }}
   category:
     - {{ trimSuffix "-mcp" .name }}

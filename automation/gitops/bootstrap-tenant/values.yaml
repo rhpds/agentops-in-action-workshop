@@ -120,9 +120,6 @@ platform:
   # The corollary is that with that policy in place a tenant with this set to
   # false has an agent that cannot reach its MCP servers at all.
   mcpGateway: true
-  # Forwarded to each MCPServerRegistration. Empty keeps automatic discovery.
-  # Non-empty requires the v1 gateway CRD and verified backend compatibility.
-  mcpSupportedProtocolVersions: []
 
   # Let the shared attack/eval runner probe this participant and score them.
   #
