@@ -67,6 +67,11 @@
     # image the agent already runs, which is what makes "we changed nothing
     # about the agent" true.
     e2e_agent_image: quay.io/rh-aiservices-bu/waterplant-hermes:0.2.7
+    # Must match PROVIDER_NAME in tenant-openshell/files/bridge-supervisor.sh,
+    # which is what creates it. The provider holds the real model key in the
+    # OpenShell gateway so it never reaches config.yaml or a terminal; the
+    # sandbox gets OPENAI_API_KEY only by attaching it at create time.
+    e2e_model_provider: maas
 
     # The three prompts module 1 has the participant type, verbatim from
     # content/modules/ROOT/pages/module-01-introduction-to-agentops-and-meet-hermie.adoc.
