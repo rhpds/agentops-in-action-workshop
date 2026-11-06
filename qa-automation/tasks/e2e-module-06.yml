@@ -199,9 +199,23 @@
     namespace: "{{ t_ns }}"
     pod: "{{ e2e_bridge_pod }}"
     container: cli
+    # Found rather than assumed. The prompt says "Create a skill called
+    # northgate-handover-style" and never says where, so the agent is free to
+    # file it under a category -- on cluster 85m7q it chose
+    # skills/operations/northgate-handover-style/SKILL.md. Hermes loads it
+    # from there: asked to list its skills the agent returns
+    # northgate-handover-style alongside read-safety-docs and write-report,
+    # so discovery is recursive and the nested path is correct, not a mistake.
+    #
+    # The old flat `cat skills/<name>/SKILL.md` therefore failed a module that
+    # had worked, reporting "was not written into /sandbox/.hermes/skills at
+    # all" while the file existed one directory down and the agent's reply
+    # correctly said it had created it. That phrasing sent the first triage
+    # looking for an agent that confabulates, which is the opposite of what
+    # happened.
     command: >-
       openshell sandbox exec --name {{ e2e_sandbox }} --
-      cat /sandbox/.hermes/skills/{{ e2e_m6_skill }}/SKILL.md
+      /bin/sh -c "cat $(find /sandbox/.hermes/skills -type f -path '*/{{ e2e_m6_skill }}/SKILL.md' | head -1)"
   register: m6_skill_file
   changed_when: false
   failed_when: false
