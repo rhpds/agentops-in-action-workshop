@@ -204,9 +204,25 @@
     command: "{{ item }}"
   loop:
     - "openshell sandbox delete {{ e2e_sandbox }}"
+    # --provider for the same reason module 2 needs it, and it is easy to miss
+    # here: a provider is bound at CREATE, so deleting the sandbox drops the
+    # credential with it. Omit this and OPENAI_API_KEY is unset from this point
+    # on, config.yaml's '${OPENAI_API_KEY}' never expands, and every later
+    # model call returns
+    #
+    #   HTTP 401: LiteLLM Virtual Key expected. Received=${OPENAI_API_KEY}
+    #
+    # Nothing says "credential" when that happens: the agent simply answers
+    # nothing. E2E-M4-06, E2E-M5-02 and E2E-M6-03 all failed on "Agent said: "
+    # with an empty string, which reads as a content or skill problem and was
+    # first triaged as one. Verified on cluster 85m7q: the sandbox existed and
+    # the maas provider existed, but `printenv OPENAI_API_KEY` inside the
+    # sandbox returned UNSET, and the same prompt against unsandboxed
+    # hermes-plain answered normally.
     - >-
       openshell sandbox create --name {{ e2e_sandbox }} --from {{ e2e_agent_image }}
-      --policy /tmp/hermie-report-policy.updated.yaml --cpu 2 --memory 4Gi --no-tty -- true
+      --policy /tmp/hermie-report-policy.updated.yaml --cpu 2 --memory 4Gi --no-tty
+      --provider {{ e2e_model_provider }} -- true
     - "openshell sandbox upload {{ e2e_sandbox }} /hermes /sandbox"
     - "openshell sandbox exec --name {{ e2e_sandbox }} -- start-hermes"
     - "openshell service expose {{ e2e_sandbox }} 8080 openai"
