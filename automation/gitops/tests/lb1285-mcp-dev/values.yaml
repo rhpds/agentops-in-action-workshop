@@ -1,0 +1,357 @@
+deployer:
+  domain: apps.example.com
+
+lab:
+  # Shared namespace for cluster-wide lab infrastructure
+  sharedNamespace: agentops-shared
+  # ArgoCD project owning the per-participant Applications that bootstrap-tenant
+  # creates. Defined in templates/argocd-project.yaml — see the note there on
+  # why it is safe for this chart to own it.
+  argocdProject: agentops-in-action
+  argocdNamespace: openshift-gitops
+  # Per-participant namespace is <username>-<namespaceSuffix>. Must match
+  # namespaceSuffix in bootstrap-tenant, tenant-platform and tenant-policy.
+  namespaceSuffix: agentops
+  # OpenShell and Hermes share this participant namespace.
+  # Where the RHDP-provisioned Keycloak runs. Each participant's realm is a
+  # KeycloakRealmImport, which must live beside the Keycloak CR, so tenant
+  # Applications need this as an allowed destination.
+  keycloakNamespace: keycloak
+
+# Maximum concurrent participants (from spec: max_concurrent_users: 30)
+maxUsers: 30
+
+# ---------------------------------------------------------------------------
+# Operators
+#
+# Every version below is PINNED and installPlanApproval is Manual — nothing
+# upgrades on its own. See templates/operators.yaml for why, and for how to
+# approve the generated InstallPlans.
+#
+# Versions verified against the cluster's catalog on OCP 4.22.11. Re-verify
+# before each event build: a catalog refresh can retire a CSV, and a pinned
+# startingCSV that no longer exists leaves the Subscription stuck.
+#
+# `dependencies` lists CSVs OLM resolves into the same InstallPlan. The
+# approver refuses any plan containing a CSV that is neither pinned nor listed,
+# so a catalog change cannot slip an unreviewed operator in alongside a pinned
+# one.
+#
+# `wave` overrides which sync wave an operator's Subscription lands in
+# (installPlanApprover.defaultWave otherwise). It exists for one operator that
+# must install LATE — see rhcl below — and the approver renders one Job per
+# distinct wave to match, because it has to share a wave with the Subscriptions
+# it approves.
+# ---------------------------------------------------------------------------
+operators:
+  rhoai:
+    enabled: true
+    package: rhods-operator
+    namespace: redhat-ods-operator
+    channel: stable-3.5
+    csv: rhods-operator.3.5.0
+    source: redhat-operators
+
+  agentSandbox:
+    enabled: true
+    package: agent-sandbox-operator
+    namespace: agent-sandbox-system
+    channel: preview-0.9
+    csv: agent-sandbox-operator.v0.9.0
+    source: redhat-operators
+
+  # Red Hat Connectivity Link (GA): AuthPolicy, RateLimitPolicy and the rest of
+  # the Kuadrant policy API, plus the Authorino and Limitador that enforce them.
+  #
+  # This replaces the community authorino-operator v0.16.0 and kuadrant-operator
+  # v0.11.1 that used to sit here disabled "as the fallback for MCP Gateway".
+  # That fallback is no longer needed — MCP Gateway enforces per-tool policy —
+  # and both of them ship supported from redhat-operators under RHCL anyway.
+  #
+  # INSTALLS LATE, at wave 6, and that is the fix for a race worth
+  # understanding. The Kuadrant operator looks for the Gateway API provider
+  # (istio) only at start-up, and rejects every AuthPolicy ever after if it was
+  # not there:
+  #
+  #   [Gateway API provider (istio / envoy gateway)] is not installed, please
+  #   restart Kuadrant Operator pod once dependency has been installed
+  #
+  # istio arrives with the DataScienceCluster at wave 5 — OpenShift's gateway
+  # controller reconciles the data-science GatewayClass, installs the
+  # networking.istio.io CRDs and runs istiod. At the default wave the operator
+  # therefore starts before the thing it checks for, on any cluster that did not
+  # already have istio. Observed on cluster-kg67l: both AuthPolicies
+  # Accepted=False/MissingDependency, an unauthenticated tools/call answering
+  # 200, and a withheld tool still returning the plant's SCADA config — module
+  # 5's one-line change appearing to do nothing at all.
+  #
+  # Note what wave 6 does and does not buy. ArgoCD has no health check for a
+  # DataScienceCluster, so it counts as healthy when applied, not when Ready —
+  # wave 6 begins seconds after the DSC exists. What actually orders this is
+  # that OLM takes minutes (resolve, InstallPlan, approve, CSV, pod) while istio
+  # appears ~11s after the DSC. Practical, not guaranteed: if that ever
+  # inverts, the tell is tenant-policy's rollout Job, which asserts an
+  # unauthenticated initialize returns 401 and fails loudly when it does not.
+  rhcl:
+    enabled: true
+    package: rhcl-operator
+    namespace: kuadrant-system
+    channel: stable
+    csv: rhcl-operator.v1.4.3
+    source: redhat-operators
+    wave: 6
+    dependencies:
+      - authorino-operator.v1.4.3
+      - limitador-operator.v1.4.2
+      - dns-operator.v1.4.2
+
+  # MCP Gateway (Tech Preview, RHCL subscription): an Envoy-based broker that
+  # federates MCP servers and routes each tool call through AuthPolicy.
+  # Operator only — each participant's gateway instance is created by the
+  # tenant chart.
+  #
+  # Same namespace as RHCL, deliberately. The mcp-gateway bundle declares
+  # olm.package.required rhcl-operator >=1.3.2, and OLM satisfies a package
+  # dependency by installing it into the dependent operator's own namespace.
+  # In a separate namespace this installed RHCL a second time, alongside the
+  # pinned one: two OperatorGroups then provided the same APIs, and one copy's
+  # Authorino went to Failed with InterOperatorGroupOwnerConflict ("intersecting
+  # operatorgroups provide the same apis"). Observed on cluster-tpss7. Sharing a
+  # namespace means one OperatorGroup and RHCL resolved exactly once.
+  #
+  # Shares rhcl's wave as well as its namespace: OLM resolves both into ONE
+  # InstallPlan (rhcl, authorino, limitador, dns and mcp-gateway together —
+  # verified on cluster-kg67l), so splitting the waves would leave one wave's
+  # approver waiting for a plan the other wave's Subscription has not caused yet.
+  mcpGatewayOperator:
+    enabled: false
+    package: mcp-gateway
+    namespace: kuadrant-system
+    channel: preview
+    csv: mcp-gateway.v0.7.1
+    source: redhat-operators
+    wave: 6
+
+# NOTE: sandboxed-containers-operator (Kata) is deliberately NOT installed.
+# The Agent Sandbox deployment is not on bare metal and this cluster runs on
+# CNV, so Kata is off the critical path. Agent Sandbox still provides the
+# lifecycle we need — SandboxTemplate, SandboxClaim, warm pools — on the
+# standard runtime, hardened with restricted-v2, seccomp RuntimeDefault and
+# SELinux. The OSC pairing exists to supply the Kata runtime we are not using,
+# so leaving it out removes an operator rather than a capability.
+
+# ---------------------------------------------------------------------------
+# InstallPlan approver
+#
+# Approves ONLY the InstallPlans matching the pinned startingCSVs above, so the
+# initial install is unattended while upgrades remain manual. See
+# templates/installplan-approver.yaml for why this is not just
+# installPlanApproval: Automatic, and why it shares sync wave -2.
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# ArgoCD health customisation for pinned Subscriptions
+#
+# Pinning every operator means refusing the upgrades a catalog refresh offers,
+# and a Subscription with an unapproved InstallPlan never looks healthy to
+# ArgoCD. Since Subscriptions are wave -2, that wedges the whole bootstrap sync
+# behind a state we chose on purpose. See
+# templates/argocd-subscription-health.yaml.
+# ---------------------------------------------------------------------------
+argocdHealthChecks:
+  enabled: true
+  # The ArgoCD CR the GitOps operator renders argocd-cm from. Only
+  # spec.resourceHealthChecks is written, and only when missing.
+  argocdName: openshift-gitops
+  # Needs oc and python3.7+; the RHEL 8 ose-cli ships Python 3.6.
+  image: registry.redhat.io/openshift4/ose-cli-rhel9:latest
+
+installPlanApprover:
+  enabled: true
+  # Needs `oc` only, and the tag matters more than it looks: this was
+  # registry.redhat.io/openshift4/ose-cli:latest, and that repository *refuses*
+  # the latest tag — "This repository does not use the latest tag ... must be
+  # pulled with an explicit version". On cluster-jlrj2 all three Job pods sat in
+  # ImagePullBackOff for the full timeout and were killed by
+  # activeDeadlineSeconds, so not one line of the approver script ran, no
+  # InstallPlan was approved, no operator installed, the MCPServer CRD never
+  # existed, and every tenant's platform sync failed whole. None of which names
+  # an image tag anywhere in the symptom.
+  #
+  # origin-cli is the same client from quay, needs no registry.redhat.io pull
+  # secret, and is already what hermes' installer Job pulls. Pinned to the
+  # cluster's minor.
+  image: quay.io/openshift/origin-cli:4.22
+  # Runs in an operator namespace (created at wave -4) rather than the shared
+  # namespace, which is itself only created at wave -2 and would race the Job.
+  namespace: redhat-ods-operator
+  # The wave Subscriptions land in unless an operator overrides it with `wave`.
+  # One approver Job is rendered per distinct wave, because an approver must
+  # share the wave of the Subscriptions it approves — see the template.
+  defaultWave: -2
+  # Bounds the wait for an InstallPlan to appear. Also the Job's
+  # activeDeadlineSeconds; the script stops 30s earlier so it fails with a
+  # useful message rather than being killed mid-poll.
+  timeoutSeconds: 600
+
+# ---------------------------------------------------------------------------
+# Kuadrant dependency recovery (templates/kuadrant-dependency-recovery.yaml)
+#
+# The Kuadrant operator resolves its dependencies once, at start-up, and caches
+# the result. Start it before authorino-operator is Available and it rejects
+# every AuthPolicy in every namespace for the life of the pod, with
+# Accepted=False / MissingDependency. Nothing recovers on its own.
+#
+# This is NOT the istio variant that rhcl.wave above is designed for, and no
+# wave can fix it: OLM resolves rhcl, authorino, limitador, dns and mcp-gateway
+# into one InstallPlan, so the two come up seconds apart by construction.
+# Observed on cluster-slkjc with a three-second margin. So detect and clear it
+# instead of ordering it.
+# ---------------------------------------------------------------------------
+kuadrantRecovery:
+  enabled: true
+  # Needs `oc` only. Same image and reasoning as installPlanApprover above:
+  # origin-cli needs no registry.redhat.io pull secret, and ose-cli refuses
+  # the :latest tag.
+  image: quay.io/openshift/origin-cli:4.22
+  # The dependency whose absence causes this. Must be Available before a
+  # restart can help, or the operator just loses the race again.
+  dependencyDeployment: authorino-operator
+  # Waited on with `oc rollout status` after its pod is deleted.
+  operatorDeployment: kuadrant-operator-controller-manager
+  # Minimum settling time between MissingDependency-triggered restarts.
+  settleSeconds: 120
+  # Maximum pod restarts; other not-ready conditions never trigger a restart.
+  attempts: 3
+  # Allow startup discovery and dependent resources to converge after the
+  # dependency Deployment is Available. Persistent failures still fail closed.
+  readinessTimeoutSeconds: 600
+  # Bounds the whole Job, including the 300s dependency wait and API latency.
+  timeoutSeconds: 1200
+
+# ---------------------------------------------------------------------------
+# MCP Gateway — cluster-level pieces (templates/mcp-gateway-platform.yaml)
+#
+# One Gateway per participant, created by tenant-platform. What lives here is
+# only what must be singular: the Kuadrant instance, and the network rule that
+# stops anything but a gateway reaching an MCP server.
+# ---------------------------------------------------------------------------
+mcpGateway:
+  enabled: true
+  # The AdminNetworkPolicy selects Envoy pods by this Gateway name, so it must
+  # match tenant-platform's mcpGateway.gatewayName.
+  gatewayName: mcp-gateway
+  serverPort: 8080
+  # ANP priorities must be unique cluster-wide (two at one priority is
+  # undefined). Leaves 0-49 for platform policies above this one.
+  networkPolicyPriority: 50
+
+# ---------------------------------------------------------------------------
+# RHOAI DataScienceCluster
+# ---------------------------------------------------------------------------
+datascience:
+  enabled: true
+  applicationsNamespace: redhat-ods-applications
+  # Component names are the DataScienceCluster **v2** set, read from the CRD
+  # schema on this cluster. v2 is the storage version in RHOAI 3.5 and its
+  # component list differs from v1 — `datasciencepipelines` and `codeflare` no
+  # longer exist, and several capabilities this lab needs appear as first-class
+  # components for the first time.
+  components:
+    # --- The lab's core dependencies ---
+    aigateway: Managed             # Model Gateway — the governed inference endpoint (D2)
+    # MCP server lifecycle: runs the MCPServer resources in tenant-platform. It
+    # is NOT the MCP Gateway — its CRD has no routing or authorization surface.
+    # The gateway comes from the mcpGatewayOperator above.
+    mcplifecycleoperator: Managed
+    mlflowoperator: Managed        # MLflow tracing — the observability spine of the lab
+    trustyai: Managed              # Guardrails Orchestrator and Garak integration
+    kserve: Managed                # model serving, underpins aigateway
+    dashboard: Managed             # RHOAI console
+
+    # --- Deliberately off ---
+    # Each of these costs footprint on a shared 30-tenant cluster and none is on
+    # the lab's critical path.
+    llamastackoperator: Removed    # D1 selected LangGraph as the agent framework
+    ogx: Removed                   # Open Responses — revisit only if OGX earns a place
+    workbenches: Managed           # attendees get a browser and a toolbox pod, not notebooks
+    modelregistry: Removed
+    aipipelines: Removed
+    kueue: Removed
+    ray: Removed
+    trainer: Removed
+    trainingoperator: Removed
+    sparkoperator: Removed
+    feastoperator: Removed
+
+# ---------------------------------------------------------------------------
+# Shared lab services — one instance for the whole event
+#
+# These carry the only data in the lab that must survive a pod restart: the
+# baseline scorecard, captured in module 2 and compared against in module 6.
+# See templates/shared-services.yaml.
+# ---------------------------------------------------------------------------
+sharedServices:
+  mlflow:
+    enabled: true
+    # NOTE: the resource name is fixed at "mlflow" by the operator's webhook —
+    # it is a per-namespace singleton, so there is no name to configure here.
+    replicas: 1
+    backendStoreUri: "sqlite:////mlflow/mlflow.db"
+    artifactsDestination: "file:///mlflow/artifacts"
+    storageSize: 20Gi
+    # Empty means the cluster default (ODF Ceph RBD here).
+    storageClass: ""
+
+  evalhub:
+    enabled: true
+    name: agentops-evalhub
+    databaseType: sqlite
+
+# ---------------------------------------------------------------------------
+# Attack and evaluation runner
+#
+# One instance for the whole event. Probes every participant's agent on a cycle,
+# writes results to that participant's own MLflow cycle experiment, and
+# republishes the leaderboard. See templates/attack-eval-runner.yaml.
+#
+# Results go to MLflow, not EvalHub. EvalHub stays deployed above but nothing
+# writes to it — one results store is enough, and MLflow is where the per-
+# participant workspace scoping already exists.
+# ---------------------------------------------------------------------------
+attackEvalRunner:
+  # Disabled: the attack/eval engine now runs inside each participant's
+  # console (waterplant-ui, probes/), which needs no Deployment here, no
+  # cross-namespace RBAC and no leader election.
+  #
+  # Leaving this true would deploy files/attack-eval-runner/, where every
+  # function body is still `raise NotImplementedError` — a CrashLoopBackOff in
+  # agentops-shared on the first sync, for a component nothing reads.
+  enabled: false
+  # Any image with python3. The runner and its definitions are mounted from
+  # ConfigMaps, so this is a runtime, not a build of the runner itself.
+  # PINNED, like every other image in this chart.
+  image: registry.access.redhat.com/ubi9/python-311:9.5
+  # Five minutes. Short enough that a participant sees the effect of a policy
+  # change while they still remember making it; long enough that thirty agents
+  # answering seven attacks and six evals finish comfortably in between.
+  cycleIntervalSeconds: 300
+  # Set by bootstrap-tenant's namespace.yaml on every participant namespace.
+  participantLabel: rhdp.redhat.com/participant
+  # Per-turn timeout. A sandboxed agent denied network access can hang rather
+  # than fail fast, and one stalled agent must not eat the whole cycle.
+  requestTimeoutSeconds: 120
+  # Appended to the username: <username>-cycle. tenant-platform's
+  # ui.cycleMlflowExperiment must resolve to the same name, or the console reads
+  # an experiment the runner never writes to.
+  cycleExperimentSuffix: "-cycle"
+  leaderboardExperiment: agentops-leaderboard
+  mlflow:
+    # Empty means the in-cluster MLflow deployed by sharedServices above.
+    trackingUri: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi

@@ -387,3 +387,72 @@ spec:
 {{- end }}
 {{- end }}
 {{- end }}
+{{- if .Values.mcpGateway.enabled }}
+{{- $ns := printf "%s-%s" .Values.username .Values.namespaceSuffix }}
+{{/*
+Lets mcp-gateway-controller reach this tenant's broker.
+
+This is what makes a tenant DELETABLE in reasonable time, which is not
+obvious from its name, so the measurement is recorded here.
+
+The controller reconciles every MCPServerRegistration by probing
+http://mcp-gateway.<ns>.svc:8080/status. That Service fronts the BROKER pod
+the controller itself creates -- labelled app.kubernetes.io/managed-by:
+mcp-gateway-controller -- not the Envoy gateway pod, which carries
+gateway.networking.k8s.io/gateway-name and is a different workload on a
+different IP. Worth stating because aiming this policy at the Envoy pod looks
+right, changes nothing, and was the first thing tried.
+
+tenant-policy's allow-ingress-within-namespace switches the namespace to
+default-deny ingress and re-allows only same-namespace pods and the router.
+The broker is caught by it, so the probe had no path in and timed out after
+10s, every reconcile, for every registration of every tenant.
+
+The visible symptom is cosmetic: registrations stay Ready=False with no
+discoveredTools, which healthcheck TEN-MCP-02 reports as a known-benign
+warning because the data plane is unaffected -- the agent reaches Envoy and
+Envoy reaches the MCP servers entirely in-namespace.
+
+The expensive symptom is not. The controller's work queue is serialized, so
+10s of dead time per registration per tenant starves it, and removal of the
+mcp.kuadrant.io/finalizer on a DELETING tenant waits behind that backlog.
+
+Measured on cluster-z4r9v with 7 tenants, before this policy: deleting one
+tenant sat 147 seconds with its platform Application already Missing and four
+MCP objects still holding finalizers, finishing at 3m48s. agnosticd's
+ocp4_workload_gitops_bootstrap waits 30 retries -- roughly 5 minutes -- then
+fails the entire destroy. That is AWX job 109384. The backlog grows with
+tenant count, so a full event sails past the budget.
+
+After this policy, the same probe answered HTTP 200 in 11ms.
+
+Scoped to one namespace, one port and the broker pod alone. It does not
+reopen the cross-tenant path allow-ingress-within-namespace exists to close,
+and that policy -- along with the lab exercise built on it -- is untouched.
+*/}}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mcp-broker-from-controller
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/part-of: water-plant
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/managed-by: mcp-gateway-controller
+      app.kubernetes.io/name: {{ .Values.mcpGateway.gatewayName }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.mcpGateway.controllerNamespace | default "kuadrant-system" }}
+      ports:
+        - port: 8080
+          protocol: TCP
+{{- end }}

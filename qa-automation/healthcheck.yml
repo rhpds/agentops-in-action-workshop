@@ -77,6 +77,20 @@
     hc_keycloak_host: "sso.{{ hc_ingress.resources[0].spec.domain }}"
 
     hc_mcp_servers: [control-mcp, maintenance-mcp, telemetry-mcp]
+
+    # Which API versions MCPServerRegistration might be served under, most
+    # likely first. Both are asked for and whichever answers wins — see the
+    # gather in tenant-checks.yml for why guessing one is unsafe.
+    #
+    #   mcp-gateway.v0.7.1 (the pinned OLM bundle)  serves v1alpha1
+    #   Kuadrant/mcp-gateway@3ba95b6 (upstream)     serves v1, v1alpha1 is
+    #                                               served: false
+    #
+    # Add to this list rather than replacing, so one healthcheck covers a
+    # cluster mid-migration and the LB1285 upstream test fixture alike.
+    hc_mcp_registration_apis:
+      - mcp.kuadrant.io/v1alpha1
+      - mcp.kuadrant.io/v1
     # Sum of status.discoveredTools across the three registrations:
     # control_ 7 + maintenance_ 5 + telemetry_ 6. Matches the "18 tools between
     # them" module 1 tells participants. The bridge's own startup line reports

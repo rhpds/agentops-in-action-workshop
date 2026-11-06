@@ -44,6 +44,19 @@ strip() { sed 's/\x1b\[[0-9;]*m//g'; }
 # user. Plain `oc exec` would land outside it, where the relay cannot reach.
 X()     { openshell sandbox exec --name "$SANDBOX_NAME" -- /bin/sh -c "$1"; }
 
+# What config.yaml carries in place of the model key. Hermes expands ${VAR} in
+# config values as it loads them (hermes_cli/config.py, _expand_env_vars), so
+# this resolves inside the sandbox, where OPENAI_API_KEY is OpenShell's
+# per-sandbox credential placeholder. Single-quoted: the bridge writes the
+# reference, never its own value.
+#
+# Resolving at load, rather than seeding the file beforehand, is what makes the
+# participant's own `start-hermes` work. The supervisor only drives a restart on
+# a Keycloak role change or after three failed health checks, so anything seeded
+# from here would miss the path module 2 actually walks.
+KEY_REF='${OPENAI_API_KEY}'
+PROVIDER_NAME=maas
+
 secret_value() {
   oc get secret "$HERMES_ENV_SECRET" -n "$AGENTOPS_NS" -o "jsonpath={.data.$1}" 2>/dev/null | base64 -d
 }
@@ -56,6 +69,20 @@ connect_cli() {
   openshell gateway select lab >/dev/null 2>&1
   log "waiting for the OpenShell gateway at $GATEWAY_ENDPOINT"
   until openshell sandbox list >/dev/null 2>&1; do sleep 5; done
+}
+
+# Holds the real model key in the gateway, so it never reaches config.yaml, the
+# lab guide or a terminal. Uses the builtin openai profile with the MaaS base
+# URL, which binds the credential to that host — verified resolving there on
+# cluster-dpvq7. Idempotent: create fails harmlessly when it already exists.
+seed_provider() {
+  local key
+  key=$(secret_value MODEL_API_KEY)
+  [ -n "$key" ] || { log "no MODEL_API_KEY in $HERMES_ENV_SECRET; skipping provider"; return 0; }
+  openshell provider create --name "$PROVIDER_NAME" --type openai \
+    --credential "OPENAI_API_KEY=$key" \
+    --config "base_url=$MODEL_BASE_URL" >/dev/null 2>&1
+  log "provider $PROVIDER_NAME ready; attach it with: openshell sandbox create ... --provider $PROVIDER_NAME"
 }
 
 sandbox_phase() {
@@ -229,12 +256,18 @@ prepare() {
   fi
   HERMES_HOME="$WORK/probe" python3 /config/wait-for-gateway.py || return 1
 
+  # No real key is written here. api_key carries an env reference that Hermes
+  # expands when it loads this file inside the sandbox, where OPENAI_API_KEY is
+  # OpenShell's placeholder and the supervisor's proxy resolves it on the wire.
+  # An unresolved reference is kept verbatim rather than blanked, so a sandbox
+  # started without the provider attached shows ${OPENAI_API_KEY} in its config
+  # instead of silently running with an empty key.
   {
     cat /config/hermes-config.yaml
     printf '\nmodel:\n  default: %s\n  provider: custom\n  base_url: %s\n  api_key: %s\n' \
-      "$MODEL_DEFAULT" "$MODEL_BASE_URL" "$MODEL_API_KEY"
+      "$MODEL_DEFAULT" "$MODEL_BASE_URL" "$KEY_REF"
     printf '\ncustom_providers:\n  - name: %s\n    base_url: %s\n    api_key: %s\n    model: %s\n' \
-      "$MODEL_DEFAULT" "$MODEL_BASE_URL" "$MODEL_API_KEY" "$MODEL_DEFAULT"
+      "$MODEL_DEFAULT" "$MODEL_BASE_URL" "$KEY_REF" "$MODEL_DEFAULT"
   } > "$WORK/config.yaml"
   cat > "$WORK/hermes-env.sh" <<EOF
 export HERMES_HOME=/sandbox/.hermes
@@ -371,6 +404,7 @@ restart_hermes() {
 write_nginx
 until prepare; do log "preparation failed; retrying in 30s"; sleep 30; done
 connect_cli
+seed_provider
 
 if [ "${ROLE_WATCH_ENABLED:-false}" = "true" ]; then
   role_watch_loop &
