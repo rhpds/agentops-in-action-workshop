@@ -90,9 +90,24 @@
     container: cli
     # Same image the agent already runs — nothing about the agent changes,
     # only where it runs. That is the module's central claim.
+    # --provider is what puts a real key behind OPENAI_API_KEY inside the
+    # sandbox. The bridge seeds the provider and config.yaml carries the
+    # literal '${OPENAI_API_KEY}', which Hermes expands at load; with no
+    # provider attached there is nothing to expand to and the reference
+    # survives into the request, so the model rejects it:
+    #
+    #   HTTP 401: LiteLLM Virtual Key expected. Received=${OPENAI_API_KEY},
+    #   expected to start with 'sk-'
+    #
+    # Must be set at CREATE: a provider cannot be attached to a sandbox that
+    # already exists. Matches the command module 2 gives the participant
+    # (module-02-sandbox-the-agent.adoc), which has carried --provider since
+    # baf4a12 -- this task was simply never updated to match, so e2e failed
+    # E2E-M2-03 on a path every human following the guide passes.
     command: >-
       openshell sandbox create --name {{ e2e_sandbox }}
-      --from {{ e2e_agent_image }} --cpu 2 --memory 4Gi --no-tty -- true
+      --from {{ e2e_agent_image }} --cpu 2 --memory 4Gi --no-tty
+      --provider {{ e2e_model_provider }} -- true
   register: m2_create
   changed_when: true
   failed_when: m2_create.rc | default(0) != 0

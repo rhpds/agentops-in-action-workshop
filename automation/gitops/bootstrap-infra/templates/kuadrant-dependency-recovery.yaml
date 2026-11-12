@@ -81,6 +81,15 @@ rules:
   - apiGroups: [apps]
     resources: [deployments]
     verbs: [get, list, watch]
+  # Read-only, and only to answer one question: has the operator actually
+  # created its dependents, or has it given up? That is what separates
+  # "still starting" from "never created" -- see the restart gate below.
+  - apiGroups: [limitador.kuadrant.io]
+    resources: [limitadors]
+    verbs: [get, list, watch]
+  - apiGroups: [operator.authorino.kuadrant.io]
+    resources: [authorinos]
+    verbs: [get, list, watch]
   # The one mutation: restarting the operator pod.
   - apiGroups: [""]
     resources: [pods]
@@ -166,6 +175,14 @@ spec:
               }
               ready()  { [ "$(cond status)" = "True" ]; }
 
+              # Has the operator actually created its dependents? Both CRs are
+              # the operator's own to make from the Kuadrant CR, so their
+              # absence means it never got that far -- not that they are slow.
+              deps_missing() {
+                [ "$(oc get limitadors.limitador.kuadrant.io,authorinos.operator.authorino.kuadrant.io \
+                       -n "$NS" --no-headers 2>/dev/null | grep -c . || true)" -lt 2 ]
+              }
+
               # A restart before the dependency is actually up just re-loses
               # the race, so establish that first.
               log "waiting for Deployment/$DEP to be Available"
@@ -173,8 +190,37 @@ spec:
                 || fail "$DEP never became Available: Kuadrant has no dependency to find, and restarting it would not help"
 
               # Readiness can lag behind operator availability while CRD
-              # discovery and dependent resources converge. Waiting is safe
-              # for other conditions; only MissingDependency permits a restart.
+              # discovery and dependent resources converge, so waiting is the
+              # default. A restart is permitted in exactly two cases:
+              #
+              #   1. reason=MissingDependency -- the original case.
+              #   2. ANY not-ready reason while the operator's own dependent
+              #      CRs are absent.
+              #
+              # Case 2 exists because gating on MissingDependency alone cannot
+              # repair the failure this Job is most often called to: the
+              # operator loses a CRD-discovery race at startup, logs
+              #
+              #   failed to create authorino resource: ... cannot find
+              #   RESTMapping for APIVersion kuadrant.io/v1beta1 Kind Kuadrant
+              #
+              # and never retries. It surfaces as LimitadorNotReady
+              # ("limitador resource not in topology"), never as
+              # MissingDependency, so the Job waited out its window and failed
+              # with 0 restarts while the one action that fixes it -- deleting
+              # the pod -- was the action it refused to take.
+              #
+              # Observed on clusters l28jv and sl74v, all tenants down both
+              # times. Deleting the operator pod by hand produced both CRs
+              # within 10 seconds on each. This predates #71: the pre-#71 code
+              # failed on the same gate, just faster, so reverting is not the
+              # fix.
+              #
+              # Absence is the discriminator and it is a safe one. Both CRs are
+              # the operator's own to create from the Kuadrant CR, so if they
+              # do not exist the operator has not done its job yet and a
+              # restart cannot lose work. Once they exist, this clause stops
+              # applying and the original wait-it-out behaviour governs.
               end=$((SECONDS + READY_TIMEOUT))
               restarts=0
               next_restart=0
@@ -189,7 +235,12 @@ spec:
                   log "waiting for Kuadrant Ready (reason=$reason): $(cond message)"
                   last_reason=$reason
                 fi
-                if [ "$reason" != "MissingDependency" ] || [ "$restarts" -ge "$ATTEMPTS" ] || [ "$SECONDS" -lt "$next_restart" ]; then
+                if [ "$reason" = "MissingDependency" ] || deps_missing; then
+                  restart_warranted=yes
+                else
+                  restart_warranted=no
+                fi
+                if [ "$restart_warranted" != "yes" ] || [ "$restarts" -ge "$ATTEMPTS" ] || [ "$SECONDS" -lt "$next_restart" ]; then
                   sleep 5
                   continue
                 fi
