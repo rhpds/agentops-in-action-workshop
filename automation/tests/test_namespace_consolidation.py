@@ -88,13 +88,28 @@ class Consolidation(unittest.TestCase):
                     for subject in d.get('subjects', []):
                         if subject['kind'] == 'ServiceAccount':
                             # Subjects bound in a tenant namespace belong to that tenant,
-                            # with exactly one exception: the shared attack/eval runner,
-                            # which writes every participant's cycle results and so is
-                            # bound into each namespace from the shared one. It is the
-                            # only cross-tenant identity in the lab, which is why it is
-                            # named here rather than allowed by pattern — anything else
-                            # reaching across namespaces should still fail this.
-                            if (subject['name'], subject.get('namespace')) == ('attack-eval-runner', 'agentops-shared'):
+                            # with exactly two exceptions, both shared singletons bound
+                            # into each namespace from agentops-shared:
+                            #
+                            #   attack-eval-runner  writes every participant's cycle
+                            #                       results, so it needs their
+                            #                       experiments
+                            #   lab-runner         replays every chapter against a named
+                            #                       participant, so it needs to exec into
+                            #                       their pods and set env on their
+                            #                       console — a markedly wider grant, read
+                            #                       verb by verb in
+                            #                       tenant-platform/templates/lab-runner-rbac.yaml
+                            #
+                            # Named here rather than allowed by pattern, deliberately:
+                            # these are the only two identities in the lab that reach
+                            # across namespaces, and anything else that starts doing so
+                            # should fail this test and have to argue for itself. Adding
+                            # a third is a decision, not a detail.
+                            if (subject['name'], subject.get('namespace')) in (
+                                ('attack-eval-runner', 'agentops-shared'),
+                                ('lab-runner', 'agentops-shared'),
+                            ):
                                 continue
                             self.assertEqual(subject.get('namespace', ns), ns)
                 # Every ServiceAccount a workload asks for must actually be
