@@ -84,6 +84,7 @@ resulting actor onto everything downstream.
 
 | | |
 |---|---|
+| [design-note.md](design-note.md) | **The whole thing in one read** — a condensed narrative version with all six figures. Also published as a page at <https://claude.ai/artifact/XS69pJVcoRHeVupzp4L82T>. |
 | [00-verification-findings.md](00-verification-findings.md) | What was read off the live cluster, and the evidence base for every claim here. **Start here if you doubt anything.** |
 | [01-current-state.md](01-current-state.md) | The honest "before": every hop, every credential, and where identity is absent rather than lost. |
 | [02-target-architecture.md](02-target-architecture.md) | The broker, the exchange, and the intersection rule. Why both facts must live in one token. |
