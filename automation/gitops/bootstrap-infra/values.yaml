@@ -132,6 +132,31 @@ operators:
     source: redhat-operators
     wave: 6
 
+  # Zero Trust Workload Identity Manager -- Red Hat's SPIFFE/SPIRE operator.
+  #
+  # Issues attested, short-lived workload identities (SVIDs). The agent-identity
+  # work uses it to replace the hermes-agent client secret with a credential
+  # only the attested workload can hold -- see docs/agent-identity/.
+  #
+  # No `dependencies`: the bundle declares no required CRDs and resolves alone,
+  # so its InstallPlan carries only this CSV. Verified against the cluster
+  # catalogue; if a future catalogue pulls something else in, the approver
+  # refuses the plan and names the extra CSV rather than installing it.
+  #
+  # Default wave (-2). Unlike rhcl it has no ordering constraint -- nothing it
+  # needs arrives with the DataScienceCluster.
+  #
+  # enabled: false leaves the cluster exactly as it was. The operator is
+  # cluster-scoped and brings a CSI driver and a node DaemonSet, so this is the
+  # widest-blast-radius entry in this file after the DSC itself.
+  ztwim:
+    enabled: true
+    package: openshift-zero-trust-workload-identity-manager
+    namespace: zero-trust-workload-identity-manager
+    channel: stable-v1
+    csv: zero-trust-workload-identity-manager.v1.1.3
+    source: redhat-operators
+
 # NOTE: sandboxed-containers-operator (Kata) is deliberately NOT installed.
 # The Agent Sandbox deployment is not on bare metal and this cluster runs on
 # CNV, so Kata is off the critical path. Agent Sandbox still provides the
@@ -282,6 +307,67 @@ datascience:
     trainingoperator: Removed
     sparkoperator: Removed
     feastoperator: Removed
+
+# ---------------------------------------------------------------------------
+# SPIRE -- the trust domain itself (templates/spire.yaml)
+#
+# Separate from operators.ztwim above: that installs the operator, this creates
+# the instance. Both must be on for workloads to get an SVID.
+#
+# Every CR here is a cluster singleton the operator requires to be named
+# `cluster`; that is the operator's constraint, not a choice.
+# ---------------------------------------------------------------------------
+spire:
+  enabled: true
+  # The SPIFFE trust domain. Appears in every SVID as
+  # spiffe://<trustDomain>/ns/<namespace>/sa/<serviceaccount>, so it is part of
+  # the identity, not just a label. Deliberately NOT derived from the cluster
+  # domain: clusters here are destroyed and rebuilt constantly, and a trust
+  # domain that changes with them would invalidate every ClusterSPIFFEID and
+  # every issuer reference each time.
+  trustDomain: agentops.lab
+  clusterName: agentops
+  bundleConfigMap: spire-bundle
+  server:
+    # sqlite3 is the operator's own default and is right for one lab cluster:
+    # a single writer, no HA, destroyed with the cluster.
+    databaseType: sqlite3
+    persistenceSize: 2Gi
+    storageClass: ""
+    caKeyType: rsa-2048
+    # Short-lived by design -- this is the point of SVIDs. An hour for X509,
+    # five minutes for JWT, matching the operator's defaults.
+    defaultX509Validity: 1h
+    defaultJWTValidity: 5m
+    caValidity: 24h
+  oidc:
+    # Publishes /.well-known/openid-configuration and /keys for the trust
+    # domain. This is the pivot for the whole agent-identity design: it is what
+    # lets something outside SPIFFE -- Keycloak, or Authorino -- verify an SVID
+    # without understanding SPIFFE at all.
+    #
+    # managedRoute lets the operator create and own the Route. jwtIssuer must
+    # match that Route's public URL or discovery fails validation, so it is
+    # derived from the same deployer.domain the rest of this chart uses rather
+    # than written out twice.
+    enabled: true
+    managedRoute: true
+    replicas: 1
+    # The public hostname of the discovery endpoint. The operator uses
+    # jwtIssuer's host verbatim as the Route host, so this must be a valid
+    # DNS name -- and deliberately SHORT.
+    #
+    # It was originally derived as
+    # spire-spiffe-oidc-discovery-provider-<namespace>.<domain>, which puts a
+    # 73-character label in front of the domain. DNS labels cap at 63, so the
+    # Route was rejected: ManagedRouteCreationFailed, "spec.host: Invalid
+    # value". The deployment and service came up fine and only
+    # RouteAvailable/Ready went false, so the operator was healthy while the
+    # endpoint everything else depends on did not exist.
+    #
+    # Empty means spire-oidc.<deployer.domain>. Override only if that name is
+    # taken on the cluster.
+    host: ""
 
 # ---------------------------------------------------------------------------
 # Shared lab services — one instance for the whole event

@@ -6,7 +6,25 @@ description: >-
 type: application
 version: 0.1.0
 # Pinned vendored dependency; no repository URL or download is needed to render.
-# Archive digest: sha256:39b994e91183af199a1d574da805a556287c052e562092308002e5893b8539ad.
+# Archive digest: sha256:df55cd1538bdfb7836834c30dfcf8373b85ffea83bbfd70d50dbe69407a0d2b3.
+#
+# 0.0.92 -> 0.0.116 for SPIFFE-backed provider token grants. 0.0.92 mounted the
+# Workload API socket into SANDBOX pods only, and its own unit test asserted
+# that [openshell.gateway.spiffe] was not rendered -- so the gateway could not
+# present a JWT-SVID of its own, which the token_exchange grant needs. 0.0.116
+# says "gateway and sandbox supervisors mount the SPIFFE Workload API socket so
+# token-exchange profiles can use gateway- and sandbox-scoped JWT-SVIDs".
+#
+# Verified before the swap: every value tenant-openshell overrides still exists
+# at 0.0.116 (podSecurityContext.fsGroup, securityContext.runAsUser,
+# server.auth.allowUnauthenticatedUsers, server.sandboxJwt.k8sSaTokenTtlSecs,
+# server.providerTokenGrants.spiffe.*).
+#
+# Re-vendor with:
+#   helm pull oci://ghcr.io/nvidia/openshell/helm-chart --version <v>
+# The digest above is the OCI MANIFEST digest, not the tgz file hash:
+#   curl -sD- -H "Authorization: Bearer <tok>" \
+#     https://ghcr.io/v2/nvidia/openshell/helm-chart/manifests/<v> | grep -i docker-content-digest
 dependencies:
   - name: helm-chart
-    version: 0.0.92
+    version: 0.0.116

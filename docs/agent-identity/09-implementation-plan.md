@@ -303,9 +303,20 @@ nothing, so the live delta is replayable and the chart stays source of truth. **
 once (`--override=false`), so a chart change never reaches an existing tenant** — that script is how
 a provisioned tenant gets the delta.
 
-**Verify.** Repoint **only `<user>`**'s Applications at the branch, sync, and confirm the
-exchange works from a cold start. The other two tenants stay on `0.0.2`, which is the control.
-Then run the existing `E2E-M3-01/04/05` behaviour checks unchanged as the regression net.
+**Verify.** Repoint **one** tenant's Applications at the branch, sync, and confirm the exchange
+works from a cold start. Keep a tenant on `0.0.2` as the control. Then run the existing
+`E2E-M3-01/04/05` behaviour checks unchanged as the regression net.
+
+> **Known limit of this test, found while writing the script.** Repointing an *existing* tenant
+> does **not** exercise the realm half. A `KeycloakRealmImport` applies once (`--override=false`,
+> and the Job is `Complete`), so the `hermes-agent` client is never created by a re-sync — the
+> Application will go Synced and Healthy while the realm is unchanged, which looks like a pass. It
+> tests the chart wiring (`bootstrap-tenant` forwarding, the env reaching `hermes-env.sh`, the
+> refresher) and nothing else. A genuinely cold test needs a **newly provisioned** tenant. For
+> existing ones the realm half is covered by `apply-realm-identity.sh` instead — proven working and
+> idempotent on 2026-11-24, see [PROGRESS.md](PROGRESS.md).
+
+**Status 2026-11-24:** the script is done and proven; **this Verify step has not been run.**
 
 **Rollback.** Repoint the tenant back to `rh1-2027-lb1285-0.0.2`.
 

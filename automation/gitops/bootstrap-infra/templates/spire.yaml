@@ -1,0 +1,140 @@
+{{- if .Values.spire.enabled }}
+{{- $s := .Values.spire -}}
+{{- $oidcHost := $.Values.spire.oidc.host | default (printf "spire-oidc.%s" .Values.deployer.domain) -}}
+{{/*
+The SPIRE instance for the lab's trust domain.
+
+operators.ztwim installs the operator; this creates what it manages. Both have
+to be on before any workload can get an SVID, and turning only one on fails
+quietly -- the CRs would be rejected as unknown kinds, or the operator would
+sit with nothing to do.
+
+Every CR below is a cluster singleton that the operator requires to be named
+`cluster`. That is its constraint, not a choice, so there is no name to
+configure and no second instance to create.
+
+Sync wave 1: after the Subscriptions (-2) and their InstallPlan approval, so
+the CRDs exist by the time these are applied. If a sync ever races and these
+land first, ArgoCD reports them as unknown kinds rather than doing damage --
+re-syncing once the CSV is installed is the fix.
+
+WHY THIS IS HERE AT ALL: the agent authenticates to Keycloak with a client
+secret today, which has to be distributed and can be read by anything that can
+read the pod. An SVID is issued to the workload on the basis of attestation,
+so there is nothing to distribute and nothing to leak. See
+docs/agent-identity/05-spiffe-and-ztwim.md, and 09-implementation-plan.md
+Stage 8 for what has to be true at Keycloak before the secret can actually go.
+*/}}
+apiVersion: operator.openshift.io/v1alpha1
+kind: ZeroTrustWorkloadIdentityManager
+metadata:
+  name: cluster
+  labels:
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  # Part of every SVID this cluster issues:
+  #   spiffe://{{ $s.trustDomain }}/ns/<namespace>/sa/<serviceaccount>
+  trustDomain: {{ $s.trustDomain | quote }}
+  clusterName: {{ $s.clusterName | quote }}
+  bundleConfigMap: {{ $s.bundleConfigMap | quote }}
+---
+apiVersion: operator.openshift.io/v1alpha1
+kind: SpireServer
+metadata:
+  name: cluster
+  labels:
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  # Must match the OIDC provider's issuer below, and that Route's real
+  # hostname. A mismatch does not fail loudly: discovery serves an issuer that
+  # does not match the one in the token, and every verification fails with
+  # something that reads like a key problem.
+  jwtIssuer: {{ printf "https://%s" $oidcHost | quote }}
+  caKeyType: {{ $s.server.caKeyType | quote }}
+  caValidity: {{ $s.server.caValidity | quote }}
+  caSubject:
+    commonName: "AgentOps Lab SPIRE CA"
+    organization: "AgentOps in Action"
+    country: "US"
+  # Short-lived on purpose -- the whole point of an SVID is that it expires
+  # faster than a leaked secret is useful.
+  defaultX509Validity: {{ $s.server.defaultX509Validity | quote }}
+  defaultJWTValidity: {{ $s.server.defaultJWTValidity | quote }}
+  datastore:
+    databaseType: {{ $s.server.databaseType | quote }}
+    connectionString: "/run/spire/data/datastore.sqlite3"
+    maxOpenConns: 100
+    maxIdleConns: 2
+  persistence:
+    accessMode: ReadWriteOnce
+    size: {{ $s.server.persistenceSize | quote }}
+    storageClass: {{ $s.server.storageClass | quote }}
+  logLevel: info
+  logFormat: text
+---
+apiVersion: operator.openshift.io/v1alpha1
+kind: SpireAgent
+metadata:
+  name: cluster
+  labels:
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  # k8sPSAT is projected-ServiceAccount-token node attestation: the agent
+  # proves which node it is with a token the kubelet projects, rather than a
+  # shared secret. The workload attestor then identifies the specific pod, so
+  # an SVID is bound to a pod on a node and not merely to "something in the
+  # cluster".
+  nodeAttestor:
+    k8sPSATEnabled: "true"
+  workloadAttestors:
+    k8sEnabled: "true"
+    workloadAttestorsVerification:
+      type: auto
+  logLevel: info
+  logFormat: text
+---
+apiVersion: operator.openshift.io/v1alpha1
+kind: SpiffeCSIDriver
+metadata:
+  name: cluster
+  labels:
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  # How a workload actually receives its SVID: a csi.spiffe.io volume, which
+  # mounts the Workload API socket. No secret, no env var, nothing in git --
+  # which is the property that makes this worth doing.
+  pluginName: csi.spiffe.io
+  agentSocketPath: /run/spire/agent-sockets
+{{- if $s.oidc.enabled }}
+---
+apiVersion: operator.openshift.io/v1alpha1
+kind: SpireOIDCDiscoveryProvider
+metadata:
+  name: cluster
+  labels:
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+spec:
+  # Serves /.well-known/openid-configuration and /keys for the trust domain.
+  #
+  # SPIRE does not expose a JWKS natively; this addon is what makes a JWT-SVID
+  # verifiable by anything that speaks OIDC and knows nothing about SPIFFE.
+  # Both candidate routes in Stage 8 depend on it -- Keycloak federated client
+  # authentication, and Authorino validating the SVID directly.
+  jwtIssuer: {{ printf "https://%s" $oidcHost | quote }}
+  csiDriverName: csi.spiffe.io
+  managedRoute: {{ $s.oidc.managedRoute | quote }}
+  replicaCount: {{ $s.oidc.replicas }}
+  logLevel: info
+  logFormat: text
+{{- end }}
+{{- end }}

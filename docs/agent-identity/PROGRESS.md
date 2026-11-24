@@ -46,11 +46,11 @@ explaining why they are not secrets. They are placeholders **in prose only**.
 | 1 · Keycloak realm deltas | **done** | exchange verified working on RHBK 26.4.18 |
 | 2 · Sandboxed agent uses exchanged token | **done** | durable — the in-sandbox refresher loop now exchanges every 300s |
 | 3 · Enforce the intersection | **done** | all four cases verified on the real traffic path |
-| 4 · Into git, on a branch | **partly done** | chart changes landed alongside each stage; three things remain — see below |
-| 5 · Install ZTWIM | not started | |
-| 6 · SVID to a workload | not started | |
-| 7 · Upgrade OpenShell | **blocked** | needs a sandbox-image rebuild, and rebuilds currently lose `skip_auth` |
-| 8 · SVID as client auth | not started | **route chosen: JWT-SVID via Federated Client Auth.** Needs `--features=client-auth-federated,spiffe` on the RHDP-owned Keycloak CR |
+| 4 · Into git, on a branch | **partly done** | committed (`a85b987`); realm script proven; **the plan's Verify step has not run** |
+| 5 · Install ZTWIM | **done** | v1.1.3, 15/15 pods, trust domain `agentops.lab`, 95 entries registered |
+| 6 · SVID to a workload | **done** | SVID issued and decoded; all three Stage 8 questions answered favourably |
+| 7 · Upgrade OpenShell | **blocked** | needs a sandbox-image rebuild; `:test2` proved rebuilds are viable, but pin the base and the fork ref first |
+| 8 · SVID as client auth | **both routes de-risked** | route 1 needs a Keycloak feature flag we do not own; **route 3 is proven working** and needs nothing from Keycloak. Both still need the SVID on the agent's outbound call (Stage 7) |
 | 9 · Provenance | not started | needs images from you |
 
 ## Waiting on you
@@ -98,6 +98,9 @@ reverted without reading the log below. **Nothing here is GitOps-managed unless 
 | C13 | `/sandbox/lab-share/` | inside sandbox `hermie` | holds the patched refresher **and** a copy of `plugins/` (SHARE drives the `hermes_otel` copy too — see the log below) | no | delete the dir and remove the `hermes-env.sh` block |
 | C14 | Patched `mcp-token-refresh.py` | `/sandbox/lab-share/` | byte-identical to the repo copy; exchanges when `MCP_EXCHANGE_CLIENT_ID` is set, fails closed otherwise | no | as C13 |
 | C15 | exchange env appended to `hermes-env.sh` | `/sandbox/hermes/hermes-env.sh` | `MCP_EXCHANGE_CLIENT_ID=hermes-agent`, `MCP_EXCHANGE_CLIENT_SECRET=<lab secret>`. **No `SHARE` override** — the `:test2` image carries the exchange itself | no — uploaded into the sandbox, **not** the bridge ConfigMap (that one selfHeals) | strip the block and re-run `start-hermes` |
+| C17 | ZTWIM operator | cluster-scoped, ns `zero-trust-workload-identity-manager` | Namespace + OperatorGroup + pinned Subscription, `installPlanApproval: Manual`, `startingCSV: zero-trust-workload-identity-manager.v1.1.3`, channel `stable-v1`, source `redhat-operators`. InstallPlan approved by hand | **no** — applied directly, *not* via the `bootstrap` Application (that is pinned to the released tag and owns shared infra for every tenant) | delete the CRs, then the Subscription and CSV, then the namespace |
+| C18 | SPIRE instance | cluster-scoped | five singleton CRs all named `cluster`: `ZeroTrustWorkloadIdentityManager` (trustDomain `agentops.lab`, clusterName `agentops`, bundle `spire-bundle`), `SpireServer` (sqlite3, 2Gi PVC, X509 1h / JWT 5m), `SpireAgent` (k8sPSAT node attestor), `SpiffeCSIDriver` (`csi.spiffe.io`), `SpireOIDCDiscoveryProvider` (managedRoute, 1 replica) | no | `oc delete -f` the five CRs |
+| C19 | OIDC discovery Route | ns `zero-trust-workload-identity-manager` | host `spire-oidc.<apps-domain>`, created by the operator from `jwtIssuer` | no — operator-managed | removed with the `SpireOIDCDiscoveryProvider` CR |
 | C16 | **second predicate on `mcp-authz-policy`** | `<user>-agentops` | `has(auth.identity.azp) && auth.identity.azp == 'hermes-agent'`, appended to `tool-access-check.patternMatching.patterns` | the AuthPolicy is GitOps-managed but `<user>-policy` has selfHeal **off**, so the live patch persists | `oc patch ... --type=json -p '[{"op":"remove","path":"/spec/rules/authorization/tool-access-check/patternMatching/patterns/1"}]'`, or `argocd app sync <user>-policy` |
 
 Active sandbox policy version: **5**.
@@ -710,7 +713,8 @@ applying it.
 
 ### What actually remains in Stage 4
 
-Beyond pushing the branch, three things — and the first is the one that matters:
+Beyond pushing the branch, three things — and the first is the one that matters.
+**Item 2 is now done (2026-11-24); items 1 and 3 are not.**
 
 **1. Nothing has ever been tested from cold.** Every stage so far was applied by hand to a tenant
 that already existed. The chart wiring — `bootstrap-tenant` forwarding `agentIdentity` to both
@@ -735,3 +739,238 @@ not been run.
 Not Stage 4, but must happen before merge: `sandbox.image` points at a personal-org build
 (`TEMPORARY, THIS BRANCH ONLY` in `tenant-openshell/values.yaml`) and has to move to
 `rh-aiservices-bu`.
+
+### 2026-11-24 — `apply-realm-identity.sh` proven (Stage 4, item 2)
+
+**What this was, and what it was not.** This exercised Stage 4's *action* "commit the Stage 1 REST
+calls as an idempotent script". It is **not** Stage 4's *Verify* step — no Application has been
+repointed at the branch, nothing has been synced, no cold start has been done, and the E2E suite
+has not run. Those remain outstanding.
+
+**Branch state confirmed first.** Everything is in `a85b987`, including the `agentIdentity`
+forwarding in `bootstrap-tenant/templates/{applications,openshell}.yaml` — those two still show as
+modified in `git status`, but `--ignore-all-space` confirms the residue is CRLF only and `git show
+HEAD:` has the same 14 and 7 occurrences as the worktree. Worth checking rather than assuming,
+since a half-committed forwarding would have made the branch quietly incomplete.
+
+**The run.** Against `<user3>`, verified pristine beforehand (no `hermes-agent` client, no mappers
+on `mcp-gateway`):
+
+```
+realm waterplant-<user3>
+  mapper aud-hermes-agent:          created
+  mapper preferred-username:        created
+  client hermes-agent:              created
+  mapper aud-mcp-gateway-resource:  created
+  mapper preferred-username:        created
+```
+
+Exchange on that tenant, identical to the hand-applied Stage 1:
+
+```
+azp: hermes-agent | sub: present | preferred_username: operator
+aud: http://mcp-gateway-…<user3>-agentops…:8080/mcp | roles: 18 across 3 clients
+```
+
+**Idempotency holds.** A second run reported `already present` five times, left 2 and 2 mappers,
+and exactly one `hermes-agent` client. That matters because it is the recovery path for a tenant in
+an unknown state.
+
+**Control tenants, corrected.** The plan assumed two untouched controls. `<user3>`'s realm now
+carries the delta, so **only `<user2>` is a clean control.** The delta is additive and should be
+inert for a tenant that has not opted in — its agent still does a plain password grant, and nothing
+there enforces `azp` — but see the unfinished check below.
+
+**Unfinished: is the delta genuinely inert?** It does change live tokens in that realm — every
+operator token now carries `aud: hermes-agent` and `preferred_username`. I claimed that is harmless
+because Authorino does not enforce `aud`. That is reasoning, not measurement, and this work has
+already produced two cases where reasoning of exactly that shape was wrong. The check is two
+commands — confirm `<user3>`'s agent still answers, and that its token is still the plain operator
+one — but the `oc` session expired (`Unauthorized`) before I could run them. **Do this before
+trusting the script against a tenant anyone depends on.**
+
+### 2026-11-24 — Stage 5 complete: ZTWIM installed, SPIRE issuing
+
+**Not applied through Argo, deliberately.** `bootstrap-infra` is owned by the `bootstrap`
+Application pinned to the released tag, and it carries shared infrastructure for every tenant.
+Repointing it at the branch to install one operator would re-sync all of it. The objects were
+applied directly instead and the chart is the durable record — the same split used throughout this
+work.
+
+**Install.** Namespace, OperatorGroup and a pinned Subscription, following `operators.yaml`'s
+convention exactly. The InstallPlan was worth inspecting before approving, because the approver
+refuses plans containing undeclared CSVs:
+
+```
+InstallPlan install-xxxxx   approved: False   phase: RequiresApproval
+  CSVs: ['zero-trust-workload-identity-manager.v1.1.3']
+```
+
+Exactly the pinned CSV and nothing else, which confirms the values entry needs no `dependencies`.
+Approved; CSV `Succeeded` within ~30s; all 8 CRDs appeared.
+
+**Two things went wrong, one of them mine.**
+
+*The OIDC Route was rejected, and the cause was my hostname derivation.* I derived the issuer as
+`spire-spiffe-oidc-discovery-provider-<namespace>.<domain>`, which puts a **73-character label** in
+front of the domain. DNS labels cap at **63**:
+
+```
+RouteAvailable: False  ManagedRouteCreationFailed
+  spec.host: Invalid value: "spire-spiffe-oidc-discovery-provider-zero-trust-workload-identit…
+```
+
+The operator uses `jwtIssuer`'s host verbatim as the Route host, so a long namespace makes that
+derivation unusable. Now `spire-oidc.<domain>` by default, overridable via `spire.oidc.host`.
+
+Worth noting it failed **loudly** — `RouteAvailable: False`, `Ready: False` — which is better than
+my own template comment predicted ("a mismatch does not fail loudly"). But the deployment and
+service were healthy throughout, so a glance at pods would have said everything was fine while the
+endpoint the whole Stage 8 design depends on did not exist.
+
+*The agents briefly failed to mount `spire-bundle`.* A startup race: the agents are created before
+the server publishes its trust bundle ConfigMap. It self-resolved on kubelet retry — 6 not-ready →
+4 → 0 over about a minute. Not a defect, but worth knowing so it is not mistaken for one.
+
+**Verified working.**
+
+```
+pods                15/15 ready   (server, 6 agents, 6 CSI drivers, OIDC provider, controller)
+trust domain        agentops.lab
+discovery           https://spire-oidc.<apps-domain>/.well-known/openid-configuration  -> 200
+  issuer            https://spire-oidc.<apps-domain>
+  jwks_uri          .../keys
+  algs              RS256, ES256, ES384
+JWKS                1 key, RSA/RS256, kid present
+SpireServer.jwtIssuer == SpireOIDCDiscoveryProvider.jwtIssuer    (they must match)
+```
+
+**SPIRE is already issuing identities**, not merely installed. The operator's default
+`ClusterSPIFFEID` reports:
+
+```
+entriesToSet: 95   entryFailures: 0   podsSelected: 95   namespacesSelected: 93
+spiffeIDTemplate: spiffe://{{ .TrustDomain }}/ns/{{ .PodMeta.Namespace }}/sa/{{ .PodSpec… }}
+```
+
+**This changes Stage 6.** The plan assumed we would author a `ClusterSPIFFEID` to select the agent
+workload. The default one already selects every pod in 93 namespaces, including the lab tenants —
+so the bridge and `hermes-plain` almost certainly have registration entries already. Stage 6 may
+reduce to mounting a `csi.spiffe.io` volume and reading what is handed over. Confirm before writing
+a selector we do not need; a narrower `ClusterSPIFFEID` may still be wanted for clarity about
+*which* workload is entitled to the agent identity, which is the Agent Registry role in
+[03](03-uber-mapping.md).
+
+### 2026-11-24 — Stage 6 complete: an SVID, decoded
+
+**No `ClusterSPIFFEID` was needed.** The plan assumed one would have to be authored to select the
+agent workload. The operator's default already selects every pod in every namespace except its own:
+
+```
+namespaceSelector: kubernetes.io/metadata.name NotIn [zero-trust-workload-identity-manager]
+podSelector:       <none>
+spiffeIDTemplate:  spiffe://{{ .TrustDomain }}/ns/{{ .PodMeta.Namespace }}/sa/{{ .PodSpec.ServiceAccountName }}
+```
+
+So every lab workload already had a registration entry. Stage 6 reduced to mounting a
+`csi.spiffe.io` volume and reading what was handed over.
+
+**Method.** A throwaway pod in the tenant namespace, running the `spire-agent` image, using the
+**bridge's own ServiceAccount** so the SPIFFE ID it receives is exactly what the real broker would
+receive. Deliberately not the bridge or `hermes-plain` themselves: both are GitOps-managed with
+selfHeal on, so a hand-added volume would be reverted. Deleted afterwards.
+
+**X509-SVID:**
+
+```
+SPIFFE ID:   spiffe://agentops.lab/ns/<user>-agentops/sa/hermes-openshell-bridge
+Valid:       1h   (matches spire.server.defaultX509Validity)
+CA valid:    24h  (matches spire.server.caValidity)
+```
+
+**JWT-SVID, requested with `aud` = the Keycloak realm issuer:**
+
+```
+header  {"alg":"RS256","kid":"cFxBePEc…","typ":"JWT"}
+aud     ["https://sso.<apps-domain>/realms/waterplant-<user>"]
+iss     https://spire-oidc.<apps-domain>
+sub     spiffe://agentops.lab/ns/<user>-agentops/sa/hermes-openshell-bridge
+exp-iat 300s   (matches spire.server.defaultJWTValidity)
+```
+
+### The three questions, answered
+
+| Question | Answer | Consequence |
+|---|---|---|
+| Is `iss` present, and what is it? | **Yes** — the SPIRE OIDC discovery provider | This is the exact claim behind Keycloak [#43394](https://github.com/keycloak/keycloak/issues/43394), the NPE when an SVID carries `iss`. **Fixed in 26.4.1; we run 26.4.18.** We would have hit it on an older patch release |
+| Is `sub` the SPIFFE ID? | **Yes** | Matches what federated client authentication expects: `sub` = `spiffe://<trust-domain>/<client>` |
+| Can `aud` be set to the realm issuer? | **Yes**, per-request | Matches the `aud` = realm issuer URL requirement |
+
+All four of Keycloak's documented requirements for a SPIFFE client assertion are therefore
+satisfiable by what SPIRE actually emits here: `sub`, `aud`, a future `exp`, and an `iss` that the
+fixed code ignores.
+
+**And the chain closes.** The SVID's `kid` (`cFxBePEc…`) is the single key published at
+`https://spire-oidc.<apps-domain>/keys` — so anything that can read that JWKS can verify this
+token, with no SPIFFE awareness at all. That is the property both Stage 8 routes depend on:
+Keycloak federated client auth, and Authorino validating the SVID directly.
+
+**What is still unproven for Stage 8.** Only one thing, and it is not technical: the
+`client-auth-federated` and `spiffe` features are present in the RHBK build but **not enabled**
+(`features: null` on an RHDP-owned CR). Everything on our side of that flag now checks out.
+
+### 2026-11-24 — Authorino validates a SPIFFE SVID directly (Stage 8, route 3 proven)
+
+Stage 7 is blocked on an image rebuild and Stage 8's preferred route needs a Keycloak feature flag
+that is not ours to set — so the useful thing left was the **fallback** route, which needs neither.
+
+**Question:** can Authorino validate a JWT-SVID on its own, treating SPIRE's OIDC discovery
+provider as just another issuer?
+
+**Method.** A *guarded* authentication rule added to `mcp-auth-policy` on the public listener,
+matching only when an `x-svid` header is present, so live traffic was untouched:
+
+```yaml
+spiffe-svid:
+  jwt: { issuerUrl: https://spire-oidc.<apps-domain> }
+  credentials: { customHeader: { name: x-svid } }
+  when: [ { predicate: 'request.headers.exists(h, h == "x-svid")' } ]
+```
+
+Authorino reached `Accepted=True / Enforced=True`, which by itself proves it fetched and parsed
+SPIRE's discovery document. In-cluster reachability was confirmed first (`HTTP 200`).
+
+**Result**, using a real SVID fetched from the Workload API by a throwaway pod running under the
+bridge's ServiceAccount:
+
+```
+no credential at all   -> 401
+valid SVID in x-svid   -> 200
+garbage in x-svid      -> 401
+```
+
+**Route 3 works.** Authorino needs no SPIFFE awareness and no Keycloak involvement — an SVID is
+just a JWT from an issuer whose JWKS it can fetch. This is the fallback that survives if the
+`client-auth-federated` / `spiffe` flags are never enabled on the shared Keycloak.
+
+**Reverted immediately.** That rule is a genuine weakening if left on: Authorino's authentication
+rules are OR, so a valid SVID alone would have authenticated on the public listener. Removed, the
+policy is back to its single `waterplant-<user>` rule and `Enforced=True`, and the live agent still
+answers correctly. The throwaway pod is deleted.
+
+### Where Stage 8 now stands
+
+| Route | Technically proven | Blocker |
+|---|---|---|
+| 1 · JWT-SVID → Keycloak federated client auth | claim shape verified (Stage 6); exchange itself verified (Stage 1) | `--features=client-auth-federated,spiffe` on an **RHDP-owned** Keycloak CR |
+| 2 · X509-SVID → Keycloak mTLS | not attempted | client-cert termination on an ingress we do not own |
+| 3 · Authorino validates the SVID | **yes — end to end, today** | none at Keycloak; still needs the SVID onto the agent's outbound call |
+
+**The common remaining dependency is Stage 7, not Keycloak.** Every route needs the SVID to reach
+the gateway or the token endpoint from inside the sandbox, and the only mechanism that injects a
+credential into a sandbox's outbound request is OpenShell's provider machinery — which the deployed
+0.0.92 does not have. That, not the feature flag, is now the critical path.
+
+Route 3 also remains the architectural divergence recorded in
+[10](10-tool-call-walkthrough.md): two credentials at the enforcement point rather than one, never
+bound together. Proven working is not the same as preferred.

@@ -5,13 +5,28 @@ username: user1
 namespaceSuffix: agentops
 
 # ---------------------------------------------------------------------------
-# The vendored OpenShell gateway chart (charts/helm-chart-0.0.92.tgz).
+# The vendored OpenShell gateway chart (charts/helm-chart-0.0.116.tgz).
 #
 # OpenShell shares the lab namespace. bootstrap-tenant grants participants
 # policy editing and read access, without workload creation or Secret access.
 # One gateway and client certificate per participant are retained.
 # ---------------------------------------------------------------------------
 helm-chart:
+  # New in 0.0.116: a preflight that fails the render unless the Agent Sandbox
+  # CRDs appear in .Capabilities.APIVersions.
+  #
+  # Disabled, because that is a render-time check and we render without a
+  # cluster -- `helm template` offline, and ArgoCD, which renders client-side.
+  # Left on, every tenant sync fails with "Agent Sandbox is required but
+  # neither agents.x-k8s.io/v1beta1 nor v1alpha1 is served by this cluster"
+  # even though it plainly is: bootstrap-infra installs the operator, and the
+  # sandbox CRs in this very chart depend on it.
+  #
+  # Nothing is lost. If Agent Sandbox really were missing, `openshell sandbox
+  # create` fails in module 2 with a clearer message than a render error.
+  agentSandbox:
+    preflight:
+      enabled: false
   # OpenShift assigns UIDs from the namespace range; the chart's fixed 1000 and
   # fsGroup would be rejected by restricted-v2.
   podSecurityContext:
@@ -19,6 +34,17 @@ helm-chart:
   securityContext:
     runAsUser: null
   server:
+    # SPIFFE-backed provider token grants: mounts the SPIFFE Workload API
+    # socket into BOTH the gateway and sandbox pods, so a provider profile can
+    # exchange a JWT-SVID for an upstream token and the sandbox never holds a
+    # credential of its own.
+    #
+    # Requires ZTWIM and its CSI driver on the cluster (bootstrap-infra
+    # operators.ztwim + spire). With those absent the pods cannot mount
+    # csi.spiffe.io and will not start, so these two move together.
+    providerTokenGrants:
+      spiffe:
+        enabled: true
     auth:
       # Callers are already authenticated by the gateway's mTLS, and only the
       # bridge in this namespace holds the client certificate.
@@ -74,9 +100,17 @@ bridge:
   # The participant's cli container: the openshell CLI plus an ssh client,
   # which `sandbox create` and `sandbox upload` need. Built from
   # hermes-openshell/Containerfile.cli in the agent repo. The supervisor copies
-  # openshell out of it too. CLI v0.0.88 is the one verified against the
-  # vendored 0.0.92 gateway on cluster-tpss7; keep the tag in step.
-  openshellCliImage: quay.io/rh-aiservices-bu/openshell-cli:0.1
+  # openshell out of it too.
+  #
+  # KEEP IN STEP WITH THE GATEWAY. The CLI and gateway speak a versioned
+  # protocol, and a mismatched pair surfaces as an odd failure in module 2
+  # rather than as a version complaint. Current pair: CLI v0.0.116 <-> vendored
+  # chart 0.0.116 (Chart.yaml), which replaced the v0.0.88 <-> 0.0.92 pair.
+  #
+  # TEMPORARY, THIS BRANCH ONLY -- personal-org build, move to
+  # rh-aiservices-bu before merge. Verified before bumping:
+  #   openshell --version -> 0.0.116, ssh present, digest sha256:b9ac2056f5d4...
+  openshellCliImage: quay.io/rlundber/openshell-cli:test1
   # The supervisor's image. The RHEL 9 build: it runs the token refresher, which needs
   # Python 3.7+. The RHEL 8 ose-cli ships 3.6.8 and fails on
   # `from __future__ import annotations` (seen on cluster-tpss7).
