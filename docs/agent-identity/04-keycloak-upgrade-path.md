@@ -18,7 +18,7 @@ loud if this ever reaches the lab guide.
 **Status on our cluster: available, currently off.**
 
 ```
-realm waterplant-user-9c5ls: adminPermissionsEnabled: false
+realm waterplant-<user>: adminPermissionsEnabled: false
 ```
 
 The field exists, which means the per-realm toggle is present. FGAP V2 has been GA and enabled by

@@ -281,6 +281,130 @@ spec:
           - openid
           - roles
           - groups
+        {{- if $kc.agentIdentity.enabled }}
+        # Two mappers that exist only to make RFC 8693 token exchange possible.
+        #
+        # The realm declares clientScopes: explicitly, which REPLACES Keycloak's
+        # built-ins rather than adding to them. So there is no `basic` scope and
+        # therefore no subject, and no `profile` scope and therefore no
+        # username. Verified on a live tenant: the operator's token carried
+        # [azp exp groups iat iss jti resource_access scope sid typ] and nothing
+        # else -- 18 permissions with no principal attached.
+        #
+        # The audience mapper is not a nicety. Keycloak's standard token
+        # exchange requires the REQUESTING client to be the subject token's azp
+        # or to appear in its aud, and without this it is neither: the exchange
+        # fails 400 "Client is not within the token audience". Note Keycloak
+        # writes the configured string without resolving it, so this is valid
+        # even before the hermes-agent client below exists.
+        protocolMappers:
+          - name: aud-{{ $kc.agentIdentity.clientId }}
+            protocol: openid-connect
+            protocolMapper: oidc-audience-mapper
+            consentRequired: false
+            config:
+              included.client.audience: {{ $kc.agentIdentity.clientId | quote }}
+              access.token.claim: "true"
+              introspection.token.claim: "true"
+              id.token.claim: "false"
+          - name: preferred-username
+            protocol: openid-connect
+            protocolMapper: oidc-usermodel-property-mapper
+            consentRequired: false
+            config:
+              user.attribute: username
+              claim.name: preferred_username
+              jsonType.label: String
+              access.token.claim: "true"
+              id.token.claim: "true"
+              introspection.token.claim: "true"
+              userinfo.token.claim: "true"
+        {{- end }}
+{{- if $kc.agentIdentity.enabled }}
+      # ---------------------------------------------------------------------
+      # The agent's own identity.
+      #
+      # This replaces the confidential wp-dev/hermes-agent client that used to
+      # be here and was removed because "its secret could not live in git".
+      # Two things answer that objection:
+      #
+      #   serviceAccountsEnabled: false -- this client cannot obtain a token in
+      #   its own name. It can do exactly one thing: re-mint a token whose
+      #   subject someone else already authenticated, carrying no more
+      #   permissions than that subject had. Its secret therefore grants
+      #   strictly LESS than the operator/operator password already printed in
+      #   the lab guide, which is why it can sit in values.yaml beside
+      #   adminPassword: redhat without reopening the hole the old client
+      #   opened. If that ever changes -- in particular if delegation forces
+      #   serviceAccountsEnabled: true -- the secret must move to the catalog
+      #   item's channel, or better, be replaced by a SPIFFE-attested
+      #   credential.
+      #
+      #   The sanctioned secret channel exists anyway: MODEL_API_KEY and
+      #   API_SERVER_KEY already reach a tenant through the catalog item.
+      #
+      # The `roles` scope is LOAD-BEARING. The resource_access.${client_id}.roles
+      # mapper lives in the realm's custom `roles` client scope; omit it and the
+      # exchanged token has no resource_access at all, and every tool call fails
+      # the FIRST authz predicate -- which reads like a policy bug rather than a
+      # scope omission.
+      #
+      # preferred-username is repeated here deliberately. Mappers are per
+      # client, and the exchanged token is issued FOR this client, so it carries
+      # only this client's mappers plus the shared scopes. Measured: without
+      # this the exchanged token came back with preferred_username ABSENT while
+      # sub was present, leaving the actor chain a bare UUID.
+      # ---------------------------------------------------------------------
+      - clientId: {{ $kc.agentIdentity.clientId | quote }}
+        name: Hermie agent identity
+        description: >-
+          The agent acting on the operator's behalf. No service account: it can
+          only re-mint a token someone else authenticated.
+        enabled: true
+        publicClient: false
+        serviceAccountsEnabled: false
+        directAccessGrantsEnabled: false
+        standardFlowEnabled: false
+        implicitFlowEnabled: false
+        fullScopeAllowed: true
+        protocol: openid-connect
+        secret: {{ required "keycloak.agentIdentity.clientSecret is required when agentIdentity.enabled" $kc.agentIdentity.clientSecret | quote }}
+        defaultClientScopes:
+          - roles
+          - groups
+        attributes:
+          # GA and on by default since Keycloak 26.2; verified advertised on
+          # RHBK 26.4.18. NOT the same as delegation (actor_token / the `act`
+          # claim), which needs 26.8+, a preview feature and FGAP v2 -- see
+          # docs/agent-identity/04-keycloak-upgrade-path.md.
+          standard.token.exchange.enabled: "true"
+        protocolMappers:
+          # Per-hop audience. Set by a fixed mapper rather than by passing
+          # audience= on the exchange request: requesting an audience re-scopes
+          # which client's mappers apply and risks dropping resource_access,
+          # which is the operator's entire permission set.
+          - name: aud-mcp-gateway-resource
+            protocol: openid-connect
+            protocolMapper: oidc-audience-mapper
+            consentRequired: false
+            config:
+              included.custom.audience: {{ printf "http://%s:%d/mcp" $svc (int 8080) | quote }}
+              access.token.claim: "true"
+              introspection.token.claim: "true"
+              id.token.claim: "false"
+          - name: preferred-username
+            protocol: openid-connect
+            protocolMapper: oidc-usermodel-property-mapper
+            consentRequired: false
+            config:
+              user.attribute: username
+              claim.name: preferred_username
+              jsonType.label: String
+              access.token.claim: "true"
+              id.token.claim: "true"
+              introspection.token.claim: "true"
+              userinfo.token.claim: "true"
+{{- end }}
 {{- range $server, $tools := $kc.toolRoles }}
       # One bearer-only client per MCP server; its ID is the broker's
       # x-mcp-servername for that server.

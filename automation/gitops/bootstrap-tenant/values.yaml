@@ -35,6 +35,23 @@ secrets:
 keycloak:
   host: ""
 
+  # The agent's own Keycloak identity, distinct from the operator persona.
+  # Forwarded to BOTH tenant charts from here so the client id and secret can
+  # never drift apart -- tenant-platform creates the client, tenant-openshell
+  # hands the secret to the refresher that uses it.
+  #
+  # enabled: false provisions a tenant exactly as before: no hermes-agent
+  # client, no exchange, the agent keeps authenticating as the operator.
+  #
+  # This is a lab credential in the same class as the operator password that
+  # is already printed in the lab guide -- and with serviceAccountsEnabled:
+  # false the client cannot act in its own name, so it grants strictly less.
+  # It should become a SPIFFE-attested credential; see docs/agent-identity/.
+  agentIdentity:
+    enabled: true
+    clientId: hermes-agent
+    clientSecret: hermes-agent-lab-secret
+
 # ---------------------------------------------------------------------------
 # Where the per-participant Applications point.
 #
@@ -140,6 +157,13 @@ policy:
   # Tool authorization at baseline: on, so every tool call needs the matching
   # role in the participant's Keycloak realm. See
   # tenant-policy/templates/mcp-gateway-policy.yaml.
+  #
+  # agentIdentityEnforced additionally requires the caller to BE the agent
+  # (azp == keycloak.agentIdentity.clientId), i.e. the intersection of
+  # personnel identity and agent identity. Default off: turn it on only where
+  # keycloak.agentIdentity.enabled is also true, or every tool call is
+  # refused. Verified on a live tenant -- see docs/agent-identity/PROGRESS.md.
+  agentIdentityEnforced: false
   mcpGatewayEnforced: true
 
 # ---------------------------------------------------------------------------

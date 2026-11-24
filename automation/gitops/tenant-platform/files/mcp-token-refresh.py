@@ -78,6 +78,66 @@ def refresh_once() -> None:
         _log(f"ERROR: unexpected Keycloak response: {resp}")
         raise RuntimeError("no access_token in Keycloak response")
 
+    # ------------------------------------------------------------------
+    # Agent identity: exchange the operator's token for one that names the
+    # agent as well (RFC 8693 standard token exchange, Keycloak >= 26.2).
+    #
+    # Without this the agent IS the operator: the token above carries
+    # azp=mcp-gateway -- the public client every caller in the realm shares --
+    # and, because the realm import replaces Keycloak's built-in client
+    # scopes, no sub and no aud either. Measured on RHBK 26.4.18: claims were
+    # [azp exp groups iat iss jti resource_access scope sid typ]. Eighteen
+    # permissions with no principal attached.
+    #
+    # After the exchange the same call carries sub + preferred_username (the
+    # operator), azp=hermes-agent (the software acting for them) and aud
+    # scoped to the gateway, with resource_access unchanged. tenant-policy's
+    # mcp-authz-policy can then require BOTH.
+    #
+    # Env-gated: with MCP_EXCHANGE_CLIENT_ID unset this behaves exactly as it
+    # always did, so a tenant without the realm delta is unaffected.
+    #
+    # FAILS CLOSED on purpose. A silent fall back to the raw operator token
+    # would de-identify the agent at exactly the moment the policy starts
+    # requiring identity, and the symptom would surface as the misleading
+    # "network issue or service outage" Hermes already reports for a 403.
+    #
+    # Two prerequisites, both of which fail confusingly if missed:
+    #   * the operator token must carry the exchange client in `aud`, or
+    #     Keycloak answers 400 "Client is not within the token audience";
+    #   * the exchange client needs the realm's `roles` scope, or the
+    #     exchanged token has no resource_access and every tool call fails
+    #     the FIRST authz predicate, which reads like a policy bug.
+    # See docs/agent-identity/09-implementation-plan.md Stage 1.
+    # ------------------------------------------------------------------
+    exchange_client = os.environ.get("MCP_EXCHANGE_CLIENT_ID", "").strip()
+    if exchange_client:
+        exchange_secret = os.environ.get("MCP_EXCHANGE_CLIENT_SECRET", "")
+        xdata = urllib.parse.urlencode(
+            {
+                "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+                "client_id": exchange_client,
+                "client_secret": exchange_secret,
+                "subject_token": resp["access_token"],
+                "subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
+                # Deliberately NO `audience`: requesting one re-scopes which
+                # client's protocol mappers apply and can drop resource_access.
+                # Per-hop audience comes from a fixed mapper on the client.
+            }
+        ).encode()
+        xreq = urllib.request.Request(keycloak_url, data=xdata, method="POST")
+        try:
+            with urllib.request.urlopen(xreq, context=ctx, timeout=15) as r:
+                xresp = json.loads(r.read())
+        except urllib.error.URLError as exc:
+            _log(f"ERROR: token exchange as {exchange_client} failed: {exc}")
+            raise
+        if "access_token" not in xresp:
+            _log(f"ERROR: unexpected exchange response: {xresp}")
+            raise RuntimeError("no access_token in token-exchange response")
+        _log(f"exchanged operator token for one acting as {exchange_client}")
+        resp = xresp
+
     expires_in = resp.get("expires_in", 1800)
     token_data = {
         "access_token": resp["access_token"],

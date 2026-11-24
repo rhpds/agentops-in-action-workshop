@@ -379,6 +379,14 @@ spec:
             - { name: MCP_PASSWORD,    value: {{ .Values.keycloak.agentPassword | quote }} }
             - name: MCP_TOKEN_URL
               value: {{ printf "https://%s/realms/waterplant-%s/protocol/openid-connect/token" .Values.keycloak.host .Values.username | quote }}
+            {{- if .Values.keycloak.agentIdentity.enabled }}
+            # Turns the password grant above into an RFC 8693 exchange, so the
+            # token Hermes presents names the agent as well as the operator.
+            # The refresher is a no-op without these two, and fails closed if
+            # the exchange itself fails.
+            - { name: MCP_EXCHANGE_CLIENT_ID,     value: {{ .Values.keycloak.agentIdentity.clientId | quote }} }
+            - { name: MCP_EXCHANGE_CLIENT_SECRET, value: {{ .Values.keycloak.agentIdentity.clientSecret | quote }} }
+            {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: [ALL] }

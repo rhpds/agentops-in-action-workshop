@@ -4,8 +4,8 @@ Design documents for giving Hermie — the waterplant assistant participants ope
 *AgentOps in Action* lab — an identity of its own, distinct from the human operator it acts for.
 
 **Status: design only.** Nothing here is implemented. No chart, no image, and no lab content has
-been changed. [07-phasing.md](07-phasing.md) proposes how it would be built; everything else
-describes the target.
+been changed. [09-implementation-plan.md](09-implementation-plan.md) is the runbook for building it;
+everything else describes the target.
 
 ## Why
 
@@ -94,6 +94,8 @@ resulting actor onto everything downstream.
 | [06-provenance.md](06-provenance.md) | How an actor reaches traces, work orders and plant-api — and killing `raised_by: "unknown"`. |
 | [07-phasing.md](07-phasing.md) | Proposed build order, verification gates, and image handoffs. |
 | [08-open-questions.md](08-open-questions.md) | Unverified assumptions and ranked risks, each with the command that settles it. |
+| [10-tool-call-walkthrough.md](10-tool-call-walkthrough.md) | **One tool call, end to end** — every hop and every credential, today and after; plus exactly where SPIRE does and does not sit. |
+| [09-implementation-plan.md](09-implementation-plan.md) | **The runbook** — every stage with its preconditions, verification, rollback and owner. Includes the ZTWIM install and the OpenShell upgrade. |
 
 ## Two things to carry into any implementation
 

@@ -21,6 +21,15 @@ mcpGateway:
   enforced: true
   # Must match tenant-platform's mcpGateway.gatewayName.
   gatewayName: mcp-gateway
+  # Require the caller to be the agent, not just to hold the tool role --
+  # the intersection of personnel identity and agent identity.
+  #
+  # Default OFF. Turning it on without the token exchange configured
+  # (tenant-platform keycloak.agentIdentity) refuses EVERY tool call: the
+  # agent would still be presenting a plain operator token whose azp is the
+  # shared public client. bootstrap-tenant forwards both from one place so
+  # they cannot drift apart.
+  agentIdentityEnforced: false
   # Whether this participant has a gateway at all (tenant-platform's
   # mcpGateway.enabled, forwarded by bootstrap-tenant). Gates the rollout Job.
   enabled: false
@@ -48,3 +57,7 @@ mcpGateway:
 # bootstrap-tenant; required when mcpGateway.enforced.
 keycloak:
   host: ""
+  # Only the clientId is needed here -- this chart checks the azp claim, it
+  # never authenticates as the client, so no secret belongs in tenant-policy.
+  agentIdentity:
+    clientId: hermes-agent

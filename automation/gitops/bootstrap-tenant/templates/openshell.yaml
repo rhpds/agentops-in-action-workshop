@@ -35,6 +35,21 @@ spec:
           value: {{ .Values.namespaceSuffix | quote }}
         - name: keycloak.host
           value: {{ $keycloakHost | quote }}
+        {{- if .Values.keycloak.agentIdentity.enabled }}
+        # Forwarded from ONE place on purpose. tenant-platform creates this
+        # client in the realm; tenant-openshell hands its secret to the
+        # in-sandbox refresher. If the two ever disagree the exchange fails
+        # 401 with nothing naming the cause, so both read the same value here.
+        - name: keycloak.agentIdentity.enabled
+          value: "true"
+        - name: keycloak.agentIdentity.clientId
+          value: {{ .Values.keycloak.agentIdentity.clientId | quote }}
+        - name: keycloak.agentIdentity.clientSecret
+          value: {{ .Values.keycloak.agentIdentity.clientSecret | quote }}
+        {{- else }}
+        - name: keycloak.agentIdentity.enabled
+          value: "false"
+        {{- end }}
         # Whether this participant's Hermes traces to MLflow. The bridge
         # installs the hermes_otel plugin and creates the experiment; the
         # sandbox policy has to allow the egress, which tenant-policy owns.

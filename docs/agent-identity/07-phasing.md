@@ -1,7 +1,7 @@
 # 07 — Proposed phasing
 
 A build order, not a commitment. Each phase is independently verifiable on **one tenant**
-(`user-9c5ls`) with `user-qkc86` left untouched as a control, and each has a stopping point where
+(`<user>`) with `<user2>` left untouched as a control, and each has a stopping point where
 the work so far is coherent on its own.
 
 **Phases 1–3 need no image rebuild.** That is a consequence of the console targeting `hermes-plain`

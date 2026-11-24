@@ -283,6 +283,8 @@ export MCP_USERNAME='${MCP_USERNAME}'
 export MCP_PASSWORD='${MCP_PASSWORD}'
 export MCP_TOKEN_URL='${MCP_TOKEN_URL}'
 export TOKEN_REFRESH_SECONDS='${TOKEN_REFRESH_SECONDS}'
+export MCP_EXCHANGE_CLIENT_ID='${MCP_EXCHANGE_CLIENT_ID}'
+export MCP_EXCHANGE_CLIENT_SECRET='${MCP_EXCHANGE_CLIENT_SECRET}'
 # Availability marker; the local provider fetches pages directly over HTTP.
 export FIRECRAWL_API_URL=http://waterplant-docs:8080
 mkdir -p /sandbox/.hermes/plugins/web/firecrawl

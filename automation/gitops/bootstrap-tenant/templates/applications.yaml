@@ -108,6 +108,21 @@ spec:
           value: {{ .Values.platform.mcpGateway | quote }}
         - name: keycloak.host
           value: {{ $keycloakHost | quote }}
+        {{- if .Values.keycloak.agentIdentity.enabled }}
+        # Forwarded from ONE place on purpose. tenant-platform creates this
+        # client in the realm; tenant-openshell hands its secret to the
+        # in-sandbox refresher. If the two ever disagree the exchange fails
+        # 401 with nothing naming the cause, so both read the same value here.
+        - name: keycloak.agentIdentity.enabled
+          value: "true"
+        - name: keycloak.agentIdentity.clientId
+          value: {{ .Values.keycloak.agentIdentity.clientId | quote }}
+        - name: keycloak.agentIdentity.clientSecret
+          value: {{ .Values.keycloak.agentIdentity.clientSecret | quote }}
+        {{- else }}
+        - name: keycloak.agentIdentity.enabled
+          value: "false"
+        {{- end }}
         # Where Hermes runs. With openshell, templates/openshell.yaml deploys the
         # sandbox and its bridge, and the console is pointed at the bridge.
         - name: agent.hermes.runtime
@@ -200,6 +215,20 @@ spec:
         # so the comment was the stale half.)
         - name: mcpGateway.enforced
           value: {{ .Values.policy.mcpGatewayEnforced | quote }}
+        {{- if .Values.keycloak.agentIdentity.enabled }}
+        # The intersection half: require the caller to be the agent as well as
+        # the operator holding the tool role. Forwarded alongside
+        # agentIdentity so it can never be switched on without the exchange
+        # that makes it satisfiable -- that combination refuses every tool
+        # call, because the agent would still present a plain operator token.
+        - name: mcpGateway.agentIdentityEnforced
+          value: {{ .Values.policy.agentIdentityEnforced | quote }}
+        - name: keycloak.agentIdentity.clientId
+          value: {{ .Values.keycloak.agentIdentity.clientId | quote }}
+        {{- else }}
+        - name: mcpGateway.agentIdentityEnforced
+          value: "false"
+        {{- end }}
         # Whether this participant has a gateway at all. Without one, the
         # PostSync Job that restarts the gateway and agent has nothing to do.
         - name: mcpGateway.enabled

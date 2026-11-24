@@ -84,6 +84,13 @@ short token TTLs and describes no explicit revocation mechanism.
    exchanged token proves "the agent client authenticated"; with SPIFFE it additionally proves
    "the agent client authenticated using a credential only the attested workload could hold". That
    is one inference step short of the SVID itself being inside the token. Uber has the same step.
+
+   **But only on one of our two routes.** Uber's SVID goes to their STS, never to their gateway, so
+   their enforcement point sees a single credential with attestation folded in. Our mTLS route
+   matches that — Keycloak plays the STS. Our Authorino route does not: it puts a *second*
+   credential at the enforcement point and never binds the two together. Likely to work, but a real
+   divergence. See [09-implementation-plan.md](09-implementation-plan.md) Stage 8 and
+   [10-tool-call-walkthrough.md](10-tool-call-walkthrough.md).
 4. **Redaction at the gateway.** Uber's MCP Gateway redacts sensitive data in responses. Not
    proposed here, and arguably in tension with the lab's deliberate-insecurity baseline.
 

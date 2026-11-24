@@ -1,7 +1,7 @@
 # 00 — Phase 0 verification findings
 
-Everything below was read from a live 3-tenant build (`api.ocp.c5qkd.sandbox1942.opentlc.com`,
-tenants `user-9c5ls`, `user-qkc86`, `user-xc25n`) on 2026-11-19. Strictly read-only: nothing
+Everything below was read from a live 3-tenant build (`api.<cluster>.example.com`,
+tenants `<user>`, `<user2>`, `<user3>`) on 2026-11-19. Strictly read-only: nothing
 was created, patched, or written, including inside pods.
 
 These findings are the evidence base for every other document here. Where a later document
@@ -48,7 +48,7 @@ Two consequences:
 
 ## 2. Why there is no subject: the realm replaced Keycloak's built-in scopes
 
-Live realm `waterplant-user-9c5ls`:
+Live realm `waterplant-<user>`:
 
 ```
 client-scopes: offline_access (no mappers)
@@ -178,7 +178,7 @@ No risk here. Recorded so the phantom does not reappear.
 ## 7. FGAP V2 is off but available
 
 ```
-realm waterplant-user-9c5ls: adminPermissionsEnabled: false
+realm waterplant-<user>: adminPermissionsEnabled: false
 ```
 
 The field exists, which means the per-realm toggle is available on this Keycloak (26.4.18) — FGAP

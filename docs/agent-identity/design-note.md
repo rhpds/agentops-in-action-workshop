@@ -18,7 +18,7 @@ Decoded live from `/app/.hermes/mcp-tokens/gateway.json`:
 ```jsonc
 {
   "azp":             "mcp-gateway",        // ← the shared public client
-  "iss":             "…/realms/waterplant-user-9c5ls",
+  "iss":             "…/realms/waterplant-<user>",
   "jti":             "…",
   "scope":           "roles groups",
   "resource_access": { /* 3 clients, 18 tool roles */ },

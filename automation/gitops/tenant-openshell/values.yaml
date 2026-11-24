@@ -38,7 +38,25 @@ sandbox:
   # Hermes it carries start-hermes, the MCP token refresher and the hermes_otel
   # plugin, so participants upload only their own settings. Pinned: a moving
   # tag would change every new sandbox on the cluster at once.
-  image: quay.io/rh-aiservices-bu/waterplant-hermes:0.2.7
+  # TEMPORARY, THIS BRANCH ONLY -- swap back to rh-aiservices-bu before merge.
+  #
+  # A personal-org build carrying the token-exchange refresher, verified
+  # public and pullable: digest sha256:01b5f7b7b0edc4dd216ee82..., 2026-11-23.
+  #
+  # Use a NEW TAG for every build, never overwrite one. Sandbox pods run
+  # imagePullPolicy IfNotPresent (the vendored chart leaves
+  # sandboxImagePullPolicy empty, and Kubernetes only defaults to Always for
+  # :latest), so a node that has already pulled a tag will keep serving the old
+  # layers while `sandbox list` still reports Ready -- the fix appears not to
+  # work when it was simply never pulled.
+  #
+  # BEFORE BUMPING THIS, check the rebuild kept the skip_auth patch:
+  #   podman run --rm <image> sh -c 'grep -rl skip_auth /usr /app /opt'
+  # An earlier build (:test1) silently dropped it, Hermes rejected the relay's
+  # unauthenticated loopback call, and the console could not reach the agent.
+  # The Containerfile pulls an unpinned base and shallow-clones a fork with no
+  # ref, so a rebuild does not reproduce a previous image.
+  image: quay.io/rlundber/waterplant-hermes:test2
   # Limits on the sandbox pod, included in the combined participant quota.
   cpu: "2"
   memory: 4Gi
@@ -206,6 +224,16 @@ keycloak:
   agentClientId: mcp-gateway
   agentUser: operator
   agentPassword: operator
+
+  # The agent's own identity. Must match tenant-platform's
+  # keycloak.agentIdentity -- that chart creates the client in the realm, this
+  # one only hands the credentials to the in-sandbox refresher. See
+  # docs/agent-identity/ for why serviceAccountsEnabled:false makes the secret
+  # defensible, and why this should become a SPIFFE-attested credential.
+  agentIdentity:
+    enabled: true
+    clientId: hermes-agent
+    clientSecret: hermes-agent-lab-secret
 
 # ---------------------------------------------------------------------------
 # Prototype: watches Keycloak for tool: role changes on the operator user and

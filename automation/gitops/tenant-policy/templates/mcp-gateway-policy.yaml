@@ -104,6 +104,36 @@ spec:
           patterns:
             - predicate: |
                 ('tool:' + request.headers['x-mcp-toolname']) in (has(auth.identity.resource_access) && auth.identity.resource_access.exists(p, p == request.headers['x-mcp-servername']) ? auth.identity.resource_access[request.headers['x-mcp-servername']].roles : [])
+            {{- if .Values.mcpGateway.agentIdentityEnforced }}
+            # The intersection: the operator must hold the tool role (above)
+            # AND the caller must be the agent (here). Patterns within one
+            # patternMatching block are AND-ed, so adding this narrows rather
+            # than replaces.
+            #
+            # Without it the gateway can only ask "does the operator hold
+            # tool:X?". The agent IS the operator, so there is no second
+            # question to ask. With the exchange in place (see
+            # tenant-platform keycloak.agentIdentity) the token names both,
+            # and this is where the second half gets enforced.
+            #
+            # Verified on a live tenant, all four cases driven through the real
+            # agent rather than synthesised requests:
+            #
+            #   exchanged token + operator holds the role   -> answers normally
+            #   raw operator token, holds ALL 18 roles      -> refused
+            #   exchanged token + role revoked in Keycloak  -> refused
+            #   azp required to be a value nothing holds    -> refused
+            #
+            # The second line is the point: holding every permission is no
+            # longer sufficient. The third is the converse -- being the agent
+            # is not sufficient either, so module 3's revoke exercise still
+            # behaves exactly as before.
+            #
+            # Note the failure surfaced cleanly as "I don't have sufficient
+            # permissions" rather than the misleading "network issue or
+            # service outage" this file warns about elsewhere.
+            - predicate: "has(auth.identity.azp) && auth.identity.azp == '{{ .Values.keycloak.agentIdentity.clientId }}'"
+            {{- end }}
     response:
       unauthorized:
         # Served as JSON so the agent's MCP client will read the body. It

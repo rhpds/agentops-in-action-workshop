@@ -487,6 +487,12 @@ spec:
             - { name: MCP_CLIENT_ID, value: {{ .Values.keycloak.agentClientId | quote }} }
             - { name: MCP_USERNAME, value: {{ .Values.keycloak.agentUser | quote }} }
             - { name: MCP_PASSWORD, value: {{ .Values.keycloak.agentPassword | quote }} }
+            {{- if .Values.keycloak.agentIdentity.enabled }}
+            # Forwarded into the sandbox by prepare()'s hermes-env.sh heredoc,
+            # so the in-sandbox refresher exchanges rather than just granting.
+            - { name: MCP_EXCHANGE_CLIENT_ID, value: {{ .Values.keycloak.agentIdentity.clientId | quote }} }
+            - { name: MCP_EXCHANGE_CLIENT_SECRET, value: {{ .Values.keycloak.agentIdentity.clientSecret | quote }} }
+            {{- end }}
             - name: MCP_TOKEN_URL
               value: {{ printf "https://%s/realms/waterplant-%s/protocol/openid-connect/token" .Values.keycloak.host .Values.username | quote }}
             # This namespace, for the token the bridge mints for itself.

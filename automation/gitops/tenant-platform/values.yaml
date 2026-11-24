@@ -211,6 +211,46 @@ keycloak:
   agentUser: operator
   agentPassword: operator
   adminPassword: redhat
+
+  # -------------------------------------------------------------------------
+  # The agent's own identity, distinct from the operator persona above.
+  #
+  # Without this the agent IS the operator: mcp-token-refresh.py does a
+  # password grant as `operator` through the public mcp-gateway client, and
+  # every tool call presents that one bearer. The gateway can then only ask
+  # "does the operator hold tool:X?" -- never "is this agent allowed to act for
+  # this human?", because there is no agent to ask about.
+  #
+  # With it, the broker exchanges the operator's token (RFC 8693) for one that
+  # carries BOTH principals: sub/preferred_username = the operator,
+  # azp = hermes-agent. tenant-policy's mcp-authz-policy can then require the
+  # intersection of the two.
+  #
+  # Verified end to end on RHBK 26.4.18:
+  #   sub                959d…  (the operator's user id)
+  #   preferred_username operator
+  #   azp                hermes-agent
+  #   aud                http://mcp-gateway-…:8080/mcp
+  #   resource_access    18 roles, unchanged
+  #
+  # enabled: false leaves the realm exactly as it was, so a tenant can be
+  # provisioned without any of this.
+  #
+  # NOTE: a realm import applies ONCE (--override=false, and the Job is
+  # Complete), so turning this on does NOT reach an already-provisioned tenant.
+  # For those, run files/apply-realm-identity.sh, which is the same delta
+  # through the admin REST API.
+  agentIdentity:
+    enabled: true
+    clientId: hermes-agent
+    # A lab credential, in the same class as agentPassword and adminPassword
+    # above, and defensible for the same reason plus one more: with
+    # serviceAccountsEnabled: false this client cannot act in its own name, so
+    # the secret grants strictly less than the operator password already
+    # printed in the lab guide. See the long comment in
+    # templates/mcp-gateway.yaml. Move it to the catalog item's secret channel
+    # if that ever stops being true.
+    clientSecret: hermes-agent-lab-secret
   # Every tool role declared in the realm, per MCP server.
   toolRoles:
     telemetry-mcp:

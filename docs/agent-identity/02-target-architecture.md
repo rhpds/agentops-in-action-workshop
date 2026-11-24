@@ -65,7 +65,7 @@ flowchart LR
     subgraph T1["+ subject and audience mappers"]
       direction TB
       B0["azp: mcp-gateway<br/>sub: operator<br/>aud: hermes-agent<br/>resource_access: 18 roles"]
-      B1["<i>a human is named;<br/>exchange now possible</i>"]
+      B1["<i>a human is named —<br/>exchange now possible</i>"]
       B0 --- B1
     end
     subgraph T2["+ RFC 8693 exchange"]
