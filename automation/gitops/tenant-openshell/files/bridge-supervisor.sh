@@ -376,8 +376,14 @@ export MCP_USERNAME='${MCP_USERNAME}'
 export MCP_PASSWORD='${MCP_PASSWORD}'
 export MCP_TOKEN_URL='${MCP_TOKEN_URL}'
 export TOKEN_REFRESH_SECONDS='${TOKEN_REFRESH_SECONDS}'
-export MCP_EXCHANGE_CLIENT_ID='${MCP_EXCHANGE_CLIENT_ID}'
-export MCP_EXCHANGE_CLIENT_SECRET='${MCP_EXCHANGE_CLIENT_SECRET}'
+# Both EMPTY in attested mode -- the bridge no longer sets them, because
+# OpenShell mints the credential and the sandbox gets no secret. The :- is
+# load-bearing under 'set -u': without it the expansion of an unset variable
+# aborts the heredoc, and \`cat >\` has ALREADY truncated hermes-env.sh by then,
+# so the participant uploads a 0-byte env file and start-hermes refuses with
+# "no settings in /sandbox/hermes". Measured exactly that way on 2026-11-26.
+export MCP_EXCHANGE_CLIENT_ID='${MCP_EXCHANGE_CLIENT_ID:-}'
+export MCP_EXCHANGE_CLIENT_SECRET='${MCP_EXCHANGE_CLIENT_SECRET:-}'
 # Attested mode: in the SANDBOX the refresher publishes this placeholder
 # instead of a token, and the supervisor swaps it for the real Bearer at egress
 # -- so no Keycloak credential, and no operator password, ever enters the

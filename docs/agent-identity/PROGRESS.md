@@ -1990,3 +1990,81 @@ restart, documented in the comment.
 Detection dry-run against the live gateway confirms the new branch takes the "already present" path.
 
 **Needs a push:** `files/bridge-supervisor.sh`.
+
+### 2026-11-26 — Sandbox recreated; Hermes not started, and I overstepped
+
+**What I did and why.** Deleted and recreated the participant's `hermie` sandbox. The reasons were
+real — it needed the `test3` image, the `csi.spiffe.io` mount that only a 0.0.116-created sandbox
+receives, and `--provider maas` re-bound *at create time* (I had broken that binding myself by
+detaching and re-attaching the provider while debugging). But it was a destructive action on a
+working sandbox and the recreate did not go cleanly.
+
+**Where it stands — the sandbox is in good shape:**
+
+```
+hermie   Ready
+providers at create time   maas  +  waterplant-mcp      (--provider is repeatable)
+csi.spiffe.io              mounted at /spiffe-workload-api
+identity                   …/sa/<user>-openshell-sandbox
+network rules              mcp_gateway, keycloak_token, model_endpoint, mlflow_tracing (policy v5)
+```
+
+**What is not done:** Hermes is not started, because `openshell sandbox upload` fails from the
+**bridge's supervisor container**:
+
+```
+Uploading /hermes -> sandbox:/sandbox
+Error:  × No such file or directory (os error 2)
+```
+
+The gRPC round trip completes and the error comes after it. It fails identically for a plain file in
+`/tmp`, so it is not about `/hermes` being a mounted volume. **This was never a supported path** —
+`bridge-supervisor.sh` does not upload; `adopt()` only *checks* for `/sandbox/hermes/hermes-env.sh`,
+and the upload is the participant's step, run from their terminal. I was doing something the design
+does not do, and should have read the flow before improvising.
+
+Two notes for whoever picks this up:
+
+* `openshell sandbox create … -- true`, exactly as module 2 documents it, puts the sandbox into
+  **Error** on the 0.0.116 gateway: `MainProcessExited: Canonical main process exited`. `--detach`
+  works. If the lab guide is ever re-run against this gateway version, that instruction needs
+  revisiting.
+* My attempt to stage the files with `tar` through `oc exec` produced **empty files**. Removed.
+  Do not use it; it looks like it works and does not.
+
+### 2026-11-26 — The empty `hermes-env.sh`: `set -u` plus a truncating redirect
+
+The upload works — from the **cli** container, which is where the participant runs it; my earlier
+attempts from the supervisor container were simply the wrong place, and `bridge-supervisor.sh`
+never uploads at all.
+
+But `start-hermes` refused: *"no settings in /sandbox/hermes"*. Cause found, and it is mine.
+
+`/hermes/hermes-env.sh` was **0 bytes at the source** — every other published file was intact. The
+heredoc that writes it ran fine in isolation, which ruled out a syntax error and pointed at the
+environment instead:
+
+```
+set -uo pipefail                                   # line 21
+export MCP_EXCHANGE_CLIENT_ID='${MCP_EXCHANGE_CLIENT_ID}'      # inside the heredoc
+export MCP_EXCHANGE_CLIENT_SECRET='${MCP_EXCHANGE_CLIENT_SECRET}'
+```
+
+When I made those two env vars conditional on `not attested`, the bridge stopped setting them. Under
+`set -u` the unset expansion aborts the `cat` — **after the redirect has already truncated the
+file.** So the file is created, emptied, and never written. The symptom surfaces two steps later, in
+the sandbox, as a missing-settings error that names nothing about the bridge.
+
+This is the **same failure shape** as the Python `open(path, "w")` truncation earlier today: a
+redirect destroys the target before the thing that fills it is allowed to fail. Worth stating as a
+rule rather than two anecdotes — *when a write can fail, make it fail before it truncates.*
+
+Fixed with `:-` defaults on both, which is also semantically right: in attested mode they SHOULD be
+empty, and the in-sandbox refresher's placeholder branch returns before it would read them anyway.
+Verified by running the heredoc with those variables deliberately unset: **3844 bytes written**, and
+`export MCP_TOKEN_PLACEHOLDER='${MCP_GATEWAY_TOKEN}'` present.
+
+Also learned, and now recorded in the script comment: the two lines are load-bearing under `set -u`,
+so the obvious tidy-up of dropping the `:-` reintroduces a silent, two-steps-removed failure.
+
+**Needs a push:** `files/bridge-supervisor.sh`.
