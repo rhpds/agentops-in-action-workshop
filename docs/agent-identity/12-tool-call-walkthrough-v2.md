@@ -11,6 +11,12 @@ document is every one of them: what is on the wire, why it is there, and how it 
 
 Every arrow carries what is actually on it, and why.
 
+> **Amended 2026-11-26.** Two details below were written from the design rather than the build.
+> Step 10's token carries the agent's **delegable set** intersected with the operator's roles, not a
+> single tool role — per-call scope selection is not reachable through OpenShell's grant. And in
+> step 11 the supervisor's proxy decorates the request **whatever the agent sends**, so the
+> placeholder is belt-and-braces rather than load-bearing.
+
 ![One tool call — the flow](diagrams/tool-call-flow.png)
 
 ### The same 18 hops as a reference table

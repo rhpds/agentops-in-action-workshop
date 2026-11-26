@@ -2067,15 +2067,15 @@
    "type": "text",
    "x": 900,
    "y": 892,
-   "width": 557.76,
+   "width": 517.44,
    "height": 45.0,
-   "text": "10  THE FINAL TOKEN   sub = <operator uuid>  \u00b7  preferred_username = operator\n    azp = spiffe://\u2026/sa/<user>-openshell-sandbox  \u00b7  aud = \u2026:8080/mcp\n    resource_access = { telemetry-mcp: [ tool:get_reservoir_level ] }   <- ONE role",
+   "text": "10  THE FINAL TOKEN   sub = <operator uuid>  \u00b7  preferred_username = operator\n    azp = spiffe://\u2026/sa/<user>-openshell-sandbox  \u00b7  aud = \u2026:8080/mcp\n    resource_access = operator roles \u2229 agent delegable set",
    "fontSize": 12,
    "fontFamily": 2,
    "textAlign": "left",
    "verticalAlign": "top",
    "containerId": null,
-   "originalText": "10  THE FINAL TOKEN   sub = <operator uuid>  \u00b7  preferred_username = operator\n    azp = spiffe://\u2026/sa/<user>-openshell-sandbox  \u00b7  aud = \u2026:8080/mcp\n    resource_access = { telemetry-mcp: [ tool:get_reservoir_level ] }   <- ONE role",
+   "originalText": "10  THE FINAL TOKEN   sub = <operator uuid>  \u00b7  preferred_username = operator\n    azp = spiffe://\u2026/sa/<user>-openshell-sandbox  \u00b7  aud = \u2026:8080/mcp\n    resource_access = operator roles \u2229 agent delegable set",
    "lineHeight": 1.25
   },
   {

@@ -399,8 +399,12 @@ JSON
         curl -sk --max-time 30 -o /dev/null -X POST \
           -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
           "${KC}/admin/realms/${REALM}/client-scopes/${sid}/scope-mappings/clients/${mcp}" -d "$rolejson"
+        # DEFAULT, not optional: with fullScopeAllowed:false these are the only
+        # source of roles, and nothing can request them by name -- OpenShell's
+        # token_grant carries a fixed `scopes` list per profile. Attached as
+        # optional, every minted token has zero roles and all tool calls 403.
         curl -sk --max-time 30 -o /dev/null -X PUT -H "Authorization: Bearer ${TOKEN}" \
-          "${KC}/admin/realms/${REALM}/clients/${SBX_UUID}/optional-client-scopes/${sid}"
+          "${KC}/admin/realms/${REALM}/clients/${SBX_UUID}/default-client-scopes/${sid}"
       done
     done
     say "per-tool scopes: ${created} created, ${existing} already present"

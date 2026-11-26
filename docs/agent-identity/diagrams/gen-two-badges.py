@@ -67,7 +67,7 @@ text(KX + 22, TOP + 62,
      "Verifies each badge against\nSPIRE's published JWKS, then issues:", 14)
 text(KX + 22, TOP + 352, "the agent client has fullScopeAllowed: false,\nso the roles are already the intersection\nof what the operator holds and what the\nagent may be delegated  (Decision 2)", 13, GREY)
 text(KX + 22, TOP + 130, "VOUCHER (intermediate)\naud = the sandbox's badge\n— useless to anyone else", 14, "#1e1e1e")
-text(KX + 22, TOP + 232, "DAY PASS (final)\nsub = operator\nazp = delegation-broker\nroles = operator \u2229 agent,\n        narrowed to scope=tool:X", 14, "#1e1e1e")
+text(KX + 22, TOP + 232, "DAY PASS (final)\nsub = operator\nazp = delegation-broker\nroles = operator \u2229 agent's\n        delegable set", 14, "#1e1e1e")
 
 MX = 2060
 box(MX, TOP, 430, 270, RED, "#fff5f5")
@@ -95,7 +95,7 @@ text(1222, TOP + 222, "5  the voucher", 13, AMBER)
 # ---- step 7: supervisor -> Keycloak, below the boxes
 Y7 = BOT + 190
 arrow([(230, BOT + 2), (230, Y7), (1680, Y7), (1680, BOT + 122)], AMBER, sharp=True)
-text(470, Y7 + 14, "7  voucher + SANDBOX badge + scope=tool-X  \u2192  the day pass  (sub = operator, azp = delegation-broker, ONE role)", 14, AMBER)
+text(470, Y7 + 14, "7  voucher + SANDBOX badge  \u2192  the day pass  (sub = operator, azp = the sandbox SPIFFE ID, roles = operator \u2229 delegable set)", 14, AMBER)
 
 # ---- step 8: supervisor -> MCP gateway, lower still
 Y8 = BOT + 290

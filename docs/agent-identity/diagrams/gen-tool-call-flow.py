@@ -87,7 +87,7 @@ lbl(900, 790, '9  subject_token = the intermediate\n   client_assertion = SANDBO
 
 # 10 Keycloak -> supervisor (final)
 s.arrow([(1760, 650), (1710, 650), (1710, 880), (700, 880), (700, 724)], A, sharp=True)
-lbl(900, 892, '10  THE FINAL TOKEN   sub = <operator uuid>  ·  preferred_username = operator\n    azp = spiffe://…/sa/<user>-openshell-sandbox  ·  aud = …:8080/mcp\n    resource_access = { telemetry-mcp: [ tool:get_reservoir_level ] }   <- ONE role', A)
+lbl(900, 892, '10  THE FINAL TOKEN   sub = <operator uuid>  ·  preferred_username = operator\n    azp = spiffe://…/sa/<user>-openshell-sandbox  ·  aud = …:8080/mcp\n    resource_access = operator roles \u2229 agent delegable set', A)
 
 # 11 Hermie -> supervisor, in pod
 s.arrow([(640, 488), (640, 504)], G)

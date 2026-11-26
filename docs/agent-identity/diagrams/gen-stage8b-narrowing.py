@@ -23,9 +23,9 @@ stage(500, 400, "2", "∩ what may be delegated",
       "the agent client has\nfullScopeAllowed: false\nplus its own scope mappings\n\nToken roles become\n  operator's roles\n  ∩ agent's scope mappings\n\nNeither side can grant\nwhat the other lacks",
       s.VIOLET, "#f3f0ff", "computed by: KEYCLOAK, at mint time")
 
-stage(960, 400, "3", "↓ the one tool in flight",
-      "the exchange requests\n  scope=tool-get_reservoir_level\n\nToken carries exactly that\none role — nothing else\n\nA requested scope can only\nNARROW, never grant: ask for\none the operator lacks and it\nis silently dropped",
-      s.AMBER, "#fff9db", "requested by: the token grant")
+stage(960, 400, "3", "∩ narrowed to the delegable set",
+      "the 18 tool-* scopes are DEFAULT\non the agent client\n\nToken carries the operator's\nroles \u2229 the delegable set\n\nNOT one role per call:\nOpenShell's token_grant takes a\nFIXED scopes list, so nothing\ncan vary it per tool call",
+      s.AMBER, "#fff9db", "fixed by: the agent client's scopes")
 
 stage(1420, 440, "4", "the check at the door",
       "AuthPolicy on mcp-authz-policy:\n\n  ('tool:' + x-mcp-toolname)\n     in resource_access[...].roles\n  AND azp == 'spiffe://…sandbox'\n\nUnchanged by any of the above —\nit reads ONE role set, which is\nalready the intersection",

@@ -643,7 +643,26 @@ Revoke a tool from the *agent* and the operator still holds it in the UI while H
 it — the difference between what a human may do and what they may delegate, made visible in two
 minutes.
 
-### Decision 3 — per-tool tokens
+### Decision 3 — per-tool tokens: PROVEN IN KEYCLOAK, NOT REACHABLE THROUGH OPENSHELL
+
+> **Amended 2026-11-26, after building it.** Everything below about Keycloak is correct and was
+> measured. What does not hold is the assumption that the *exchange* can request
+> `scope=tool-<the tool in flight>`. It cannot while OpenShell mints the token: `token_grant` takes
+> a **fixed** `scopes` list per profile, and `audience_overrides` select by host/port/path, while
+> MCP is a single `/mcp` path with the tool named in the request body. Nothing can vary per call.
+>
+> **What shipped instead:** the 18 `tool-*` scopes are attached to the agent client as **default**
+> scopes, so every minted token carries *the operator's roles ∩ the agent's delegable set*. The
+> intersection (Decision 2) is intact and verified — detaching one tool from the agent refuses that
+> tool while the operator keeps it. Per-call narrowing to a single role is not.
+>
+> Attaching them as *optional* — which is what per-call narrowing required — yields a token with
+> **zero roles**, because nothing can request them. That is a tenant where no tool call can ever
+> succeed, and it is what the chart shipped until this was found.
+>
+> Revisiting this is recorded in [08-open-questions.md](08-open-questions.md).
+
+### Decision 3 (as originally designed) — per-tool tokens
 
 **Proven on the cluster 2026-11-26, then reverted.** One **optional client scope per tool**,
 requested at exchange time:
@@ -725,12 +744,12 @@ Neither side can grant what the other lacks, and the token carries exactly the t
 | # | Work | Where | Notes |
 |---|---|---|---|
 | 1 | `fullScopeAllowed: false` on the **agent** client, and **no** scope mappings on it | `mcp-gateway.yaml`, `apply-realm-identity.sh` | baseline becomes 0 roles; see the correction above |
-| 2 | One optional client scope per tool, each with a **scope-mapping to its own role**, attached to the agent client as an *optional* scope | `mcp-gateway.yaml` | the template already loops `keycloak.toolRoles`; `federated.delegableTools` selects which are attached |
+| 2 | One client scope per tool, each with a scope-mapping to its own role, attached to the agent client as a **default** scope (NOT optional — optional yields zero roles) | `mcp-gateway.yaml` | done; `federated.delegableTools` selects which are attached |
 | 3 | Shorten the exchanged token's lifetime | realm | `accessTokenLifespan` is 1800s; per-tool tokens only pay off when short |
 | 4 | Second federated client for the gateway's SPIFFE ID; re-point `hermes-agent` to the sandbox's | `mcp-gateway.yaml`, `apply-realm-identity.sh` | see Decision 1 |
 | 5 | Author and import the provider profile; create the provider with `--credential` | new chart file | `token_grant` + broker-only subject credential. **Not** `--runtime-credentials` — mutually exclusive with `--credential`, and for `token_exchange` the subject credential *is* stored |
 | 6 | Re-stamp the subject token on a timer | `bridge-supervisor.sh` | keeps the operator password in the bridge, never the sandbox |
-| 7 | Request `scope=tool-X` per call | whatever drives the exchange | OpenShell `cache_ttl_seconds` to avoid a round trip per call |
+| 7 | ~~Request `scope=tool-X` per call~~ | — | **Not achievable** while OpenShell mints the token; see the amendment above |
 | 8 | Re-run the four-cell proof through a real tool call | — | plus a new cell: agent-revoked-but-operator-holds |
 
 **Not changing:** the AuthPolicy, the agent's token-file contract, and anything under `content/**`.

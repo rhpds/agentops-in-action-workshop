@@ -1,5 +1,27 @@
 # 08 — Open questions and ranked risks
 
+> **Deferred, 2026-11-26 — can the exchange request a per-call scope at all?**
+>
+> Stage 8b shipped the agent's whole *delegable set* rather than one role per call, because
+> OpenShell's `token_grant` takes a **fixed** `scopes` list per profile and `audience_overrides`
+> select by host/port/path, while MCP is a single `/mcp` path with the tool named in the request
+> *body*. Nothing in the profile can vary per tool call.
+>
+> That conclusion is sound for the profile as a configuration object, but it was reached while
+> chasing a different bug and has **not** been attacked directly. Worth revisiting once the rest is
+> stable, because per-call narrowing is the smaller blast radius Uber describes and the only part of
+> the design that did not survive. Questions to put to it:
+>
+> * Does the proxy expose the request body to grant selection at all, or only host/port/path?
+> * Could one `tool-<name>` profile per tool work, each declaring the same endpoint, with the
+>   supervisor choosing between attached providers per call? (18 providers per tenant — ugly, but it
+>   would answer whether the limit is the profile model or the matching.)
+> * Does a later OpenShell release add body- or header-driven grant selection? 0.0.116's roadmap
+>   table does not mention it either way.
+> * Failing all of that, does the lab want per-call narrowing enough to move minting back into the
+>   sandbox — which costs the "no Keycloak credential in the sandbox" property?
+
+
 Everything in these documents that is **not** backed by
 [00-verification-findings.md](00-verification-findings.md). Each row names the command that settles
 it.

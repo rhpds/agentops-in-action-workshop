@@ -7,6 +7,13 @@
 > corrections tables below deliberately keep the old name, since they record what was said at the
 > time.
 
+> **Amended 2026-11-26.** Per-tool narrowing is described below as achieved. It is **not**: the
+> Keycloak mechanics are real and measured, but OpenShell's `token_grant` takes a fixed `scopes`
+> list per profile and cannot vary it per tool call. What shipped is the agent's whole *delegable
+> set*, intersected with the operator's roles — Decision 2 intact, Decision 3 not. See
+> [09-implementation-plan.md](09-implementation-plan.md) Decision 3 and
+> [08-open-questions.md](08-open-questions.md).
+
 # 11 — OpenShell × SPIFFE/SPIRE, and the corrected end-to-end flow
 
 Two diagrams. The first mirrors the "SPIRE big picture" view but places OpenShell's components in

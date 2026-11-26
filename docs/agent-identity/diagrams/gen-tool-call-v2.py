@@ -73,13 +73,13 @@ row("8", "Keycloak -> gateway\n  (the intermediate)",
     C['kc'], "#fff9db")
 
 row("9", "supervisor -> Keycloak\n  (hop B of the exchange)",
-    'subject_token=<the intermediate>\nclient_assertion=<SANDBOX SVID>        <- a different signer\nscope=tool-get_reservoir_level         <- just this one tool',
+    'subject_token=<the intermediate>\nclient_assertion=<SANDBOX SVID>        <- a different signer\nscopes: fixed per profile, not per call',
     "The second signer is why there are two Keycloak clients.\nThe scope is the per-tool blast radius.",
     C['kc'], "#fff9db")
 
 row("10", "Keycloak -> supervisor\n  THE FINAL TOKEN",
-    'sub              = 959d8fef-…   <- the OPERATOR, the principal\npreferred_username = operator     <- a readable actor, not just a uuid\nazp              = spiffe://…/sa/<user>-openshell-sandbox\naud              = http://mcp-gateway-…:8080/mcp\nresource_access  = { telemetry-mcp: [ tool:get_reservoir_level ] }  <- ONE role',
-    "One signed token asserting BOTH: the operator is the\nprincipal, the attested sandbox is the actor. Roles are\nalready (operator's roles ∩ what the agent may be delegated),\nnarrowed to the single tool asked for. No secret involved.",
+    'sub              = 959d8fef-…   <- the OPERATOR, the principal\npreferred_username = operator     <- a readable actor, not just a uuid\nazp              = spiffe://…/sa/<user>-openshell-sandbox\naud              = http://mcp-gateway-…:8080/mcp\nresource_access  = operator roles \u2229 agent delegable set',
+    "One signed token asserting BOTH: the operator is the\nprincipal, the attested sandbox is the actor. Roles are\nalready (operator roles ∩ what the agent may be delegated),\nnarrowed to the single tool asked for. No secret involved.",
     C['kc'], "#fff9db")
 
 row("11", "Hermie -> MCP gateway\n  (swapped at egress)",
@@ -128,7 +128,7 @@ s.text(X0 + 22, y + 30, "The three transformations that matter", 16, s.VIOLET)
 s.text(X0 + 22, y + 64,
  "1.  NOTHING becomes A HUMAN.  Steps 1-2 carry no identity at all; the operator becomes a real subject only at step 10.\n"
  "2.  A SECRET becomes AN ATTESTED WORKLOAD.  Steps 5-9 replace \"knows a string\" with \"is this pod\" -- twice, two SVIDs.\n"
- "3.  EIGHTEEN PERMISSIONS become ONE.  Step 10 intersects the human's roles with what the agent may be delegated, then\n"
+ "3.  THE HUMAN'S ROLES become WHAT MAY BE DELEGATED.  Step 10 intersects the human's roles with what the agent may be delegated, then\n"
  "    narrows to the single tool in flight. Steps 13-14 only check what is already there.", 14)
 
 print("elements:", s.save(sys.argv[1]))

@@ -2285,3 +2285,339 @@ was doing anything.
 existing `maas` must be deleted and recreated from the profile — and because `--provider` binds at
 create time, the `hermie` sandbox must be recreated once more to pick it up. That is the last
 destructive step, and the one that finally makes the UI test possible.
+
+### 2026-11-26 — Model key fixed and the UI answers; the dynamic grant does not inject
+
+The profile-backed provider works. Sequence, all on the live tenant:
+
+```
+provider delete maas        -> refused: "attached to sandbox(es): hermie"   <- the delete I thought
+                                                                              had worked earlier
+sandbox delete hermie       -> ok (detaches its providers)
+provider delete maas        -> ok
+bridge restart              -> seed_provider recreated it: Type: waterplant-maas
+sandbox create hermie --provider maas --provider waterplant-mcp
+  OPENAI_API_KEY     SET, 57 chars      <- fixed
+  MCP_GATEWAY_TOKEN  unset
+```
+
+Then policy rules v2–v5, upload, `start-hermes`, `service expose`, and the bridge adopted the relay.
+
+**The UI now answers.** A real request through the console's own path returns a proper completion —
+Hermie reaches the model, decides to call telemetry tools, and reports *"I'm unable to access the
+plant telemetry data due to insufficient permissions."* That is the designed denial: with
+`MCP_GATEWAY_TOKEN` unset, Hermes sends the unresolved placeholder, Authorino refuses, and Hermie
+surfaces it exactly as the lab intends. **The model-key failure is resolved and the enforcement path
+is demonstrably working.**
+
+**What remains: the dynamic token-grant credential is not materialised.** `waterplant-mcp` is
+attached and its `gateway_token` declares `env_vars: [MCP_GATEWAY_TOKEN]`, but nothing appears in the
+sandbox — including after re-stamping the stored subject token with a fresh operator token
+(`provider update` succeeded; the variable stayed unset).
+
+The static credential proves injection itself works **without** `providers_v2_enabled`. The dynamic
+grant does not, which is consistent with token grants being a Providers v2 feature — the 0.0.116 docs
+place credential rotation and `discovery.credentials` behind that flag. That makes
+`providers_v2_enabled=true` the leading hypothesis **again**, but on much better evidence than
+before: previously it was "both are unset so maybe v2"; now it is "the static half works unflagged
+and the dynamic half does not".
+
+Stated honestly: this is the fourth hypothesis about this credential path, and the previous three
+were wrong. It is cheap and reversible to test — `settings set --global --key providers_v2_enabled`,
+then `settings delete --global` to undo — but it is gateway-wide, and this session's permission
+classifier has refused it twice, which is the correct default for a gateway-global write.
+
+### 2026-11-26 — Static and dynamic credentials are delivered by DIFFERENT mechanisms
+
+Gateway logs during a real tool call show **no token-grant activity at all** — the grant is never
+attempted (only `refresh.provider_credentials watched_count=0 due_count=0`). The 0.0.116 roadmap
+table says why:
+
+> "Static credential injection still depends on **environment placeholders** generated from provider
+> credentials. Dynamic `token_grant` credentials support **`bearer` and `header` placement** for
+> matching HTTP endpoints."
+
+So the two halves are delivered differently:
+
+| | Static | Dynamic (`token_grant`) |
+|---|---|---|
+| Delivery | an **environment placeholder** the workload expands and sends | the **proxy places** the token into the header itself, for matching endpoints |
+| Workload's job | send the placeholder | send the request; **add no credential** |
+
+**`MCP_GATEWAY_TOKEN` being unset is therefore correct, not a fault.** The `env_vars` declaration on
+a token-grant credential is close to moot — the proxy injects `authorization` directly. Four
+hypotheses about "why isn't it injected" were chasing a premise that was wrong: nothing was supposed
+to be injected into the environment.
+
+**And it exposes a real design error of mine.** The whole placeholder scheme in this branch —
+`mcp-token-refresh.py` publishing `${MCP_GATEWAY_TOKEN}` into the token file so Hermes sends it as a
+Bearer — is modelled on the **static** mechanism. For a dynamic grant the agent should send **no
+Authorization header**, and let the proxy place one. Hermes sending an unrecognised
+`Bearer ${MCP_GATEWAY_TOKEN}` is the most likely reason the proxy never engages: it sees a
+credential already present on a request it was meant to decorate.
+
+That is a correction to the design, not just to the plumbing, and it lands on the one piece this
+branch added to the sandbox image. It also means `12-tool-call-walkthrough-v2.md` step 11 is wrong:
+it says Hermie sends `Authorization: Bearer ${MCP_GATEWAY_TOKEN}` and the supervisor substitutes it.
+For a dynamic grant, Hermie should send nothing and the supervisor should add it.
+
+**Open question that decides the next change:** Hermes always sends the token file's contents as a
+Bearer, so "send no Authorization header" may not be expressible without an image change — or the
+token file may need to be absent, which Hermes may refuse. That is the thing to establish next, and
+it is cheap: ask the proxy directly by issuing a request from inside the sandbox with and without an
+Authorization header and watching whether the grant fires.
+
+### 2026-11-26 — The dynamic grant IS working; the remaining failure is authorization, not delivery
+
+Probed from inside the sandbox, through the supervisor proxy, with and without an Authorization
+header:
+
+```
+A  no Authorization header            -> HTTP 200
+B  literal Bearer ${MCP_GATEWAY_TOKEN} -> HTTP 200
+```
+
+The same `initialize` from the water-plant-ui pod returns **401**. So the proxy **is** decorating the
+sandbox's egress — it supplies a credential the gateway accepts, regardless of what the workload
+sends. Dynamic grant delivery works.
+
+Then a real tool call from inside the sandbox:
+
+```
+initialize   HTTP 200
+tools/call   HTTP 403  {"error":{"code":-32600,"message":"Forbidden: Insufficient permissions for this tool."}}
+```
+
+**403, not 401, is the important detail.** `mcp-authz-policy` answers 401 for *unauthenticated* and
+403 for *unauthorized*. A 403 means a valid realm JWT reached Authorino and the two
+`tool-access-check` predicates refused it. So the chain — supervisor SVID, gateway SVID, both
+exchanges, header placement — is functioning; what fails is the content of the minted token.
+
+**Which predicate fails is still unestablished.** The obvious candidate was zero roles: the profile
+requests no `scopes`, and the agent client is `fullScopeAllowed: false` with the 18 `tool-*` scopes
+only *optional*, so an exchange that requests none carries an empty `resource_access`. Tested by
+flipping `fullScopeAllowed: true` — still 403 — but that test is **inconclusive**, because
+`cache_ttl_seconds: 300` means the proxy was almost certainly still serving the previously minted
+token after a 20-second wait. `fullScopeAllowed` has been restored to `false` and re-verified.
+
+The tool name used in the probe (`telemetry_get_reservoir_level`) is also unverified against what the
+broker actually puts in `x-mcp-toolname`, so predicate 1 may be failing on the name rather than on
+the roles.
+
+**Next, and this time by evidence rather than by elimination:** read Authorino's decision log for the
+denied request — it records the matched rule and is the only thing that names the failing predicate
+directly. Then re-test past the 300s cache. Guessing which of two predicates failed has a 50%
+success rate and has already cost more than reading the log would have.
+
+**Correction to the previous entry.** It concluded the placeholder scheme was a design error because
+the agent should send no header. The probe shows the proxy decorates regardless — sending the
+literal placeholder is harmless, not fatal. The scheme is redundant rather than wrong, and
+`12-tool-call-walkthrough-v2.md` step 11 needs softening rather than rewriting: the proxy places the
+credential whatever the agent sends.
+
+### 2026-11-26 — ext_proc was broken; the toolname header still never reaches Authorino
+
+**A genuine find, unrelated to identity.** The MCP broker's external processor — the Envoy filter
+that *adds* `x-mcp-toolname` and `x-mcp-servername` — was failing on every request:
+
+```
+level=ERROR msg="[ext_proc] Process: Error receiving request" component=router error=EOF
+```
+
+The Envoy data plane had restarted 132 minutes earlier (the policy sync's rollout Job) while the
+broker pod was 3d8h old, and the ext_proc stream never re-established. Restarting
+`deploy/mcp-gateway` cleared the errors. Worth knowing for the lab generally: **a gateway rollout
+can silently break header annotation, and the only symptom is every tool call being denied.**
+
+**But the headers still do not arrive.** Across 4049+ recorded requests Authorino has **never** seen
+an `x-mcp-toolname` header — not before the fix, not after, and not on a real agent request with
+Hermes freshly restarted. Since both `tool-access-check` predicates read that header, every tool
+call is refused on the header's absence, and the minted token is never actually evaluated.
+
+**Two of my inferences today were wrong and are withdrawn:**
+
+* *"403 not 401 proves a valid token reached Authorino."* No — with no `x-mcp-toolname`, the
+  `anonymous` authentication rule applies, so authentication succeeds unauthenticated and the
+  denial comes from the predicate. Nothing about the token was tested.
+* *"The proxy is decorating the sandbox's egress."* The decision record shows **no `authorization`
+  header at all**. The 200s my probe got came from the broker's anonymous path, not from credential
+  injection.
+
+Both were status-code archaeology rather than evidence. The Authorino decision log answered in one
+read what four hypotheses could not, and I should have gone there first.
+
+**The next step is a controlled comparison, not another hypothesis.** Two sibling tenants —
+`user-hkqs4` and `user-s6pxl` — are still on the released tag with none of this branch's changes. If
+Authorino records no `x-mcp-toolname` for them either, the header has never worked this way and the
+predicate has been unsatisfiable since it was written; if it does appear for them, this branch broke
+it and the diff says where. That separates "I broke it" from "it never worked" with one read-only
+query, and it is the question everything else now depends on.
+
+**Where the tenant stands meanwhile:** model key fixed, UI answering, ext_proc healthy, the realm and
+both federated clients in place, the sandbox attested with both providers and the SPIFFE socket.
+Tool calls denied.
+
+### 2026-11-26 — Comparison run; the header reaches no tenant, and I have not found why
+
+**The controlled comparison was inconclusive, for a reason worth recording.** Authorino's record
+across all three tenants:
+
+```
+mcp-gateway…user-gngp7-agentops…   1793 requests   with-toolname=0
+mcp-gateway…user-hkqs4-agentops…   1154 requests   with-toolname=0
+mcp-gateway…user-s6pxl-agentops…   1154 requests   with-toolname=0
+telemetry-mcp.mcp.local              42 requests   with-toolname=0
+```
+
+The siblings show zero too — but all their traffic is to the service hostname (health polls); only
+this tenant has any `*.mcp.local` traffic, so no sibling has ever made a tool call to compare
+against. Attempting to force one failed on an unrelated breakage: `user-hkqs4`'s agent returns
+`{"error":"Invalid API key"}`, so the released-tag tenants cannot reach the model either. That is
+its own finding and is **not** caused by this branch.
+
+**Ruled out since:**
+
+* *Wrong tool name.* `tools/list` through the broker returns 20 tools and
+  `telemetry_get_reservoir_level` is among them, so the name was right and the broker can resolve it.
+* *Stale broker.* Restarting `deploy/mcp-gateway` cleared the ext_proc EOF errors; headers still absent.
+* *Stale data plane.* Restarting `deploy/mcp-gateway-data-science-gateway-class` changed nothing —
+  0 of 6 requests carried a toolname afterwards.
+
+So: the broker knows the tool, routes it to `telemetry-mcp.mcp.local`, and Authorino is consulted —
+but without the headers both predicates depend on. **Every tool call is therefore denied on the
+header's absence, and the attested token is still never evaluated.** I have not established the
+cause.
+
+**The next step is structural, and read-only: the Envoy filter chain order.** If `ext_authz`
+(Authorino) is ordered *before* `ext_proc` (the broker's annotator), then Authorino cannot ever see
+headers the annotator adds later, and `mcp-authz-policy` is unsatisfiable by construction rather
+than by misconfiguration. The gateway's config dump answers that directly. It is the one question
+that distinguishes "ordering is wrong" from "annotation is not happening", and both remaining
+explanations reduce to it.
+
+Against that: these predicates demonstrably worked on 2026-11-23 (a real tool call returned live
+plant data, and the four-cell proof passed), so ordering cannot *always* have been wrong — unless
+the rollout that restarted the data plane changed it. That tension is unresolved and should not be
+hand-waved.
+
+### 2026-11-26 — THE ATTESTED PATH WORKS END TO END
+
+A real tool call through the attested chain, with no secret anywhere:
+
+```
+tools/call 'telemetry_get_reservoir_level' -> HTTP 200
+{"level_pct": 63.45, "inflow_pct_s": 0.2475, "outflow_pct_s": 0.243, "capacity_m3": 5000}
+```
+
+Supervisor SVID -> gateway SVID -> intermediate exchange -> final exchange -> a token whose `azp` is
+`spiffe://agentops.lab/ns/<user>-agentops/sa/<user>-openshell-sandbox`, satisfying **both**
+`tool-access-check` predicates. Stage 8b's design is proven on a live tenant.
+
+**The cause of every 403 was zero roles**, exactly as suspected two days of hypotheses ago: the
+grant requests no `scope`, and the agent client was `fullScopeAllowed: false` with its 18 `tool-*`
+scopes attached as **optional**, so nothing ever added a role. Flipping `fullScopeAllowed: true`
+*and waiting past the 300s grant cache* returned 200 — the wait being the step whose absence made
+the earlier run of the same test inconclusive.
+
+### Correction: the "missing header" evidence was a logging artifact
+
+The author tested `user-hkqs4` through its UI and tool calling worked. Authorino's records for those
+**successful** calls also show `toolname=False` — so **Authorino does not log that header at all**,
+and my "4049 requests, never a toolname" finding described the logger, not the traffic. Withdrawn,
+along with everything built on it: the ext_proc theory, the filter-ordering theory, and the claim
+that `mcp-authz-policy` was unsatisfiable by construction.
+
+The ext_proc EOF errors were real and worth fixing, but they were not the cause and I presented them
+as if they were. The comparison also shows why the sibling's success proved less than it appeared:
+it runs **one** predicate (tool role), ours runs **two**, so it never exercised `azp` at all.
+
+### The real limitation this exposes: per-tool tokens are not reachable through OpenShell's grant
+
+Decision 3 assumed the exchange could request `scope=tool-<the tool in flight>`. It cannot:
+OpenShell's `token_grant` takes a **fixed** `scopes` list in the profile, and `audience_overrides`
+select by host/port/path — while MCP is JSON-RPC to a single `/mcp` path with the tool named in the
+*body*. Nothing in the profile can vary per tool call.
+
+So with OpenShell minting, the choices are the agent's **whole delegable set** or nothing.
+Configured accordingly: `fullScopeAllowed: false` (kept — it is what makes the intersection real)
+with the 18 `tool-*` scopes moved from **optional to default**, so every minted token carries
+*operator's roles ∩ the agent's delegable set*.
+
+**Decision 2 (true intersection) survives intact. Decision 3 (per-tool narrowing) does not survive
+contact with OpenShell**, and the plan and diagrams must say so rather than describe an unreachable
+design. Per-tool would require whatever drives the exchange to vary the scope per call, which is the
+in-sandbox refresher we deliberately replaced.
+
+### 2026-11-26 — Stage 8b verified: the console answers over the attested path
+
+**The participant-facing test passes.** Asked through the console's own path, Hermie answered with
+live plant data:
+
+> "The reservoir level is currently at 63.45% of capacity. This is within the normal operating
+> range, as the intake is level-controlled to maintain approximately 62%. The total capacity is
+> 5,000 cubic metres…"
+
+That request travelled participant -> console -> relay -> sandbox -> Hermie -> MCP gateway carrying a
+token minted from **two attested identities**: `sub` the operator, `azp` the sandbox's SPIFFE ID,
+both `tool-access-check` predicates satisfied, and **no secret anywhere in the chain**.
+
+Both configurations verified:
+
+| Agent client config | tools/call |
+|---|---|
+| `fullScopeAllowed: true` (diagnostic only) | 200 |
+| `fullScopeAllowed: false` + 18 `tool-*` scopes as **default** | **200** — the shipped shape |
+
+**And the intersection is real, not permissive.** Detaching `tool-get_reservoir_level` from the
+*agent* while the operator keeps the role:
+
+```
+tool detached from the AGENT  -> HTTP 403
+re-attached                   -> 204
+```
+
+So the delegable set genuinely narrows what the agent may do, independently of what the human holds
+— the property Decision 2 promised, now demonstrated rather than argued. This is the new cell Stage
+8b item 8 called for.
+
+### Source is now behind the cluster in one place
+
+The optional -> default scope move was made live over REST and is **not** in the chart.
+`mcp-gateway.yaml` and `apply-realm-identity.sh` both still attach the 18 scopes as
+`optionalClientScopes`. With per-tool narrowing unreachable, optional attachment means every token
+carries zero roles — i.e. **the shipped chart currently produces a tenant where no tool call can
+ever succeed.** That is the highest-priority source fix.
+
+### Docs that now overstate what is achievable
+
+| Where | Says | Reality |
+|---|---|---|
+| `09-implementation-plan.md` Decision 3, items 2/3/7 | per-tool tokens, one role per call | fixed `scopes` per profile; cannot vary per tool |
+| `11-openshell-spiffe-flow.md` | per-tool narrowing proven | proven in Keycloak, unreachable through OpenShell's grant |
+| `12-tool-call-walkthrough-v2.md` step 10/11 | token carries ONE role; agent sends the placeholder | carries the delegable set; the proxy decorates regardless |
+| `diagrams/stage8b-token-narrowing`, `tool-call-flow`, `tool-call-v2`, `openshell-two-badges` | `scope=tool-X`, "ONE role" | must show the delegable set |
+
+### 2026-11-26 — Chart fixed: the tool scopes must be DEFAULT, not optional
+
+Service confirmed restored after the intersection test (`tools/call -> HTTP 200`), so the tenant is
+in its correct working shape.
+
+**The correctness bug is fixed in source.** `mcp-gateway.yaml` and `apply-realm-identity.sh` both
+attached the 18 `tool-*` scopes as **optional**, which made sense only while per-call scope requests
+were believed possible. They are not, so an optional attachment yields a token with **zero roles**
+and every tool call 403s — meaning the chart as pushed would provision a tenant where no tool call
+can ever succeed. Both now attach them as **default**, with the reasoning in the file so the
+"tidy-up" of making them optional again is not tempting:
+
+```
+agent client (rendered): fullScopeAllowed=False
+                         defaultClientScopes = 20  (roles, groups, + 18 tool-*)
+                         optionalClientScopes = (none)
+```
+
+`apply-realm-identity.sh` re-run against the live tenant: idempotent, 18 scopes already present, and
+the live client still shows 18 **default** `tool-*` scopes. Source and cluster agree again.
+
+The `perToolScopes` value keeps its name but its comment now states plainly what it does and does
+not buy: it makes `delegableTools` expressible and the intersection real; it does **not** give
+per-call narrowing while OpenShell mints the token.

@@ -329,11 +329,21 @@ keycloak:
       # `all` means every tool in keycloak.toolRoles.
       # Verified on 2026-11-26: neither side can grant what the other lacks.
       delegableTools: all
-      # One optional client scope per tool (`tool-<name>`), so a single
-      # exchange can request exactly the tool in flight and the token carries
-      # one role instead of eighteen. Scope names are realm-wide while tool
-      # names are per server, so this breaks if two servers ever share a tool
-      # name -- all 18 are distinct today.
+      # One client scope per tool (`tool-<name>`), attached to the agent client
+      # as a DEFAULT scope. Together with fullScopeAllowed:false these are the
+      # only source of roles, so the token carries the operator's roles
+      # INTERSECTED with delegableTools.
+      #
+      # It was meant to give per-call narrowing -- one role per tool call, the
+      # smaller blast radius Uber describes. That is NOT reachable while
+      # OpenShell mints the token: `token_grant` takes a fixed `scopes` list
+      # per profile and `audience_overrides` select by host/port/path, while
+      # MCP is one `/mcp` path with the tool named in the body. Nothing can
+      # vary the scope per call. Keeping the per-tool scopes anyway, because
+      # they are what makes `delegableTools` expressible at all.
+      #
+      # Scope names are realm-wide while tool names are per server, so this
+      # breaks if two servers ever share a tool name -- all 18 are distinct.
       perToolScopes: true
   # Every tool role declared in the realm, per MCP server.
   toolRoles:

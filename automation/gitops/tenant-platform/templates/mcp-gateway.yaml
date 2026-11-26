@@ -551,7 +551,20 @@ spec:
           - roles
           - groups
 {{- if $fed.perToolScopes }}
-        optionalClientScopes:
+          # DEFAULT, not optional. These carry the agent's delegable set, and
+          # with fullScopeAllowed:false they are the ONLY source of roles.
+          #
+          # Attached as `optional` they contributed nothing unless the exchange
+          # asked for them by name -- and nothing can: OpenShell's token_grant
+          # takes a FIXED `scopes` list per profile, and `audience_overrides`
+          # select by host/port/path, while MCP is one `/mcp` path with the
+          # tool named in the body. So an optional attachment yields a token
+          # with ZERO roles and every tool call 403s. Measured on 2026-11-26.
+          #
+          # The intersection survives: the token carries the operator's roles
+          # INTERSECTED with this list, and detaching one here refuses that
+          # tool while the operator keeps it (verified). What is lost is
+          # per-call narrowing to the single tool in flight.
 {{- range $server, $tools := $kc.toolRoles }}
 {{- range $tools }}
 {{- if or (eq (toString $fed.delegableTools) "all") (has . $fed.delegableTools) }}

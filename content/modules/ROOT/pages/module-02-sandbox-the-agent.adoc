@@ -117,7 +117,7 @@ openshell gateway select openshell-gw
 --
 [source,bash,role=execute,subs="verbatim,attributes"]
 ----
-openshell sandbox create --name hermie --from quay.io/rh-aiservices-bu/waterplant-hermes:0.2.7 --cpu 2 --memory 4Gi --no-tty --provider maas -- true
+openshell sandbox create --name hermie --from quay.io/rh-aiservices-bu/waterplant-hermes:0.2.7 --cpu 2 --memory 4Gi --no-tty --detach --provider maas
 ----
 
 This creates an empty sandbox named `hermie` from the same Hermes image (so we have all the dependencies we need), with 2 CPUs and 4Gi of memory, but does not start the agent yet. All that's inside our sandbox right now is just the supervisor, waiting for what to do next.
