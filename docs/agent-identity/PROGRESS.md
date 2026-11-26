@@ -1921,3 +1921,41 @@ both tool-call predicates still require the attested agent. The readiness gate a
 are different listeners with different policies.
 
 **Needs one more push** to reach the cluster.
+
+### 2026-11-26 — Provider profile accepted, after two more of my bugs
+
+The bridge now gets past the readiness gate, starts the re-stamp loop and adopts the sandbox. But
+`seed_mcp_provider` failed, and the lint message was precise enough to name both faults:
+
+```
+field=endpoints[0].allow_uninspected_credentials
+  credentialed endpoint 'user-gngp7-openshell.<ns>.svc.cluster.local:8080' uses L4-only;
+  configure L7 inspection or explicitly set allow_uninspected_credentials: true
+```
+
+**Bug 1, the host was wrong.** That is the *OpenShell* gateway, not the MCP gateway — I substituted
+`$GATEWAY_HOST` where the credential endpoint needs the MCP gateway. The effect would have been
+offering the Bearer to the wrong service entirely. Now derived from `MCP_GATEWAY_URL`.
+
+**Bug 2, the endpoint was L4-only.** An endpoint with just `host` and `port` cannot be inspected, so
+a credentialed endpoint is refused outright. Added `protocol: rest`, and chose **inspection over
+`allow_uninspected_credentials: true`** — the proxy has to read the request to rewrite the header,
+so opting out of inspection would defeat the mechanism rather than enable it. Lint then asked for
+`access` or `rules` ("protocol requires rules or access to define allowed traffic"); set
+`access: full`, matching the `mcp_gateway` network rule the participant already grants
+(`…:8080:full:rest:enforce`).
+
+**Validated before pushing, not after.** The corrected profile was substituted by hand and linted
+with the live CLI until it passed, then actually imported and the provider created:
+
+```
+openshell provider profile lint   -> Provider profile lint passed.
+openshell provider profile import -> Imported 1 provider profile.
+openshell provider create         -> Created provider waterplant-mcp
+openshell provider get            -> Credential keys: operator_token
+```
+
+So the profile and provider now exist on the gateway, and the bridge's own `seed_mcp_provider` is
+idempotent over them (`create` falls through to `update`).
+
+**Needs a push:** `files/waterplant-mcp-profile.yaml` and `files/bridge-supervisor.sh`.

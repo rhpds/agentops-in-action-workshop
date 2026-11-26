@@ -38,6 +38,26 @@ credentials:
         subject_token_type: urn:ietf:params:oauth:token-type:access_token
       # Short, because per-tool tokens only pay off when short-lived.
       cache_ttl_seconds: 300
+# Where the credential may be injected, and nowhere else. Two things here are
+# load-bearing and were both got wrong first time:
+#
+#   the host is the MCP GATEWAY, not the OpenShell gateway. Substituted from
+#   MCP_GATEWAY_URL; using GATEWAY_HOST points it at OpenShell itself, and the
+#   Bearer would be offered to the wrong service.
+#
+#   protocol: rest makes the endpoint L7-inspectable. Without it the endpoint
+#   is L4-only and lint refuses the profile outright: "credentialed endpoint
+#   uses L4-only; configure L7 inspection or explicitly set
+#   allow_uninspected_credentials: true". Inspect rather than opt out -- the
+#   proxy has to read the request to rewrite the header.
 endpoints:
-  - host: "__GATEWAY_HOST__"
+  - host: "__MCP_GATEWAY_HOST__"
     port: 8080
+    path: /mcp
+    protocol: rest
+    # `access` (or an explicit `rules` list) is required once a protocol is
+    # declared: "protocol requires rules or access to define allowed traffic".
+    # `full` matches the sandbox network rule the participant already grants
+    # for this host (mcp_gateway: …:8080:full:rest:enforce).
+    access: full
+    enforcement: enforce

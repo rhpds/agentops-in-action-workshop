@@ -113,9 +113,15 @@ seed_mcp_provider() {
   [ "${AGENT_IDENTITY_ATTESTED:-false}" = true ] || return 0
   local tok profile
   profile=/tmp/waterplant-mcp-profile.yaml
+  # The MCP gateway's hostname, NOT $GATEWAY_HOST -- that is the OpenShell
+  # gateway, and pointing the credential endpoint at it offers the Bearer to
+  # the wrong service.
+  local mcp_host=${MCP_GATEWAY_URL#*://}
+  mcp_host=${mcp_host%%:*}
+  mcp_host=${mcp_host%%/*}
   sed -e "s|__TOKEN_ENDPOINT__|${MCP_TOKEN_URL}|" \
       -e "s|__REALM_ISSUER__|${MCP_TOKEN_URL%/protocol/openid-connect/token}|" \
-      -e "s|__GATEWAY_HOST__|${GATEWAY_HOST}|" \
+      -e "s|__MCP_GATEWAY_HOST__|${mcp_host}|" \
       /config/waterplant-mcp-profile.yaml > "$profile"
   if ! openshell provider profile lint --file "$profile" >/dev/null 2>&1; then
     log "ERROR: waterplant-mcp profile failed lint; not importing"
