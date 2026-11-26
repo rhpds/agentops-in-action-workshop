@@ -210,6 +210,14 @@ not the realm contents, so a participant's role changes in the Keycloak admin
 console survive a sync — which is the point, since that is the exercise.
 */}}
 {{- $kc := .Values.keycloak }}
+{{- $fed := $kc.agentIdentity.federated }}
+{{- /* The two signers of OpenShell's token_exchange. The AGENT id is also the
+       agent client's clientId and the azp the AuthPolicy matches on: OpenShell
+       always sets the intermediate token's audience to the supervisor's SVID
+       subject, and Keycloak resolves the final exchange's client out of it. */}}
+{{- $brokerId := $fed.brokerSpiffeId | default (printf "%s/ns/%s/sa/%s-openshell" $fed.trustDomain $ns .Values.username) }}
+{{- $brokerClientId := $fed.brokerClientId | default "delegation-broker" }}
+{{- $agentId := $fed.agentSpiffeId | default (printf "%s/ns/%s/sa/%s-openshell-sandbox" $fed.trustDomain $ns .Values.username) }}
 apiVersion: k8s.keycloak.org/v2alpha1
 kind: KeycloakRealmImport
 metadata:
@@ -317,7 +325,7 @@ spec:
           - roles
           - groups
         {{- if $kc.agentIdentity.enabled }}
-        # Two mappers that exist only to make RFC 8693 token exchange possible.
+        # Mappers that exist only to make RFC 8693 token exchange possible.
         #
         # The realm declares clientScopes: explicitly, which REPLACES Keycloak's
         # built-ins rather than adding to them. So there is no `basic` scope and
@@ -333,6 +341,9 @@ spec:
         # writes the configured string without resolving it, so this is valid
         # even before the hermes-agent client below exists.
         protocolMappers:
+{{- if not $fed.enabled }}
+          # Only for the pre-attestation agent client. Absent once attestation is
+          # on, along with the client itself.
           - name: aud-{{ $kc.agentIdentity.clientId }}
             protocol: openid-connect
             protocolMapper: oidc-audience-mapper
@@ -342,6 +353,22 @@ spec:
               access.token.claim: "true"
               introspection.token.claim: "true"
               id.token.claim: "false"
+{{- end }}
+{{- if $fed.enabled }}
+          # The same requirement, for the delegation broker: RFC 8693 needs the
+          # requesting client to be the subject token's azp or in its aud, and
+          # in attested mode the exchange is performed by the broker rather
+          # than by the secret-path agent above.
+          - name: aud-{{ $brokerClientId }}
+            protocol: openid-connect
+            protocolMapper: oidc-audience-mapper
+            consentRequired: false
+            config:
+              included.client.audience: {{ $brokerClientId | quote }}
+              access.token.claim: "true"
+              introspection.token.claim: "true"
+              id.token.claim: "false"
+{{- end }}
           - name: preferred-username
             protocol: openid-connect
             protocolMapper: oidc-usermodel-property-mapper
@@ -355,8 +382,13 @@ spec:
               introspection.token.claim: "true"
               userinfo.token.claim: "true"
         {{- end }}
-{{- if $kc.agentIdentity.enabled }}
+{{- if and $kc.agentIdentity.enabled (not $fed.enabled) }}
       # ---------------------------------------------------------------------
+      # The PRE-ATTESTATION agent client, created only when federated is off.
+      # It is the secret-authenticated fallback, and it is deliberately absent
+      # once attestation is on: a client that can mint the same token with a
+      # string is a downgrade path, and an invisible one.
+      #
       # The agent's own identity.
       #
       # This replaces the confidential wp-dev/hermes-agent client that used to
@@ -413,29 +445,129 @@ spec:
           # claim), which needs 26.8+, a preview feature and FGAP v2 -- see
           # docs/agent-identity/04-keycloak-upgrade-path.md.
           standard.token.exchange.enabled: "true"
-{{- if $kc.agentIdentity.federated.enabled }}
-{{- $fed := $kc.agentIdentity.federated }}
-          # Which external subject may authenticate as this client, and through
-          # which identity provider. Both are already in
-          # JpaClientProviderFactory.REQUIRED_SEARCHABLE_ATTRIBUTES, so the
-          # attribute lookup Keycloak does here needs no build option.
-          #
-          # Inert until clientAuthenticatorType is also federated-jwt, which is
-          # deliberately not set here: that flip takes the secret out of
-          # service, and nothing on the token path can present an SVID until
-          # the OpenShell provider token grant is wired. See
-          # docs/agent-identity/09-implementation-plan.md Stage 8.
-          #
-          # One client, one SPIFFE ID: the lookup requires exactly one matching
-          # client, so this is whichever single workload holds the credential.
-          jwt.credential.issuer: {{ $fed.idpAlias | quote }}
-          jwt.credential.sub: {{ $fed.subjectSpiffeId | default (printf "%s/ns/%s/sa/%s-openshell" $fed.trustDomain $ns .Values.username) | quote }}
-{{- end }}
         protocolMappers:
           # Per-hop audience. Set by a fixed mapper rather than by passing
           # audience= on the exchange request: requesting an audience re-scopes
           # which client's mappers apply and risks dropping resource_access,
           # which is the operator's entire permission set.
+          - name: aud-mcp-gateway-resource
+            protocol: openid-connect
+            protocolMapper: oidc-audience-mapper
+            consentRequired: false
+            config:
+              included.custom.audience: {{ printf "http://%s:%d/mcp" $svc (int 8080) | quote }}
+              access.token.claim: "true"
+              introspection.token.claim: "true"
+              id.token.claim: "false"
+          - name: preferred-username
+            protocol: openid-connect
+            protocolMapper: oidc-usermodel-property-mapper
+            consentRequired: false
+            config:
+              user.attribute: username
+              claim.name: preferred_username
+              jsonType.label: String
+              access.token.claim: "true"
+              id.token.claim: "true"
+              introspection.token.claim: "true"
+              userinfo.token.claim: "true"
+{{- end }}
+{{- if and $kc.agentIdentity.enabled $fed.enabled }}
+      # ---------------------------------------------------------------------
+      # The DELEGATION BROKER.
+      #
+      # The OpenShell gateway authenticates as this client, proving it with its
+      # own JWT-SVID, when it exchanges a stored user token for an intermediate
+      # one. Named for the function: one gateway can broker for any number of
+      # realm users, so it is emphatically NOT "the agent".
+      #
+      # Born federated-jwt, which is safe only because this client is NEW. It
+      # has no secret path to take out of service, so enabling attested mode is
+      # purely additive and `hermes-agent` keeps working as the fallback.
+      # ---------------------------------------------------------------------
+      - clientId: {{ $brokerClientId | quote }}
+        name: Delegation broker
+        description: >-
+          The OpenShell gateway, authenticated by its SPIRE-issued JWT-SVID.
+          Exchanges a stored user token for an intermediate token addressed to
+          one specific sandbox.
+        enabled: true
+        publicClient: false
+        serviceAccountsEnabled: false
+        directAccessGrantsEnabled: false
+        standardFlowEnabled: false
+        implicitFlowEnabled: false
+        fullScopeAllowed: true
+        protocol: openid-connect
+        clientAuthenticatorType: federated-jwt
+        defaultClientScopes:
+          - roles
+          - groups
+        attributes:
+          standard.token.exchange.enabled: "true"
+          jwt.credential.issuer: {{ $fed.idpAlias | quote }}
+          jwt.credential.sub: {{ $brokerId | quote }}
+        protocolMappers:
+          # Required for the intermediate exchange. Verified: Keycloak's
+          # checkRequestedAudiences asserts the ISSUED token actually carries
+          # the requested audience, so `audience=<agent>` is refused 400
+          # "Requested audience not available" unless a mapper puts it there.
+          - name: aud-agent
+            protocol: openid-connect
+            protocolMapper: oidc-audience-mapper
+            consentRequired: false
+            config:
+              included.client.audience: {{ $agentId | quote }}
+              access.token.claim: "true"
+              introspection.token.claim: "true"
+              id.token.claim: "false"
+      # ---------------------------------------------------------------------
+      # The AGENT client. Its clientId IS the sandbox's SPIFFE ID -- see the
+      # comment on $agentId above; this is forced by OpenShell, not chosen.
+      #
+      # fullScopeAllowed: false with NO scope mappings is load-bearing. It makes
+      # the baseline ZERO roles, so the token carries only the tool whose
+      # optional `tool-<name>` scope the exchange asked for, and only if the
+      # operator holds that role too. Measured 2026-11-26: with it true a
+      # requested scope does not narrow at all (18 roles either way), and a
+      # scope mapping placed here instead would be an always-on grant that
+      # appears in every token and defeats the narrowing.
+      # ---------------------------------------------------------------------
+      - clientId: {{ $agentId | quote }}
+        name: Hermie agent (attested)
+        description: >-
+          The sandbox supervisor, authenticated by its SPIRE-issued JWT-SVID.
+          Signs the final token exchange, so its id is the azp Authorino sees.
+        enabled: true
+        publicClient: false
+        serviceAccountsEnabled: false
+        directAccessGrantsEnabled: false
+        standardFlowEnabled: false
+        implicitFlowEnabled: false
+        fullScopeAllowed: false
+        protocol: openid-connect
+        clientAuthenticatorType: federated-jwt
+        defaultClientScopes:
+          - roles
+          - groups
+{{- if $fed.perToolScopes }}
+        optionalClientScopes:
+{{- range $server, $tools := $kc.toolRoles }}
+{{- range $tools }}
+{{- if or (eq (toString $fed.delegableTools) "all") (has . $fed.delegableTools) }}
+          - {{ printf "tool-%s" . | quote }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+        attributes:
+          standard.token.exchange.enabled: "true"
+          jwt.credential.issuer: {{ $fed.idpAlias | quote }}
+          jwt.credential.sub: {{ $agentId | quote }}
+        protocolMappers:
+          # Mappers are per client and the FINAL token is issued for this one,
+          # so without these the token came back with preferred_username and aud
+          # both absent -- measured on the live realm 2026-11-26.
           - name: aud-mcp-gateway-resource
             protocol: openid-connect
             protocolMapper: oidc-audience-mapper
@@ -505,6 +637,34 @@ spec:
               access.token.claim: "true"
               claim.name: "resource_access.${client_id}.roles"
               jsonType.label: String
+{{- if and $kc.agentIdentity.enabled $fed.enabled $fed.perToolScopes }}
+      # --------------------------------------------------------------------
+      # One optional client scope per tool, so a single exchange can ask for
+      # exactly the tool in flight and the token carries ONE role instead of
+      # eighteen -- the smaller blast radius Uber's design is after.
+      #
+      # The scope carries no mapper of its own: the roles claim still comes
+      # from the `roles` scope above. What each scope carries is a
+      # scope-MAPPING to its matching tool role, declared in
+      # clientScopeMappings below, which is what widens the agent client's
+      # otherwise-empty effective scope by exactly one role.
+      #
+      # Scope names are realm-wide while tool names are per server, so two
+      # servers sharing a tool name would collide. All 18 are distinct today;
+      # if that changes the name must become tool-<server>-<tool>.
+      # --------------------------------------------------------------------
+{{- range $server, $tools := $kc.toolRoles }}
+{{- range $tools }}
+      - name: {{ printf "tool-%s" . | quote }}
+        description: {{ printf "Permission to call %s on this one hop" . | quote }}
+        protocol: openid-connect
+        attributes:
+          include.in.token.scope: "true"
+          display.on.consent.screen: "false"
+{{- end }}
+{{- end }}
+{{- end }}
+
 
     users:
       # Realm admin: the account a participant uses to grant and revoke tool
@@ -551,6 +711,9 @@ spec:
 {{- end }}
 {{- end }}
 
+    # NOTE: one key for the whole realm. Anything else that needs a scope
+    # mapping must be added INSIDE this block -- a second `clientScopeMappings:`
+    # is a duplicate YAML key and one of the two is silently dropped.
     clientScopeMappings:
 {{- range $server, $tools := $kc.toolRoles }}
 {{- $withheld := index $kc.withheldFromOperator $server | default list }}
@@ -559,6 +722,18 @@ spec:
           roles:
 {{- range $tools }}
 {{- if not (has . $withheld) }}
+            - {{ printf "tool:%s" . | quote }}
+{{- end }}
+{{- end }}
+{{- if and $kc.agentIdentity.enabled $fed.enabled $fed.perToolScopes }}
+        # Each tool-<name> scope maps to exactly its own tool:<name> role, so
+        # requesting that scope widens the agent client's otherwise-empty
+        # effective scope by one role and nothing else -- and only when the
+        # operator holds it too: a requested scope can narrow, never grant
+        # (measured on the live realm 2026-11-26).
+{{- range $tools }}
+        - clientScope: {{ printf "tool-%s" . | quote }}
+          roles:
             - {{ printf "tool:%s" . | quote }}
 {{- end }}
 {{- end }}

@@ -60,4 +60,18 @@ keycloak:
   # Only the clientId is needed here -- this chart checks the azp claim, it
   # never authenticates as the client, so no secret belongs in tenant-policy.
   agentIdentity:
+    # The BROKER client -- the OpenShell gateway's. Used only as the fallback
+    # azp value while federated.enabled is false and the agent still presents a
+    # secret-authenticated exchanged token.
     clientId: hermes-agent
+    # Once the attested path is on, the azp Authorino sees is NOT a friendly
+    # name: OpenShell fixes the intermediate token's audience to the
+    # supervisor's SVID subject, and Keycloak resolves the final exchange's
+    # client out of that audience, so the agent client's id IS its SPIFFE ID.
+    # Measured on the live realm 2026-11-26. Must match tenant-platform's
+    # keycloak.agentIdentity.federated -- bootstrap-tenant forwards both.
+    federated:
+      enabled: true
+      trustDomain: spiffe://agentops.lab
+      # Empty derives <trustDomain>/ns/<user>-agentops/sa/<user>-openshell-sandbox.
+      agentSpiffeId: ""

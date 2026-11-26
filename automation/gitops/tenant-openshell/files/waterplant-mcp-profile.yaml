@@ -1,0 +1,43 @@
+# OpenShell provider profile for the MCP gateway credential.
+#
+# This is the whole agent-identity design expressed natively: the gateway
+# fetches its own JWT-SVID, exchanges the stored operator token with it, and the
+# supervisor exchanges the result with ITS own SVID. Nothing bespoke, and the
+# sandbox never receives a Keycloak credential -- only an opaque placeholder
+# that the supervisor resolves at egress, and only for the endpoint below.
+#
+# Templated by tenant-openshell/templates/bridge.yaml; do not edit in place.
+id: waterplant-mcp
+display_name: Waterplant MCP Gateway
+description: Operator-delegated MCP gateway token, minted with attested SVIDs
+category: other
+credentials:
+  # The human's authorisation. Broker-only: the gateway holds it, the sandbox
+  # never sees it. It CANNOT declare refresh metadata, which is why
+  # bridge-supervisor.sh re-stamps it on a timer.
+  - name: operator_token
+    description: The operator's access token, exchanged by the gateway
+    required: true
+  # The credential the sandbox actually gets, as a placeholder resolved at
+  # egress. Never stored: minted per request by the grant below.
+  - name: gateway_token
+    description: Final MCP gateway token (sub = operator, azp = the sandbox SVID)
+    required: true
+    auth_style: bearer
+    header_name: authorization
+    env_vars:
+      - MCP_GATEWAY_TOKEN
+    token_grant:
+      grant_type: token_exchange
+      token_endpoint: "__TOKEN_ENDPOINT__"
+      jwt_svid_audience: "__REALM_ISSUER__"
+      client_assertion_type: urn:ietf:params:oauth:client-assertion-type:jwt-spiffe
+      subject_token:
+        source: provider_credential
+        credential: operator_token
+        subject_token_type: urn:ietf:params:oauth:token-type:access_token
+      # Short, because per-tool tokens only pay off when short-lived.
+      cache_ttl_seconds: 300
+endpoints:
+  - host: "__GATEWAY_HOST__"
+    port: 8080

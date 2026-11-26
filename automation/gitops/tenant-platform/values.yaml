@@ -251,23 +251,49 @@ keycloak:
     # templates/mcp-gateway.yaml. Move it to the catalog item's secret channel
     # if that ever stops being true.
     clientSecret: hermes-agent-lab-secret
-    # --- the attested replacement for that secret (Stage 8 route 1) ----------
-    # Verified working on 2026-11-24: the exchange succeeds with NO secret
-    # anywhere, the client authenticating with a SPIRE-attested JWT-SVID.
+    # --- the attested replacement for that secret (Stage 8 / 8b) -------------
+    # Verified on 2026-11-24 and 2026-11-26: the exchange succeeds with NO
+    # secret anywhere, each client authenticating with a SPIRE-attested
+    # JWT-SVID.
     #
-    # `enabled` here only puts the SPIFFE identity provider and the client's
-    # two jwt.credential.* attributes into the realm import, which is inert
-    # until the client's clientAuthenticatorType is also federated-jwt. That
-    # last flip is deliberately NOT a chart value: it takes the shared secret
-    # out of service, and nothing on the token path can present an SVID until
-    # the OpenShell provider token grant is wired. Flip it with
-    # files/apply-realm-identity.sh (FEDERATED_SPIFFE_ID=...).
+    # Attested mode adds TWO NEW clients and changes NOTHING about
+    # `clientId` above, which stays the secret-path agent. That makes the
+    # migration purely additive: the secret path keeps working as a fallback
+    # the whole time, and no live tenant breaks while it is rolled out.
+    # (Learned the hard way -- flipping hermes-agent itself to federated-jwt
+    # took both runtimes down, because nothing could present an SVID yet.)
+    #
+    #   `brokerClientId` is the DELEGATION BROKER. The OpenShell gateway signs
+    #   the intermediate exchange with its own SVID as this client, and it is
+    #   the client that exchanges the stored subject token. Named for what it
+    #   DOES, not for whose token it carries: one gateway may broker for any
+    #   number of realm users, so `hermes-agent` would have been actively
+    #   misleading -- it is not the agent, and in attested mode the agent is a
+    #   different client entirely.
+    #
+    #   `agentSpiffeId` below is the AGENT, and its clientId IS that SPIFFE ID.
+    #   That is not a style choice: OpenShell always sets the intermediate
+    #   token's audience to the supervisor's SVID subject and cannot be
+    #   configured otherwise, and Keycloak resolves the requesting client of
+    #   the final exchange out of that audience. So the final client must be
+    #   named by the SPIFFE ID, and `azp` on the token Authorino sees is the
+    #   SPIFFE ID rather than a friendly name. tenant-policy templates its
+    #   predicate from the same value.
+    #
+    # Both new clients are born `federated-jwt` -- safe precisely because
+    # neither ever had a secret path to take out of service. Nothing is left
+    # for a script to flip.
     #
     # Hard prerequisite the chart cannot supply: the Keycloak CR needs
     #   spec.features.enabled: [spiffe, client-auth-federated]
     # Both preview, and on a shared RHDP cluster that CR is not ours.
     federated:
-      enabled: false
+      # ON by default. There is deliberately NO fallback: if attestation does
+      # not work the agent must fail loudly rather than quietly reverting to a
+      # shared secret, because a silent downgrade is indistinguishable from
+      # working and would hide exactly the failure this design exists to make
+      # visible.
+      enabled: true
       # Must equal the SpireServer's trustDomain in bootstrap-infra.
       trustDomain: spiffe://agentops.lab
       # Keycloak's own alias for the identity provider, and the value of the
@@ -282,14 +308,33 @@ keycloak:
       # keycloak.host minus its first label -- the same derivation
       # bootstrap-infra uses, since RHDP publishes Keycloak at sso.<domain>.
       bundleEndpoint: ""
-      # The one SPIFFE ID allowed to authenticate as this client. One client,
-      # one ID: Keycloak's lookup requires exactly one matching client, so this
-      # names whichever single workload holds the credential. Today that is the
-      # OpenShell gateway -- the only pod on the token path with a
-      # csi.spiffe.io mount.
+      # The broker's Keycloak client id. Multiple users can be brokered through
+      # one gateway, so this names the function, not a user.
+      brokerClientId: delegation-broker
+      # One client, one SPIFFE ID: Keycloak's federated lookup requires exactly
+      # one matching client, so each signer needs its own.
       #
-      # Empty derives <trustDomain>/ns/<user>-agentops/sa/<user>-openshell.
-      subjectSpiffeId: ""
+      # brokerSpiffeId -- the OpenShell GATEWAY, which signs the intermediate
+      # exchange. Empty derives <trustDomain>/ns/<user>-agentops/sa/<user>-openshell.
+      brokerSpiffeId: ""
+      # agentSpiffeId -- the SANDBOX supervisor, which signs the final
+      # exchange. This value is ALSO the agent client's clientId and the azp
+      # claim the AuthPolicy matches on. Empty derives
+      # <trustDomain>/ns/<user>-agentops/sa/<user>-openshell-sandbox.
+      agentSpiffeId: ""
+      # Which of the operator's tools the agent may be delegated. Sets
+      # fullScopeAllowed: false on the agent client plus scope mappings for
+      # exactly these, so the token carries the operator's roles INTERSECTED
+      # with this list. Empty list means the agent may be delegated nothing;
+      # `all` means every tool in keycloak.toolRoles.
+      # Verified on 2026-11-26: neither side can grant what the other lacks.
+      delegableTools: all
+      # One optional client scope per tool (`tool-<name>`), so a single
+      # exchange can request exactly the tool in flight and the token carries
+      # one role instead of eighteen. Scope names are realm-wide while tool
+      # names are per server, so this breaks if two servers ever share a tool
+      # name -- all 18 are distinct today.
+      perToolScopes: true
   # Every tool role declared in the realm, per MCP server.
   toolRoles:
     telemetry-mcp:

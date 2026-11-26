@@ -1468,3 +1468,415 @@ and not yet done:
 
 So the order is: reconnect the MCP → redraw the two-badges diagram and add the Stage 8b diagrams →
 review → execute Stage 8b.
+
+### 2026-11-26 — Stage 8b diagrams, and a stale diagram caught
+
+Three Excalidraw diagrams now live in [`diagrams/`](diagrams/), each as an editable `.excalidraw`
+master, a 2× `.png` **with the scene embedded** (so the image itself drags back into Excalidraw),
+and the generator that produced it:
+
+| Diagram | Shows |
+|---|---|
+| `openshell-two-badges` | the eight-step flow: both badges, the letter in the drawer, and why the sandbox never holds it |
+| `stage8b-clients-and-restamp` | which SVID signs which hop, the two federated clients, what is stored vs minted, and the two costs — the re-stamp loop and the unverified audience question |
+| `stage8b-token-narrowing` | the four narrowings from "operator holds 18 roles" to "one permission at the door", and **where** each happens |
+
+**The two-badges diagram was stale and the author caught it.** It still showed the pre-Decision-2/3
+design — an all-18-roles day pass, no agent-side roles, no per-tool scope. Updated: the day pass
+now reads `roles = operator ∩ agent, narrowed to scope=tool:X`, the Keycloak panel carries the
+`fullScopeAllowed: false` note, and step 7 shows `scope=tool-X`.
+
+**A precision worth keeping, now drawn explicitly.** The AuthPolicy does **not** check the operator
+and the agent separately — it cannot, because the token carries one role set, not two. Keycloak
+intersects them at mint time, so a role present in the token already means *both* the operator
+holds it and the agent may be delegated it. Same guarantee, enforced one hop earlier, which is why
+no AuthPolicy change is needed. The flip side: set `fullScopeAllowed` back to `true` and the
+agent-side limit silently disappears with the policy none the wiser. That boolean is load-bearing.
+
+**Two tooling notes.** The Excalidraw MCP server's tools never surfaced in this session despite the
+pinned entry in `.mcp.json` and a reconnect; the diagrams were produced with the same package's
+**CLI** (`render`), which works offline with no canvas server. That turned out better than the MCP
+would have been — rendering to PNG and *looking* at the result caught collisions, a struck-through
+label and an overflowing text box that generating scene JSON blind would have shipped. Second:
+Excalidraw silently **drops zero-width text elements** on restore (`Scene restore lost element
+e34`), so the shared helper now refuses empty strings.
+
+### 2026-11-26 — Branch deployed through ArgoCD, and the audience question settled
+
+**Correction to something this session said.** I claimed the chart changes had "never been through
+an ArgoCD sync". Wrong for `tenant-openshell` — that Application was repointed at `spiffe-spire`
+during Stage 7 and is how 0.0.116 reached the cluster. It was `tenant-platform` and `tenant-policy`
+that had never been synced from the branch. They have now.
+
+| Application | was | now |
+|---|---|---|
+| `<user>-platform` | `rh1-2027-…-0.0.2` | `spiffe-spire`, Synced/Healthy |
+| `<user>-policy` | `rh1-2027-…-0.0.2` | `spiffe-spire`, Synced/Healthy, plus helm parameter `mcpGateway.agentIdentityEnforced=true` |
+
+That parameter was **necessary, not cosmetic**: neither Application carried an `agentIdentity`
+parameter (both were created from a release tag predating the block), so a plain sync would have
+defaulted `agentIdentityEnforced` to `false` and silently removed the Stage 3 `azp` predicate.
+Passed explicitly, the predicate survived the sync.
+
+**New, and the first time this was exercised as a deployment:** `hermes-plain` now carries the
+exchange env on both `seed-token` and `mcp-token-refresh`, and its token reads `azp: hermes-agent`,
+`preferred_username: operator`, 18 roles. Both runtimes — the sandboxed agent and `hermes-plain` —
+are now exchanging. **Source change to match:** `bootstrap-tenant/values.yaml`
+`policy.agentIdentityEnforced` flipped `false` → `true`, since it is satisfiable exactly when
+`agentIdentity.enabled` is true, which is also the default.
+
+### The audience question: answered, and it changes `azp`
+
+Tested directly, then fully reverted. Three results.
+
+**1. Keycloak accepts a SPIFFE URI as a `clientId`** — HTTP 201 for a client literally named
+`spiffe://agentops.lab/ns/<user>-agentops/sa/<user>-openshell-sandbox`.
+
+**2. "Requested audience not available" is a mapper problem, not a permissions one.**
+`StandardTokenExchangeProvider.checkRequestedAudiences` calls
+`TokenUtils.checkRequestedAudiences(accessToken, params.getAudience())`, which verifies the
+**issued** token actually ended up carrying the requested audience. So an `audience=` request only
+succeeds if a mapper puts it there. Adding one `oidc-audience-mapper` on the broker client, naming
+the sandbox client, turned 400 into 200 with
+`aud = spiffe://…/sa/<user>-openshell-sandbox` — exactly the shape OpenShell's intermediate
+exchange produces. **One more chart-generated mapper, no custom code.**
+
+**3. The three-hop flow works, and `azp` on the final token is the SPIFFE ID.** Feeding that
+stand-in intermediate token back with the sandbox's own JWT-SVID as `client_assertion`:
+
+```
+HTTP 200
+sub   959d8fef-…                (the operator)
+azp   spiffe://agentops.lab/ns/<user>-agentops/sa/<user>-openshell-sandbox
+roles 18
+```
+
+So the 2026-11-25 inference was right. Consequences for Stage 8b, all of them native:
+
+- **`hermes-agent` cannot be the client that signs the final hop.** The final client's `clientId`
+  must *be* the sandbox SPIFFE ID, because that is what the intermediate token's `aud` contains and
+  OpenShell cannot be configured to put anything else there. `hermes-agent` becomes the **broker**
+  client (the gateway's), which is the opposite of what artifact C24 stages today.
+- **The AuthPolicy predicate must change.** `auth.identity.azp == 'hermes-agent'` becomes the
+  SPIFFE ID — a **tenant-specific** value containing the namespace, so it has to be templated in
+  `mcp-gateway-policy.yaml` rather than written as a literal.
+- **The final client needs its own mappers.** The probe token came back with `preferred_username`
+  and `aud` both absent, because mappers are per client — the new client needs the same
+  `preferred-username` and `aud-mcp-gateway-resource` pair `hermes-agent` has.
+
+**Reverted:** probe client deleted, probe audience mapper deleted, probe pod deleted;
+`hermes-agent` back to its two mappers and no `spiffe://` clients in the realm.
+
+### An open choice this creates
+
+`azp` is a standard claim and templating the predicate per tenant is straightforward, but it costs
+the readable `azp == 'hermes-agent'` line that the lab guide and these documents lean on. The
+alternative is a native `oidc-hardcoded-claim-mapper` on the final client adding e.g.
+`agent: hermes-agent`, leaving the predicate tenant-independent and readable at the cost of a
+non-standard claim. Recommendation: **template the SPIFFE ID**, because it keeps the token standard
+and the chart already templates per-tenant values everywhere else. Worth a decision before item 4.
+
+### 2026-11-26 — Verified the per-tool mechanism myself, and it collapses two build items into one
+
+I had proven the intersection but not the per-tool narrowing, and it drives 18 chart-generated
+objects, so I proved the object shape first. Objects needed per tool: a **client scope**
+`tool-<name>` (`include.in.token.scope: true`), a **scope-mapping on that scope** to the matching
+`tool:<name>` role, and the scope attached to the agent client as an **optional** client scope.
+
+| `fullScopeAllowed` | `scope=` requested | roles |
+|---|---|---|
+| true | — | 18 |
+| true | `tool-get_reservoir_level` | **still 18** |
+| false | — | **0** |
+| false | `tool-get_reservoir_level` | **1** |
+| false | same, operator's role revoked | **0**, scope dropped from the claim |
+
+**Two corrections to the plan, both simplifying.** Per-tool narrowing is impossible with
+`fullScopeAllowed: true`, so Decisions 2 and 3 are one mechanism rather than two independent
+features. And putting scope mappings directly on the agent client — which build item 1 called for —
+is redundant *and harmful*: with `fullScopeAllowed: false` the baseline is already 0, and a
+client-level mapping is an always-on grant that would appear in every token and defeat the
+narrowing. The delegable set is expressed purely by which `tool-*` scopes are attached.
+
+```
+roles in token = (operator's roles) ∩ (the tool-* scope requested, if attached to the agent)
+```
+
+Reverted: probe client scope deleted, `fullScopeAllowed` back to `true`, operator's role restored,
+baseline re-verified at `azp=hermes-agent` with 18 roles and no `tool-*` scopes in the realm.
+
+### 2026-11-26 — Stage 8b implemented, and the full chain proven end to end
+
+**The whole architecture works on the test tenant, with no secret anywhere.** Real SVIDs from both
+workloads, no stand-ins:
+
+```
+HOP 2  gateway SVID  -> intermediate   azp=hermes-agent
+                                       aud=spiffe://…/sa/<user>-openshell-sandbox
+HOP 3a sandbox SVID, no scope          sub=<operator>  preferred_username=operator
+                                       aud=http://mcp-gateway-…:8080/mcp
+                                       azp=spiffe://…/sa/<user>-openshell-sandbox
+                                       roles=0                       <- baseline is empty
+HOP 3b + scope=tool-get_reservoir_level roles=1  ['tool:get_reservoir_level']
+```
+
+Two attested identities, delegation preserved (`sub` is the human), and a per-tool blast radius.
+
+**Realm delta applied to the live tenant** by `apply-realm-identity.sh` (idempotent, re-runnable):
+broker `hermes-agent` switched to `federated-jwt` bound to the gateway's SVID with a new `aud-agent`
+mapper; the agent client created, named by the sandbox SPIFFE ID, `fullScopeAllowed: false`, with
+its own `preferred-username` and `aud-mcp-gateway-resource` mappers; **18 per-tool client scopes**
+created, each mapped to its own role and attached to the agent as optional.
+
+**Live AuthPolicy predicate** moved to `azp == 'spiffe://…/sa/<user>-openshell-sandbox'`.
+
+### Source changes, all rendered and verified
+
+| File | Change |
+|---|---|
+| `tenant-platform/values.yaml` | `federated` gains `brokerSpiffeId`, `agentSpiffeId`, `delegableTools`, `perToolScopes`; `subjectSpiffeId` removed |
+| `tenant-platform/templates/mcp-gateway.yaml` | `$brokerId`/`$agentId` derivations; `aud-agent` on the broker; the whole agent client; 18 `tool-*` client scopes; their scope-mappings **merged into the existing `clientScopeMappings`** |
+| `tenant-platform/files/apply-realm-identity.sh` | `FEDERATED_BROKER_SPIFFE_ID` + `FEDERATED_AGENT_SPIFFE_ID`; agent client, its mappers, the broker's `aud-agent`, and the per-tool scopes read back from the realm |
+| `tenant-policy/values.yaml`, `templates/mcp-gateway-policy.yaml` | predicate templated: `hermes-agent` when federated is off, the agent SPIFFE ID when on |
+| `bootstrap-tenant/values.yaml`, `templates/applications.yaml` | forwards the new keys to **both** charts from one place |
+| `bootstrap-tenant/values.yaml` | `policy.agentIdentityEnforced` `false` → `true` |
+| `tenant-openshell/files/waterplant-mcp-profile.yaml` | **new** — the OpenShell provider profile: `token_exchange`, `jwt_svid_audience`, `jwt-spiffe` assertion, broker-only subject credential |
+| `tenant-openshell/files/bridge-supervisor.sh` | `seed_mcp_provider` (lint → import → create/update with `--credential`) and `restamp_loop` |
+| `tenant-openshell/templates/bridge.yaml`, `values.yaml` | profile into the ConfigMap; `agentIdentity.attested` + `restampSeconds` |
+
+**A template bug caught by rendering rather than by reading.** The realm import *already had* a
+`clientScopeMappings` section (granting tool roles to the `mcp-gateway` client's scope). My first
+attempt emitted a second top-level key, so all 18 mappings were **silently dropped** — YAML keeps
+one of the duplicate keys. Merged into the existing block and re-verified: 7 + 5 + 6 = 18 scope
+entries alongside the untouched `client: mcp-gateway` entries. A warning comment now sits above it.
+
+**Two things to know.**
+
+*ArgoCD renders from git, not from the working tree.* The policy Application has the right helm
+parameters and reports Synced, but the live predicate only changed because I patched the AuthPolicy
+directly — the templated version is uncommitted. Everything chart-side needs a push to take effect
+through GitOps.
+
+*`federated.enabled` stays `false` in source by design.* It needs the Keycloak CR's `spiffe` and
+`client-auth-federated` features, which are a manual patch on an RHDP-owned CR. Turning it on is a
+per-cluster decision, made with Application parameters, as done here.
+
+### The one remaining gap
+
+The credential reaches the sandbox as an **environment placeholder** that the supervisor resolves at
+egress, only for the endpoints the profile declares. So Hermes must send the *placeholder* rather
+than a real token — and today the in-sandbox refresher writes a real JWT into
+`$HERMES_HOME/mcp-tokens/gateway.json`. Closing that is either a sandbox image change (the refresher
+writes the placeholder) or a bridge change (`prepare()` publishes a static token file holding the
+placeholder and the refresher is disabled). The second needs no rebuild and is the one to try first.
+Until then the sandbox's own exchange is the path in use, and `hermes-agent` being `federated-jwt`
+means that path is **currently failing closed** on this tenant.
+
+### 2026-11-26 — The last gap closed in source, and an incident
+
+**Incident: I truncated the sister repo's `mcp-token-refresh.py` to zero bytes.** A patch script
+passed a malformed `newline` value to `open(path, "w")`, which truncates the file *before*
+validating its arguments, so the write never happened but the content was already gone. That file is
+`COPY`'d into the sandbox image at `Containerfile:116`, so a rebuild from that tree would have
+shipped an **empty refresher** — the sandbox would have come up with no token at all and no obvious
+cause. Caught immediately because the next grep returned nothing.
+
+Recovered without loss: the committed version was the pre-exchange one (4567 bytes, no exchange
+block), so restoring from git would have silently dropped the Stage 1 work. Instead the file was
+restored from the workshop copy, which carries it — a diff confirmed the only difference between
+them was exactly that 60-line block, so the three really are meant to be identical. All three now
+verified identical and byte-for-byte compiling.
+
+Lesson, and it generalises: **`open(path, "w")` destroys the file even when the call then fails.**
+Read-modify-write on tracked files should write to a temp path and rename, which is what this very
+script does for the token file.
+
+**The placeholder path, implemented.** `refresh_once()` now checks `MCP_TOKEN_PLACEHOLDER` before
+the password grant and returns if it is set, publishing the placeholder Hermes should send and
+touching Keycloak not at all. The atomic write was extracted into `_write_token()` so the guard
+could sit at the top rather than duplicating it.
+
+Verified offline with `MCP_TOKEN_URL` pointed at an unreachable address — it still wrote
+`{"access_token": "${MCP_GATEWAY_TOKEN}", "expires_in": 0}` and logged "attested mode", which is the
+proof it never calls out. `expires_in: 0` is deliberate: the placeholder does not expire, and the
+thing that does — the gateway's stored subject token — is re-stamped by the bridge.
+
+Applied to **all three copies** (sister repo + both workshop charts), and wired through:
+`bridge.yaml` sets `MCP_TOKEN_PLACEHOLDER` when `agentIdentity.attested`, and
+`bridge-supervisor.sh` exports it into the sandbox via `prepare()`'s `hermes-env.sh` heredoc.
+
+**Why the image rebuild rather than the bridge-only shadow copy.** `start-hermes.sh` sets
+`SHARE=/usr/local/share/hermes-lab` at line 20 and sources `hermes-env.sh` at line 27, so exporting
+`SHARE` *would* let the bridge shadow the refresher with no rebuild — the C13–C15 mechanism. That
+was rejected: this project already moved off it once, deleting the `/sandbox/lab-share` copy when
+`:test2` carried the exchange, because a shadow copy of image-baked code is a standing drift hazard.
+The image change is the version with one copy of the truth.
+
+**Needs a build handoff:** `quay.io/rlundber/waterplant-hermes:test3` (or overwrite `test2`), then
+`tenant-openshell/values.yaml` `sandbox.image` bumped to match — only after the push.
+
+### 2026-11-26 — Rolled the tenant back to the working secret path
+
+**Why.** Switching `hermes-agent` to `federated-jwt` took the secret path out of service, and nothing
+on the token path can present an SVID until the sandbox image is rebuilt. Both runtimes failed
+closed, exactly as designed: the sandbox refresher logged `HTTP Error 400` every 300s, and
+`hermes-plain` could not start at all — its `seed-token` init container went to
+`Init:CrashLoopBackOff` after 5 restarts.
+
+Reverted, both one-liners and both re-appliable:
+
+| | |
+|---|---|
+| `hermes-agent` | `federated-jwt` → `client-secret` |
+| `mcp-authz-policy` predicate | the sandbox SPIFFE ID → `'hermes-agent'` |
+
+Exchange verified working again (`azp=hermes-agent`, 18 roles) and the sandbox refresher is writing
+tokens. Everything else from Stage 8b stays in place and is inert: both federated clients, the
+`spiffe` IdP, the `clients-federated` flow, the 18 per-tool scopes.
+
+**Roll forward** once `waterplant-hermes:test3` exists: bump `sandbox.image`, set
+`keycloak.agentIdentity.attested: true`, re-run `apply-realm-identity.sh` with both
+`FEDERATED_*_SPIFFE_ID` values, and re-point the policy predicate.
+
+### Unresolved, and NOT caused by the identity work — the model key placeholder
+
+The console path fails with a **separate** fault:
+
+```
+HTTP 401 Authentication Error, LiteLLM Virtual Key expected.
+Received=${MCP placeholder for OPENAI_API_KEY}, expected to start with 'sk-'
+```
+
+The literal placeholder is reaching the model endpoint, i.e. the supervisor is not resolving it at
+egress. Ruled out: the `hermes-env` secret holds a valid `MODEL_API_KEY` (`sk-…`, 25 chars); the
+`maas` provider exists with its credential; the bridge and OpenShell gateway are both 41h old with
+zero restarts, so `prepare()` has not re-run; the sandbox's `config.yaml` carries the intended
+`${OPENAI_API_KEY}` reference. Restarting Hermes in the sandbox did not help.
+
+The likely cause is in `bridge-supervisor.sh`'s own comment: the placeholder is deliberate "so a
+sandbox started without the provider attached shows `${OPENAI_API_KEY}` in its config instead of
+silently running with an empty key", and the log line says to attach with
+`openshell sandbox create … --provider maas` — i.e. **at create time**. Attaching to a running
+sandbox may not rebuild the resolver binding.
+
+**Caveat on my own diagnosis:** the error was present on the first console test today, *before* I
+touched anything in that subsystem — but I then detached and re-attached `maas`, which may have made
+it worse rather than better. I cannot now cleanly separate the two. The clean fix is to recreate the
+sandbox with `--provider maas` at create time, which costs the participant's sandbox state and is
+the module-2 flow.
+
+### 2026-11-26 — `delegation-broker`, and the migration becomes additive
+
+**The naming was wrong, and the author caught it.** After Stage 8b the two clients had swapped
+roles: the client called `hermes-agent` was the *broker*, and the actual agent was the SPIFFE-named
+client. Renamed the broker to **`delegation-broker`** — named for the function, because one gateway
+can broker for any number of realm users, so naming it after a user (or after "the agent") is
+misleading either way.
+
+**The better consequence was structural, not cosmetic.** Separating them means `hermes-agent` stays
+exactly what it was — the secret-path agent — and attested mode becomes **purely additive**: two
+*new* clients, both born `federated-jwt`, which is safe precisely because neither ever had a secret
+path to take out of service. That removes the outage this session caused: flipping `hermes-agent`
+itself took both runtimes down because nothing could present an SVID yet. Now the fallback keeps
+working throughout the rollout, and the caveat about "the flip is deliberately not a chart value"
+is gone.
+
+Rendered both ways and verified: with `federated.enabled: false` **nothing at all changes** from the
+previous behaviour; with it true, `hermes-agent` is untouched and `delegation-broker` plus the
+SPIFFE-named agent client appear alongside, with `aud-delegation-broker` added to the public client
+and `aud-agent` on the broker.
+
+Proven on the live tenant, both paths side by side:
+
+```
+ATTESTED   hop A  gateway SVID  -> azp=delegation-broker, aud=…/sa/<user>-openshell-sandbox
+           hop B  sandbox SVID + scope=tool-get_reservoir_level
+                  -> sub=<operator>, preferred_username=operator,
+                     azp=spiffe://…/sa/<user>-openshell-sandbox, roles=[tool:get_reservoir_level]
+FALLBACK   hermes-agent + secret -> azp=hermes-agent, roles=18
+```
+
+### A migration trap worth knowing: stale `jwt.credential.sub` breaks everything
+
+Switching the broker over failed with a flat `invalid_client` that named nothing. Cause: **PUT
+merges the client attributes map.** Clearing `jwt.credential.*` by sending a map without those keys
+leaves them in place, so `hermes-agent` and `delegation-broker` both carried the gateway's SPIFFE
+ID. Keycloak's federated lookup does `searchClientsByAttributes` and throws
+`"Multiple clients matches attributes"` when more than one client matches — reported to the caller
+as `invalid_client` with no further detail.
+
+Confirmed directly: `GET /clients?q=jwt.credential.sub:spiffe://…/sa/<user>-openshell` returned
+**both** clients. Clearing the attributes with explicit `null`s fixed it, and the search then
+returned exactly one.
+
+`apply-realm-identity.sh` now carries that cleanup as step 3c2, so a tenant that ran the earlier
+version is repaired automatically rather than failing opaquely. Re-run verified idempotent.
+
+### Also: the base image pin is reverted to `:latest`
+
+`hermes-openshell/Containerfile` was digest-pinned on 2026-11-23; the build failed on 2026-11-26
+with `manifest unknown`, because `latest` had been re-pushed (11 Jun 2026, now
+`sha256:663ff539…`) and quay garbage-collected the pinned manifest. Reverted to `:latest`, with the
+reasoning recorded in the file: pinning normally buys reproducibility, but against a personal
+upstream carrying a single floating tag it buys a build that stops working instead. The
+non-reproducibility that pin was meant to address is handled on the fork clone, where it actually
+bites.
+
+### 2026-11-26 — Fallback removed, attestation is the default, and the model-key cause found
+
+**No fallback, anywhere.** On request: if attestation does not work the agent must fail loudly
+rather than quietly minting the same token with a shared secret, because a silent downgrade is
+indistinguishable from working. Four changes, all render-verified:
+
+| Where | Change |
+|---|---|
+| `tenant-policy/templates/mcp-gateway-policy.yaml` | the `azp` predicate is **always** the attested agent's SPIFFE ID; the secret-path branch is gone, and the chart now `fail`s outright if `federated.enabled` is false while enforcement is on |
+| `tenant-platform/templates/mcp-gateway.yaml` | the `hermes-agent` client and its audience mapper are created **only** when federated is off. With attestation on, no client exists that can mint the same token from a string |
+| `tenant-openshell/templates/bridge.yaml` | `MCP_EXCHANGE_CLIENT_SECRET` is never handed to the sandbox when `attested` — the two are mutually exclusive |
+| defaults | `federated.enabled: true` and `attested: true` in all four charts |
+
+Rendered both ways: with federated **on**, clients are `mcp-gateway` + `delegation-broker` + the
+SPIFFE-named agent, and `mcp-gateway` carries `aud-delegation-broker` + `preferred-username`; with
+it **off**, exactly the old shape. They are mutually exclusive, with no overlap to fall through.
+
+*Caught while doing it:* the first attempt gated the whole mapper block and left `mcp-gateway` with
+**no protocol mappers at all** — which would have silently dropped `preferred_username` from the
+operator's token. Found by rendering and diffing the client list, not by reading.
+
+**Image:** `sandbox.image` → `quay.io/rlundber/waterplant-hermes:test3`, which carries the
+placeholder-mode refresher.
+
+**Naming propagated.** `delegation-broker` now used throughout the as-built documents
+([11](11-openshell-spiffe-flow.md), [12](12-tool-call-walkthrough-v2.md), Stage 8b) and all five
+diagrams were regenerated and re-rendered. Documents 02, 03, 04 and 06 were deliberately **not**
+touched: they describe the original single-client design in which `hermes-agent` genuinely was the
+agent, and rewriting them would falsify the design history. Doc 11 carries a banner explaining the
+rename, and the corrections tables keep the old name on purpose.
+
+### The model-key fault: cause confirmed, from the workshop's own instructions
+
+`module-02-sandbox-the-agent.adoc:120` creates the sandbox as:
+
+```
+openshell sandbox create --name hermie --from … --provider maas -- true
+```
+
+> "`--provider maas` attaches the model credential. OpenShell does not put the real API key in the
+> sandbox: it puts an opaque placeholder in the environment and swaps it for the key at the proxy,
+> on the way out."
+
+So the binding is established **at create time**, by that flag. Attaching to an already-running
+sandbox — which is what I did when I detached and re-attached `maas` while chasing this — does not
+rebuild the resolver, which is why `${OPENAI_API_KEY}` reached LiteLLM verbatim and why re-attaching
+and restarting Hermes both changed nothing.
+
+The fix is a sandbox recreate with `--provider maas`, i.e. the documented module-2 step. Not done:
+the author asked for no changes here. It is wanted anyway for two other reasons — `test3`, and the
+`csi.spiffe.io` mount that only a 0.0.116-created sandbox receives.
+
+### Blocked on a push
+
+ArgoCD renders from git, and all of the above is uncommitted. The realm side is already live (the
+script applied it), but the bridge's provider profile, the placeholder env, the re-stamp loop and
+the image bump reach the cluster only once the branch is pushed. Until then the attested path cannot
+be exercised through the UI.

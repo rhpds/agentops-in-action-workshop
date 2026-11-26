@@ -132,7 +132,22 @@ spec:
             # Note the failure surfaced cleanly as "I don't have sufficient
             # permissions" rather than the misleading "network issue or
             # service outage" this file warns about elsewhere.
-            - predicate: "has(auth.identity.azp) && auth.identity.azp == '{{ .Values.keycloak.agentIdentity.clientId }}'"
+{{- $fed := .Values.keycloak.agentIdentity.federated | default dict }}
+{{- $ns2 := printf "%s-%s" .Values.username .Values.namespaceSuffix }}
+{{- /* No fallback on purpose. The azp this matches is ALWAYS the attested
+       agent's SPIFFE ID: if attestation is not working the call must be
+       refused, not quietly accepted on a secret-authenticated token. Rendering
+       a secret-path azp here would make a downgrade invisible. */}}
+{{- if not $fed.enabled }}
+{{- fail "tenant-policy: keycloak.agentIdentity.federated.enabled must be true -- the secret fallback was removed deliberately (docs/agent-identity)" }}
+{{- end }}
+{{- $expectedAzp := $fed.agentSpiffeId | default (printf "%s/ns/%s/sa/%s-openshell-sandbox" $fed.trustDomain $ns2 .Values.username) }}
+            # With federated.enabled this is the sandbox's SPIFFE ID, not a
+            # friendly name -- the agent client's id IS that SPIFFE ID, because
+            # OpenShell fixes the intermediate token's audience to the
+            # supervisor's SVID subject and Keycloak resolves the final
+            # exchange's client from it. Hence templated, not a literal.
+            - predicate: "has(auth.identity.azp) && auth.identity.azp == '{{ $expectedAzp }}'"
             {{- end }}
     response:
       unauthorized:

@@ -85,6 +85,77 @@ seed_provider() {
   log "provider $PROVIDER_NAME ready; attach it with: openshell sandbox create ... --provider $PROVIDER_NAME"
 }
 
+# ---------------------------------------------------------------------------
+# The attested MCP credential, minted by OpenShell rather than by us.
+#
+# Off unless AGENT_IDENTITY_ATTESTED=true. When on, the gateway brokers the
+# token with its own JWT-SVID and the supervisor finishes the exchange with the
+# sandbox's -- so no secret, and no Keycloak credential inside the sandbox.
+#
+# The one thing OpenShell cannot do for us: the stored operator token is
+# BROKER-ONLY, which means it "cannot declare workload injection metadata such
+# as env vars, static placement, refresh, or token grant metadata". It therefore
+# cannot refresh itself, and with accessTokenLifespan at 1800s it dies every
+# half hour. Hence the loop below -- the only bespoke piece in the design.
+# `--from-oidc-token` would be the native alternative but needs the gateway
+# registered for OIDC, and ours authenticates with mTLS.
+# ---------------------------------------------------------------------------
+MCP_PROVIDER_NAME=waterplant-mcp
+
+operator_access_token() {
+  curl -sk --max-time 20 -X POST "$MCP_TOKEN_URL" \
+    -d grant_type=password -d "client_id=${MCP_CLIENT_ID}" \
+    -d "username=${MCP_USERNAME}" --data-urlencode "password=${MCP_PASSWORD}" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin).get("access_token",""))'
+}
+
+seed_mcp_provider() {
+  [ "${AGENT_IDENTITY_ATTESTED:-false}" = true ] || return 0
+  local tok profile
+  profile=/tmp/waterplant-mcp-profile.yaml
+  sed -e "s|__TOKEN_ENDPOINT__|${MCP_TOKEN_URL}|" \
+      -e "s|__REALM_ISSUER__|${MCP_TOKEN_URL%/protocol/openid-connect/token}|" \
+      -e "s|__GATEWAY_HOST__|${GATEWAY_HOST}|" \
+      /config/waterplant-mcp-profile.yaml > "$profile"
+  if ! openshell provider profile lint --file "$profile" >/dev/null 2>&1; then
+    log "ERROR: waterplant-mcp profile failed lint; not importing"
+    openshell provider profile lint --file "$profile" 2>&1 | strip | sed 's/^/    /'
+    return 1
+  fi
+  openshell provider profile import --file "$profile" >/dev/null 2>&1 \
+    && log "provider profile waterplant-mcp imported"
+  tok=$(operator_access_token)
+  [ -n "$tok" ] || { log "ERROR: no operator token; cannot seed $MCP_PROVIDER_NAME"; return 1; }
+  # --credential, NOT --runtime-credentials: for a token_exchange profile the
+  # subject credential IS stored, and the two flags are mutually exclusive.
+  openshell provider create --name "$MCP_PROVIDER_NAME" --type waterplant-mcp \
+    --credential "operator_token=$tok" >/dev/null 2>&1 \
+    || openshell provider update "$MCP_PROVIDER_NAME" \
+         --credential "operator_token=$tok" >/dev/null 2>&1
+  log "provider $MCP_PROVIDER_NAME ready (attested MCP credential)"
+}
+
+# Re-stamp the broker-only subject token before it expires.
+restamp_loop() {
+  [ "${AGENT_IDENTITY_ATTESTED:-false}" = true ] || return 0
+  local every="${SUBJECT_TOKEN_RESTAMP_SECONDS:-900}" tok
+  log "subject-token re-stamp: every ${every}s"
+  while true; do
+    sleep "$every"
+    tok=$(operator_access_token)
+    if [ -z "$tok" ]; then
+      log "re-stamp: could not mint an operator token; will retry in ${every}s"
+      continue
+    fi
+    if openshell provider update "$MCP_PROVIDER_NAME" \
+         --credential "operator_token=$tok" >/dev/null 2>&1; then
+      log "re-stamp: $MCP_PROVIDER_NAME subject token refreshed"
+    else
+      log "re-stamp: provider update FAILED; intermediate exchange will start refusing"
+    fi
+  done
+}
+
 sandbox_phase() {
   openshell sandbox list 2>/dev/null | strip | awk -v n="$SANDBOX_NAME" '$1 == n {print $NF}'
 }
@@ -285,6 +356,11 @@ export MCP_TOKEN_URL='${MCP_TOKEN_URL}'
 export TOKEN_REFRESH_SECONDS='${TOKEN_REFRESH_SECONDS}'
 export MCP_EXCHANGE_CLIENT_ID='${MCP_EXCHANGE_CLIENT_ID}'
 export MCP_EXCHANGE_CLIENT_SECRET='${MCP_EXCHANGE_CLIENT_SECRET}'
+# Attested mode: the refresher publishes this placeholder instead of a token,
+# and the supervisor swaps it for the real Bearer at egress -- so no Keycloak
+# credential, and no operator password, ever enters the sandbox. Empty unless
+# keycloak.agentIdentity.attested, in which case the refresher behaves as before.
+export MCP_TOKEN_PLACEHOLDER='${MCP_TOKEN_PLACEHOLDER:-}'
 # Availability marker; the local provider fetches pages directly over HTTP.
 export FIRECRAWL_API_URL=http://waterplant-docs:8080
 mkdir -p /sandbox/.hermes/plugins/web/firecrawl
@@ -407,6 +483,8 @@ write_nginx
 until prepare; do log "preparation failed; retrying in 30s"; sleep 30; done
 connect_cli
 seed_provider
+seed_mcp_provider || log "attested MCP provider not ready; continuing"
+restamp_loop &
 
 if [ "${ROLE_WATCH_ENABLED:-false}" = "true" ]; then
   role_watch_loop &

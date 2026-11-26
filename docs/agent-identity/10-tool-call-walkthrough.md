@@ -1,5 +1,11 @@
 # 10 — One tool call, end to end
 
+> **SUPERSEDED by [12-tool-call-walkthrough-v2.md](12-tool-call-walkthrough-v2.md).** This page
+> describes the walk as *designed*; v2 describes it as *built and measured*, and the two differ in
+> several places — notably `azp` (now the sandbox's SPIFFE ID), the number of exchanges (two), and
+> the roles in the final token (one, not eighteen). Kept for the design reasoning.
+
+
 The operator types *"What's the status of pump 4?"*. This is every hop it takes, with the exact
 credential on each — today, and after the change. Everything here was read off a live sandboxed
 tenant (`<user>`), not inferred.

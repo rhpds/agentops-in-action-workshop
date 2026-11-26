@@ -1,3 +1,12 @@
+> **Naming, 2026-11-26.** The broker client is **`delegation-broker`**, not `hermes-agent`. It was
+> originally the latter, from when there was one client that really was the agent; after the two
+> hops appeared the names had silently swapped — the client called "agent" was the broker, and the
+> real agent was the SPIFFE-named client. It is named for the function because one gateway brokers
+> for any number of realm users. `hermes-agent` now refers only to the pre-attestation
+> secret-authenticated client, which **no longer exists** once attestation is on. Entries in the
+> corrections tables below deliberately keep the old name, since they record what was said at the
+> time.
+
 # 11 — OpenShell × SPIFFE/SPIRE, and the corrected end-to-end flow
 
 Two diagrams. The first mirrors the "SPIRE big picture" view but places OpenShell's components in
@@ -102,8 +111,9 @@ sequenceDiagram
 Two exchanges, not one, and **two different SVIDs sign them**. Hence two Keycloak federated
 clients: one bound to the gateway's SPIFFE ID for the intermediate exchange, one bound to the
 sandbox's for the final one. Because `azp` on the *final* token names the client that
-authenticated the *last* exchange, the **sandbox's** client is the one that must be called
-`hermes-agent` — that is the value `mcp-authz-policy` asserts.
+authenticated the *last* exchange, the **sandbox's** client is the one whose id becomes `azp` —
+and its id is the sandbox's SPIFFE ID, which is the value `mcp-authz-policy` asserts. The broker is
+a separate client, `delegation-broker`.
 
 The subject credential is deliberately *broker-only*: the profile "cannot declare workload
 injection metadata such as env vars, static placement, refresh, or token grant metadata", so it
@@ -214,6 +224,56 @@ Also checked and unavailable: [PR #5479](https://github.com/NVIDIA/OpenShell/pul
 gateway-signed alternative to SPIFFE assertions, is a **draft and unmerged**, and applies only to
 `client_credentials` — so it would not preserve user delegation even if it shipped.
 
+## `--credential` vs `--runtime-credentials`, and why the choice is forced
+
+These two flags on `openshell provider create` are mutually exclusive, and picking the wrong one is
+why an earlier draft of Stage 8b was wrong. Plainly:
+
+| Flag | What it means | The drawer analogy |
+|---|---|---|
+| `--credential KEY=VALUE` | **Store this value now.** The provider holds it at rest, and `provider update` replaces it later | put the letter in the drawer |
+| `--runtime-credentials` | **Store nothing.** Every credential this provider needs is worked out at call time by the gateway or sandbox | leave the drawer empty; fetch what you need, when you need it |
+| `--from-oidc-token` | Store *the gateway's current OIDC login* as the credential | a special case of the first, for gateways registered with OIDC — ours is `AUTH: mtls`, so not available |
+
+`--runtime-credentials` sounds like the one we want: nothing at rest, nothing to leak. **It cannot
+work for a `token_exchange` profile**, and the reason is structural rather than a limitation.
+
+A `token_exchange` profile declares *two* credentials with opposite natures:
+
+- `gateway_token` — the final access token. Never stored; the `token_grant` block mints it on
+  demand. This is already "runtime", automatically, with no flag.
+- `operator_token` — the subject token being exchanged. **Must** be stored, because it is the one
+  thing that cannot be derived from an SVID: it is the proof a *human* authorised this, and no
+  amount of workload attestation produces it.
+
+So the provider is inherently mixed, and the flag only governs the stored half. Asking for
+`--runtime-credentials` means "store nothing", which leaves the subject token with nowhere to come
+from. Hence the refusal:
+
+```
+error: the argument '--credential <KEY[=VALUE]>' cannot be used with '--runtime-credentials'
+```
+
+and hence, verified on the live gateway, `provider get` shows exactly one stored key:
+
+```
+Credential keys: operator_token
+```
+
+### The impact worth knowing
+
+**This flag is the reason the re-stamp loop exists.** Because the operator's token is held at rest
+and the realm sets `accessTokenLifespan: 1800`, it dies every 30 minutes, and a broker-only
+credential "cannot declare workload injection metadata such as env vars, static placement, refresh,
+or token grant metadata" — so it cannot renew itself. Something outside must run
+`provider update --credential operator_token=<fresh>` on a timer. Had `--runtime-credentials` been
+usable, there would be nothing at rest and no loop at all.
+
+It is also the one place in option A where a human credential sits at rest anywhere. That is a real
+trade and worth stating out loud: the design moves the operator's credential **out of the untrusted
+sandbox** and into the gateway — it does not make it disappear. What it buys is that the blast
+radius of a prompt-injected agent no longer includes the operator's own credential.
+
 ## The alternatives, side by side
 
 | | Who signs at Keycloak | Clients | Preserves `sub`=operator | Sandbox holds | Image build | Main cost |
@@ -313,14 +373,38 @@ the one-identity design is the right call and the second hop disappears.
 
 ### An editable version of this picture
 
-[`diagrams/openshell-two-badges.excalidraw`](diagrams/openshell-two-badges.excalidraw) draws the
-same story as a flow with the eight numbered steps, both badges, and the legend above.
+![Why the agent needs two badges](diagrams/openshell-two-badges.png)
 
-**To open or edit it:** go to <https://excalidraw.com> and drag the file onto the canvas (or
-*Menu → Open*). Nothing to install, no account. Export with *Menu → Export image* — tick
-**"Embed scene"** so the exported `.png`/`.svg` can be dragged back in and re-edited later. If you
-would rather it lived in the lab guide, export to SVG and drop it in `content/`; the `.excalidraw`
-file stays here as the editable master.
+Same story as a flow: the eight numbered steps, both badges, and the one-line reason. Source and
+rendering:
+
+| File | What it is |
+|---|---|
+| [`diagrams/openshell-two-badges.excalidraw`](diagrams/openshell-two-badges.excalidraw) | the editable master |
+| [`diagrams/openshell-two-badges.png`](diagrams/openshell-two-badges.png) | rendered at 2× **with the scene embedded**, so this image can itself be dragged back into Excalidraw and edited |
+
+**To edit:** drag either file onto <https://excalidraw.com> (or *Menu → Open*). Nothing to install,
+no account. When exporting by hand, tick **"Embed scene"** so the result stays re-editable.
+
+**To re-render after an edit**, offline and with no canvas server:
+
+```bash
+npx -y mcp-excalidraw-server@2.2.0 render \
+  docs/agent-identity/diagrams/openshell-two-badges.excalidraw \
+  --out docs/agent-identity/diagrams/openshell-two-badges.png \
+  --format png --scale 2 --embed-scene
+```
+
+The scene is generated rather than hand-placed, so layout changes are easier to make in the
+generator than by nudging 44 elements: it is kept beside the diagram as
+[`diagrams/gen-two-badges.py`](diagrams/gen-two-badges.py). If you would rather the picture lived
+in the lab guide, render `--format svg` into `content/`.
+
+> **Note on the Excalidraw MCP server.** `.mcp.json` declares it pinned at
+> `mcp-excalidraw-server@2.2.0`, but its MCP tools did not surface in the session that drew this;
+> the diagram was produced with the same package's **CLI** (`render`), which needs no canvas
+> server and renders offline. The CLI route is the reliable one, and it is what the command above
+> uses.
 
 ## Per-tool tokens and a true intersection — both proven on the cluster
 
@@ -329,8 +413,8 @@ Both are stock Keycloak and need **no** change to the AuthPolicy.
 
 ### A true intersection: give the agent its own roles
 
-Today the exchanged token carries the operator's roles verbatim and the policy adds
-`azp == 'hermes-agent'` — so it is "the human's permissions, *and* the caller is the agent", not an
+Before this change the exchanged token carried the operator's roles verbatim and the policy added
+only an `azp` check — so it was "the human's permissions, *and* the caller is the agent", not an
 intersection of two role sets.
 
 Keycloak computes a real intersection natively when a client has **`fullScopeAllowed: false`**: the

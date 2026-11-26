@@ -55,6 +55,34 @@ def refresh_once() -> None:
     password = os.environ["MCP_PASSWORD"]
     server_name = os.environ.get("MCP_SERVER_NAME", "gateway")
 
+    # ------------------------------------------------------------------
+    # Attested path: OpenShell mints the credential, we publish the
+    # placeholder it resolves.
+    #
+    # With the provider token_grant in play the real Bearer never enters the
+    # sandbox -- the supervisor injects it at egress, and only for the
+    # endpoints the provider profile declares. So what Hermes must send is the
+    # opaque placeholder, not a token.
+    #
+    # Checked BEFORE the password grant, and returning rather than falling
+    # through, on purpose: there is nothing to grant and nothing to exchange,
+    # and a grant we would not use is still the operator's password on the
+    # wire from inside the untrusted sandbox. This path never contacts
+    # Keycloak at all.
+    #
+    # expires_in 0 is deliberate: the placeholder does not expire, and the
+    # thing that does -- the gateway's stored subject token -- is re-stamped
+    # by the bridge, not here. See docs/agent-identity Stage 8b.
+    # ------------------------------------------------------------------
+    placeholder = os.environ.get("MCP_TOKEN_PLACEHOLDER", "").strip()
+    if placeholder:
+        _write_token(
+            {"access_token": placeholder, "token_type": "bearer", "expires_in": 0},
+            server_name,
+        )
+        _log("attested mode: published the egress placeholder for " + server_name)
+        return
+
     data = urllib.parse.urlencode(
         {
             "grant_type": "password",
@@ -138,6 +166,15 @@ def refresh_once() -> None:
         _log(f"exchanged operator token for one acting as {exchange_client}")
         resp = xresp
 
+    _write_token(resp, server_name)
+
+
+def _write_token(resp: dict, server_name: str) -> None:
+    """Atomically publish the token Hermes reads.
+
+    Split out so the attested path can publish an egress placeholder without
+    going near Keycloak -- see the guard at the top of refresh_once().
+    """
     expires_in = resp.get("expires_in", 1800)
     token_data = {
         "access_token": resp["access_token"],

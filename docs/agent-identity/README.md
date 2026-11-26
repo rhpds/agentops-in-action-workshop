@@ -98,7 +98,8 @@ resulting actor onto everything downstream.
 | [06-provenance.md](06-provenance.md) | How an actor reaches traces, work orders and plant-api — and killing `raised_by: "unknown"`. |
 | [07-phasing.md](07-phasing.md) | Proposed build order, verification gates, and image handoffs. |
 | [08-open-questions.md](08-open-questions.md) | Unverified assumptions and ranked risks, each with the command that settles it. |
-| [10-tool-call-walkthrough.md](10-tool-call-walkthrough.md) | **One tool call, end to end** — every hop and every credential, today and after; plus exactly where SPIRE does and does not sit. |
+| [12-tool-call-walkthrough-v2.md](12-tool-call-walkthrough-v2.md) | **One tool call, end to end — start here.** All 18 hops as built: what is on the wire, why, and how it changes, with a diagram of every payload. Supersedes 10. |
+| [10-tool-call-walkthrough.md](10-tool-call-walkthrough.md) | *Superseded by 12.* The same walk as originally designed — every hop and every credential, today and after; plus exactly where SPIRE does and does not sit. |
 | [PROGRESS.md](PROGRESS.md) | **The running record** — what is built, what is on the cluster with which settings, and every correction made along the way. |
 | [11-openshell-spiffe-flow.md](11-openshell-spiffe-flow.md) | **Where OpenShell meets SPIRE** — which pods get a Workload API socket, the three-hop token flow as NVIDIA documents it, and four corrections to how this document set described it. |
 | [09-implementation-plan.md](09-implementation-plan.md) | **The runbook** — every stage with its preconditions, verification, rollback and owner. Includes the ZTWIM install and the OpenShell upgrade. |

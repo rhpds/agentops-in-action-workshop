@@ -594,6 +594,17 @@ loud rather than presenting it as a consolation prize.
 Stage 8 proved the *mechanism*. This is the shape we settled on, and what is left to build. Background and the plain-language reasoning are in
 [11-openshell-spiffe-flow.md](11-openshell-spiffe-flow.md).
 
+### The two pictures
+
+![Two Keycloak clients and the credential kept at rest](diagrams/stage8b-clients-and-restamp.png)
+
+![How a tool call is narrowed down to one permission](diagrams/stage8b-token-narrowing.png)
+
+Editable masters and their generators are in [`diagrams/`](diagrams/); each `.png` has the scene
+embedded, so it can be dragged straight back into <https://excalidraw.com>. Re-render after an edit
+with `npx -y mcp-excalidraw-server@2.2.0 render <file>.excalidraw --out <file>.png --format png
+--scale 2 --embed-scene`.
+
 ### Decision 1 — OpenShell's native `token_exchange` is the broker
 
 Chosen over a bespoke broker because it is the only option that gets the operator's credential out
@@ -658,16 +669,63 @@ So a free-form "which tool is this token for" claim cannot be stamped, and a sel
 would be worthless anyway — `designation == requested_tool` only means something if minting the
 designation required proving the operator holds that tool.
 
+**What it costs: 18 new realm objects, generated not hand-written.** One optional client scope per
+tool — `telemetry-mcp` 6 + `maintenance-mcp` 5 + `control-mcp` 7 = **18** — plus the same 18 listed
+in the agent client's `optionalClientScopes`. That is cheap only because `mcp-gateway.yaml` already
+loops `keycloak.toolRoles` to declare the roles themselves, so the scopes come from the same loop
+and stay in step by construction; `apply-realm-identity.sh` needs the same list for live tenants.
+
+Two things checked so the generation is safe:
+
+- **Scope names are realm-wide, tool names are not** — a scope is `tool-<toolname>` with no server
+  prefix, so two servers sharing a tool name would collide. Verified against `values.yaml`: all 18
+  names are distinct across the three servers today. If a future tool duplicates a name, the scope
+  must become `tool-<server>-<toolname>`, and the request in build item 7 with it.
+- Per-tool tokens only pay off when short-lived, hence build item 3.
+
 **And no new AuthPolicy rule is needed.** A token carrying exactly one role *is* a per-tool token;
 the existing predicate already refuses everything else. The checking side is free — the cost is
 entirely on the minting side.
+
+### Correction (2026-11-26): Decisions 2 and 3 are one mechanism, not two
+
+Verified directly, with the per-tool scope attached to the agent client:
+
+| `fullScopeAllowed` | `scope=` requested | roles in the exchanged token |
+|---|---|---|
+| **true** | — | 18 |
+| **true** | `tool-get_reservoir_level` | **still 18** — requesting a scope does *not* narrow |
+| **false** | — | **0** |
+| **false** | `tool-get_reservoir_level` | **exactly 1** — `tool:get_reservoir_level` |
+| **false** | `tool-get_reservoir_level`, operator's role **revoked** | **0**, and the scope is silently dropped from the `scope` claim |
+
+Two things follow, and both simplify the build.
+
+**Per-tool narrowing only works with `fullScopeAllowed: false`.** The two decisions are not
+independent features to be built separately — Decision 3 is unreachable without Decision 2.
+
+**Separate client scope-mappings on the agent client are redundant, and would be harmful.** An
+earlier draft of item 1 called for `fullScopeAllowed: false` *plus* scope mappings on the client.
+With `false` and no mappings the baseline is already 0, and each optional `tool-<name>` scope
+contributes exactly its own role when requested. A scope mapping placed directly on the client
+would be an **always-on** grant, so that role would appear in every token and defeat the per-tool
+narrowing it was meant to support.
+
+So the delegable set is expressed by **which `tool-*` scopes are attached to the agent client**, and
+nothing else. One mechanism gives both properties at once:
+
+```
+roles in token  =  (operator's roles)  ∩  (the tool-* scope requested, if attached to the agent)
+```
+
+Neither side can grant what the other lacks, and the token carries exactly the tool in flight.
 
 ### What Stage 8b has to build
 
 | # | Work | Where | Notes |
 |---|---|---|---|
-| 1 | `fullScopeAllowed: false` + per-tool scope mappings on the agent client | `mcp-gateway.yaml`, `apply-realm-identity.sh` | new values key for which tools the agent may be delegated |
-| 2 | One optional client scope per tool | `mcp-gateway.yaml` | the template already loops `keycloak.toolRoles`; generate from it |
+| 1 | `fullScopeAllowed: false` on the **agent** client, and **no** scope mappings on it | `mcp-gateway.yaml`, `apply-realm-identity.sh` | baseline becomes 0 roles; see the correction above |
+| 2 | One optional client scope per tool, each with a **scope-mapping to its own role**, attached to the agent client as an *optional* scope | `mcp-gateway.yaml` | the template already loops `keycloak.toolRoles`; `federated.delegableTools` selects which are attached |
 | 3 | Shorten the exchanged token's lifetime | realm | `accessTokenLifespan` is 1800s; per-tool tokens only pay off when short |
 | 4 | Second federated client for the gateway's SPIFFE ID; re-point `hermes-agent` to the sandbox's | `mcp-gateway.yaml`, `apply-realm-identity.sh` | see Decision 1 |
 | 5 | Author and import the provider profile; create the provider with `--credential` | new chart file | `token_grant` + broker-only subject credential. **Not** `--runtime-credentials` — mutually exclusive with `--credential`, and for `token_exchange` the subject credential *is* stored |

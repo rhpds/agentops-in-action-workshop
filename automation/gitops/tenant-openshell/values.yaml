@@ -82,7 +82,7 @@ sandbox:
   # unauthenticated loopback call, and the console could not reach the agent.
   # The Containerfile pulls an unpinned base and shallow-clones a fork with no
   # ref, so a rebuild does not reproduce a previous image.
-  image: quay.io/rlundber/waterplant-hermes:test2
+  image: quay.io/rlundber/waterplant-hermes:test3
   # Limits on the sandbox pod, included in the combined participant quota.
   cpu: "2"
   memory: 4Gi
@@ -268,6 +268,16 @@ keycloak:
     enabled: true
     clientId: hermes-agent
     clientSecret: hermes-agent-lab-secret
+    # Mint the MCP credential natively through OpenShell's token_exchange
+    # provider grant rather than with the in-sandbox refresher's shared secret.
+    # Requires the realm's federated clients (tenant-platform
+    # keycloak.agentIdentity.federated) and the Keycloak CR's spiffe /
+    # client-auth-federated features -- without them the grant 401s.
+    attested: true
+    # How often the bridge re-stamps the gateway's stored operator token. Must
+    # be comfortably under the realm's accessTokenLifespan (1800s): a
+    # broker-only credential cannot refresh itself.
+    restampSeconds: 900
 
 # ---------------------------------------------------------------------------
 # Prototype: watches Keycloak for tool: role changes on the operator user and

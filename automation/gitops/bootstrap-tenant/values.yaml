@@ -62,13 +62,27 @@ keycloak:
     # Keycloak CR carries both preview features -- without them the import
     # fails on an unknown identity provider type.
     federated:
-      enabled: false
+      # ON by default, and with no fallback -- see tenant-platform/values.yaml.
+      enabled: true
       trustDomain: spiffe://agentops.lab
       idpAlias: spiffe
       # Empty derives https://spire-oidc.<domain>/keys and
       # <trustDomain>/ns/<user>-agentops/sa/<user>-openshell respectively.
       bundleEndpoint: ""
-      subjectSpiffeId: ""
+      # The two signers. Empty derives
+      #   broker <trustDomain>/ns/<user>-agentops/sa/<user>-openshell
+      #   agent  <trustDomain>/ns/<user>-agentops/sa/<user>-openshell-sandbox
+      # The agent id is also the agent client's clientId and the azp the
+      # AuthPolicy matches on.
+      # The broker's Keycloak client id. Named for the function: one gateway
+      # brokers for any number of realm users, so it is not "the agent".
+      brokerClientId: delegation-broker
+      brokerSpiffeId: ""
+      agentSpiffeId: ""
+      # Which tools the agent may be delegated: `all`, or a list of tool names.
+      delegableTools: all
+      # One optional client scope per tool, so one exchange carries one role.
+      perToolScopes: true
 
 # ---------------------------------------------------------------------------
 # Where the per-participant Applications point.
@@ -178,10 +192,16 @@ policy:
   #
   # agentIdentityEnforced additionally requires the caller to BE the agent
   # (azp == keycloak.agentIdentity.clientId), i.e. the intersection of
-  # personnel identity and agent identity. Default off: turn it on only where
-  # keycloak.agentIdentity.enabled is also true, or every tool call is
-  # refused. Verified on a live tenant -- see docs/agent-identity/PROGRESS.md.
-  agentIdentityEnforced: false
+  # personnel identity and agent identity.
+  #
+  # ON by default, and safe to be: it is satisfiable exactly when
+  # keycloak.agentIdentity.enabled is true, which is also the default, and both
+  # runtimes are now verified exchanging on a live tenant -- the sandboxed agent
+  # and hermes-plain, each presenting azp=hermes-agent with the operator as sub.
+  # Set it to false ONLY alongside agentIdentity.enabled: false, or every tool
+  # call is refused with the misleading "I don't have sufficient permissions".
+  # See docs/agent-identity/PROGRESS.md.
+  agentIdentityEnforced: true
   mcpGatewayEnforced: true
 
 # ---------------------------------------------------------------------------

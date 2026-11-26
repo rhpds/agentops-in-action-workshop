@@ -136,9 +136,26 @@ spec:
         - name: keycloak.agentIdentity.federated.bundleEndpoint
           value: {{ . | quote }}
         {{- end }}
-        {{- with .subjectSpiffeId }}
-        - name: keycloak.agentIdentity.federated.subjectSpiffeId
+        - name: keycloak.agentIdentity.federated.brokerClientId
+          value: {{ .brokerClientId | quote }}
+        {{- with .brokerSpiffeId }}
+        - name: keycloak.agentIdentity.federated.brokerSpiffeId
           value: {{ . | quote }}
+        {{- end }}
+        {{- with .agentSpiffeId }}
+        - name: keycloak.agentIdentity.federated.agentSpiffeId
+          value: {{ . | quote }}
+        {{- end }}
+        - name: keycloak.agentIdentity.federated.perToolScopes
+          value: {{ .perToolScopes | quote }}
+        {{- if kindIs "string" .delegableTools }}
+        - name: keycloak.agentIdentity.federated.delegableTools
+          value: {{ .delegableTools | quote }}
+        {{- else }}
+        {{- range $i, $t := .delegableTools }}
+        - name: {{ printf "keycloak.agentIdentity.federated.delegableTools[%d]" $i }}
+          value: {{ $t | quote }}
+        {{- end }}
         {{- end }}
         {{- end }}
         {{- end }}
@@ -246,6 +263,21 @@ spec:
         # call, because the agent would still present a plain operator token.
         - name: mcpGateway.agentIdentityEnforced
           value: {{ .Values.policy.agentIdentityEnforced | quote }}
+        {{- with .Values.keycloak.agentIdentity.federated }}
+        # The policy's azp predicate must name whichever client signs the FINAL
+        # exchange. Forwarded from the same block tenant-platform reads, so the
+        # predicate and the client it matches can never drift apart.
+        - name: keycloak.agentIdentity.federated.enabled
+          value: {{ .enabled | quote }}
+        {{- if .enabled }}
+        - name: keycloak.agentIdentity.federated.trustDomain
+          value: {{ .trustDomain | quote }}
+        {{- with .agentSpiffeId }}
+        - name: keycloak.agentIdentity.federated.agentSpiffeId
+          value: {{ . | quote }}
+        {{- end }}
+        {{- end }}
+        {{- end }}
         - name: keycloak.agentIdentity.clientId
           value: {{ .Values.keycloak.agentIdentity.clientId | quote }}
         {{- else }}

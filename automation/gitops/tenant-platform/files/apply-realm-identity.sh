@@ -23,11 +23,13 @@
 # Usage:
 #   KC_PASS=... ./apply-realm-identity.sh <username> <keycloak-host> <apps-domain> [agent-client-id] [agent-secret]
 #
-# To also swap the client's secret for a SPIRE-attested JWT-SVID (Stage 8
-# route 1), add FEDERATED_SPIFFE_ID. Optional overrides: FEDERATED_TRUST_DOMAIN,
+# To also swap the clients' secrets for SPIRE-attested JWT-SVIDs (Stage 8/8b),
+# add FEDERATED_BROKER_SPIFFE_ID and FEDERATED_AGENT_SPIFFE_ID. Optional overrides: FEDERATED_TRUST_DOMAIN,
 # FEDERATED_BUNDLE_ENDPOINT, FEDERATED_IDP_ALIAS, FEDERATED_FLOW_ALIAS.
-#   FEDERATED_SPIFFE_ID=spiffe://agentops.lab/ns/<user>-agentops/sa/<user>-openshell \\
+#   FEDERATED_BROKER_SPIFFE_ID=spiffe://agentops.lab/ns/<user>-agentops/sa/<user>-openshell \\
+#   FEDERATED_AGENT_SPIFFE_ID=spiffe://agentops.lab/ns/<user>-agentops/sa/<user>-openshell-sandbox \\
 #   KC_PASS=... ./apply-realm-identity.sh ...
+# PER_TOOL_SCOPES=false skips the 18 per-tool client scopes.
 #
 # Never echoes a secret. Reads KC_PASS from the environment, or prompts.
 
@@ -165,7 +167,7 @@ JSON
 # is actually the authenticator never running. FederatedJWTClientAuthenticator
 # never calls context.setClient(), so EVERY failure in it reports that error.
 # Hence the copy-extend-rebind below.
-if [ -n "${FEDERATED_SPIFFE_ID:-}" ]; then
+if [ -n "${FEDERATED_BROKER_SPIFFE_ID:-}" ]; then
   TRUST_DOMAIN="${FEDERATED_TRUST_DOMAIN:-spiffe://agentops.lab}"
   BUNDLE_ENDPOINT="${FEDERATED_BUNDLE_ENDPOINT:-https://spire-oidc.${APPS_DOMAIN}/keys}"
   IDP_ALIAS="${FEDERATED_IDP_ALIAS:-spiffe}"
@@ -238,21 +240,177 @@ JSON
   # credential -- one client, one ID, because the lookup demands exactly one
   # match. Today that is the OpenShell gateway, the only pod on the token path
   # with a csi.spiffe.io mount.
-  code=$(curl -sk --max-time 30 -o /dev/null -w '%{http_code}' -X PUT \
-    -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
-    "${KC}/admin/realms/${REALM}/clients/${AGENT_UUID}" -d "$(cat <<JSON
-{"clientId":"${AGENT_ID}","clientAuthenticatorType":"federated-jwt",
+  # ---- 3c2. undo the earlier design, if this tenant ran it ------------------
+  # An earlier version of this script made ${AGENT_ID} itself the broker by
+  # writing jwt.credential.* onto it. Leaving those behind is not cosmetic: the
+  # federated lookup does searchClientsByAttributes and throws
+  # "Multiple clients matches attributes" when more than one client carries the
+  # same jwt.credential.sub -- surfacing as a flat `invalid_client` that names
+  # nothing. Null them out before creating the broker that should own them.
+  #
+  # Note PUT MERGES the attributes map, so clearing requires explicit nulls;
+  # sending a map without the keys leaves them in place.
+  if api "${KC}/admin/realms/${REALM}/clients/${AGENT_UUID}" | grep -q 'jwt.credential.sub'; then
+    code=$(curl -sk --max-time 30 -o /dev/null -w '%{http_code}' -X PUT \
+      -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
+      "${KC}/admin/realms/${REALM}/clients/${AGENT_UUID}" \
+      -d "{\"clientId\":\"${AGENT_ID}\",\"clientAuthenticatorType\":\"client-secret\",\"attributes\":{\"jwt.credential.issuer\":null,\"jwt.credential.sub\":null}}")
+    [ "$code" = 204 ] && say "client ${AGENT_ID}: cleared stale jwt.credential.* (was the broker)" \
+      || { echo "  clearing ${AGENT_ID} attributes: FAILED (HTTP $code)" >&2; exit 1; }
+  fi
+
+  # ---- 3d. the DELEGATION BROKER, a NEW client ------------------------------
+  # Deliberately NOT a change to ${AGENT_ID}. That client keeps its secret and
+  # keeps working, so enabling attested mode is additive and no live tenant
+  # breaks. Flipping it instead took both runtimes down on 2026-11-26.
+  BROKER_ID="${FEDERATED_BROKER_CLIENT_ID:-delegation-broker}"
+  BROKER_UUID=$(client_uuid "${BROKER_ID}")
+  if [ -n "$BROKER_UUID" ]; then
+    say "client ${BROKER_ID}: already present"
+  else
+    code=$(curl -sk --max-time 30 -o /dev/null -w '%{http_code}' -X POST \
+      -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
+      "${KC}/admin/realms/${REALM}/clients" -d "$(cat <<JSON
+{"clientId":"${BROKER_ID}",
+ "name":"Delegation broker",
+ "description":"The OpenShell gateway, authenticated by its SPIRE-issued JWT-SVID. Exchanges a stored user token for an intermediate token addressed to one specific sandbox.",
+ "enabled":true,"publicClient":false,"serviceAccountsEnabled":false,
+ "directAccessGrantsEnabled":false,"standardFlowEnabled":false,"implicitFlowEnabled":false,
+ "fullScopeAllowed":true,"protocol":"openid-connect",
+ "clientAuthenticatorType":"federated-jwt",
+ "defaultClientScopes":["roles","groups"],
  "attributes":{"standard.token.exchange.enabled":"true",
                "jwt.credential.issuer":"${IDP_ALIAS}",
-               "jwt.credential.sub":"${FEDERATED_SPIFFE_ID}"}}
+               "jwt.credential.sub":"${FEDERATED_BROKER_SPIFFE_ID}"}}
 JSON
 )")
-  [ "$code" = 204 ] && say "client ${AGENT_ID}: federated-jwt <- ${FEDERATED_SPIFFE_ID}" \
-    || { echo "  client ${AGENT_ID} federated switch: FAILED (HTTP $code)" >&2; exit 1; }
+    [ "$code" = 201 ] && say "client ${BROKER_ID}: created, federated-jwt <- ${FEDERATED_BROKER_SPIFFE_ID}" \
+      || { echo "  client ${BROKER_ID}: FAILED (HTTP $code)" >&2; exit 1; }
+    BROKER_UUID=$(client_uuid "${BROKER_ID}")
+  fi
+
+  # RFC 8693 needs the requesting client in the subject token's aud, and in
+  # attested mode that requester is the broker, not the secret-path agent.
+  add_mapper "$GW_UUID" "aud-${BROKER_ID}" "$(cat <<JSON
+{"name":"aud-${BROKER_ID}","protocol":"openid-connect","protocolMapper":"oidc-audience-mapper",
+ "config":{"included.client.audience":"${BROKER_ID}","access.token.claim":"true",
+           "introspection.token.claim":"true","id.token.claim":"false"}}
+JSON
+)"
+
+  # ---- 3e. the AGENT client, whose clientId IS the sandbox's SPIFFE ID ------
+  # Forced, not chosen: OpenShell always sets the intermediate token's audience
+  # to the supervisor's SVID subject, and Keycloak resolves the final
+  # exchange's client out of that audience. So azp on the token Authorino sees
+  # is this SPIFFE ID, and tenant-policy templates its predicate to match.
+  if [ -n "${FEDERATED_AGENT_SPIFFE_ID:-}" ]; then
+    SBX_UUID=$(client_uuid "${FEDERATED_AGENT_SPIFFE_ID}")
+    if [ -n "$SBX_UUID" ]; then
+      say "client ${FEDERATED_AGENT_SPIFFE_ID}: already present"
+    else
+      code=$(curl -sk --max-time 30 -o /dev/null -w '%{http_code}' -X POST \
+        -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
+        "${KC}/admin/realms/${REALM}/clients" -d "$(cat <<JSON
+{"clientId":"${FEDERATED_AGENT_SPIFFE_ID}",
+ "name":"Hermie agent (attested)",
+ "description":"The sandbox supervisor, authenticated by its SPIRE-issued JWT-SVID. Signs the final token exchange, so its id is the azp Authorino sees.",
+ "enabled":true,"publicClient":false,"serviceAccountsEnabled":false,
+ "directAccessGrantsEnabled":false,"standardFlowEnabled":false,"implicitFlowEnabled":false,
+ "fullScopeAllowed":false,"protocol":"openid-connect",
+ "clientAuthenticatorType":"federated-jwt",
+ "defaultClientScopes":["roles","groups"],
+ "attributes":{"standard.token.exchange.enabled":"true",
+               "jwt.credential.issuer":"${IDP_ALIAS}",
+               "jwt.credential.sub":"${FEDERATED_AGENT_SPIFFE_ID}"}}
+JSON
+)")
+      [ "$code" = 201 ] && say "client ${FEDERATED_AGENT_SPIFFE_ID}: created" \
+        || { echo "  agent client: FAILED (HTTP $code)" >&2; exit 1; }
+      SBX_UUID=$(client_uuid "${FEDERATED_AGENT_SPIFFE_ID}")
+    fi
+
+    # its own mappers -- without these the final token came back with
+    # preferred_username and aud both absent (measured 2026-11-26)
+    add_mapper "$SBX_UUID" "aud-mcp-gateway-resource" "$(cat <<JSON
+{"name":"aud-mcp-gateway-resource","protocol":"openid-connect","protocolMapper":"oidc-audience-mapper",
+ "config":{"included.custom.audience":"${GW_RESOURCE}","access.token.claim":"true",
+           "introspection.token.claim":"true","id.token.claim":"false"}}
+JSON
+)"
+    add_mapper "$SBX_UUID" "preferred-username" "$(cat <<'JSON'
+{"name":"preferred-username","protocol":"openid-connect","protocolMapper":"oidc-usermodel-property-mapper",
+ "config":{"user.attribute":"username","claim.name":"preferred_username","jsonType.label":"String",
+           "access.token.claim":"true","id.token.claim":"true",
+           "introspection.token.claim":"true","userinfo.token.claim":"true"}}
+JSON
+)"
+
+    # the broker needs an audience mapper naming this client, or its
+    # intermediate exchange is refused 400 "Requested audience not available":
+    # checkRequestedAudiences asserts the ISSUED token carries the audience.
+    add_mapper "$BROKER_UUID" "aud-agent" "$(cat <<JSON
+{"name":"aud-agent","protocol":"openid-connect","protocolMapper":"oidc-audience-mapper",
+ "config":{"included.client.audience":"${FEDERATED_AGENT_SPIFFE_ID}","access.token.claim":"true",
+           "introspection.token.claim":"true","id.token.claim":"false"}}
+JSON
+)"
+  fi
+
+
+  # ---- 3f. one optional client scope per tool -------------------------------
+  # So a single exchange can ask for exactly the tool in flight and the token
+  # carries ONE role instead of eighteen. Measured 2026-11-26: this only
+  # narrows because the agent client has fullScopeAllowed:false and NO scope
+  # mappings of its own -- with either of those different, every token carries
+  # every role the operator holds.
+  #
+  # The tool list is read back from the realm rather than passed in, so it can
+  # never drift from the roles that actually exist.
+  if [ -n "${FEDERATED_AGENT_SPIFFE_ID:-}" ] && [ "${PER_TOOL_SCOPES:-true}" = true ]; then
+    SBX_UUID=$(client_uuid "${FEDERATED_AGENT_SPIFFE_ID}")
+    created=0; existing=0
+    for mcp in $(api "${KC}/admin/realms/${REALM}/clients" \
+          | python3 -c "import json,sys;print(' '.join(c['id'] for c in json.load(sys.stdin) if c['clientId'].startswith('${NS}/')))"); do
+      for role in $(api "${KC}/admin/realms/${REALM}/clients/${mcp}/roles" \
+            | python3 -c "import json,sys;print(' '.join(r['name'] for r in json.load(sys.stdin) if r['name'].startswith('tool:')))"); do
+        tool=${role#tool:}
+        scope="tool-${tool}"
+        sid=$(api "${KC}/admin/realms/${REALM}/client-scopes" \
+              | python3 -c "import json,sys;print(next((c['id'] for c in json.load(sys.stdin) if c['name']=='${scope}'),''))")
+        if [ -z "$sid" ]; then
+          code=$(curl -sk --max-time 30 -o /dev/null -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
+            "${KC}/admin/realms/${REALM}/client-scopes" -d "$(cat <<JSON
+{"name":"${scope}","description":"Permission to call ${tool} on this one hop",
+ "protocol":"openid-connect",
+ "attributes":{"include.in.token.scope":"true","display.on.consent.screen":"false"}}
+JSON
+)")
+          [ "$code" = 201 ] || { echo "  scope ${scope}: FAILED (HTTP $code)" >&2; exit 1; }
+          sid=$(api "${KC}/admin/realms/${REALM}/client-scopes" \
+                | python3 -c "import json,sys;print(next(c['id'] for c in json.load(sys.stdin) if c['name']=='${scope}'))")
+          created=$((created+1))
+        else
+          existing=$((existing+1))
+        fi
+        # the scope -> role mapping, and the scope onto the agent as OPTIONAL
+        rolejson=$(api "${KC}/admin/realms/${REALM}/clients/${mcp}/roles/${role}" \
+          | python3 -c 'import json,sys; d=json.load(sys.stdin); print(json.dumps([{"id":d["id"],"name":d["name"]}]))')
+        curl -sk --max-time 30 -o /dev/null -X POST \
+          -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
+          "${KC}/admin/realms/${REALM}/client-scopes/${sid}/scope-mappings/clients/${mcp}" -d "$rolejson"
+        curl -sk --max-time 30 -o /dev/null -X PUT -H "Authorization: Bearer ${TOKEN}" \
+          "${KC}/admin/realms/${REALM}/clients/${SBX_UUID}/optional-client-scopes/${sid}"
+      done
+    done
+    say "per-tool scopes: ${created} created, ${existing} already present"
+  fi
 
   echo
-  say "the shared secret no longer authenticates ${AGENT_ID}."
-  say "to roll back: PUT the client with clientAuthenticatorType=client-secret."
+  say "${AGENT_ID} is UNCHANGED and still authenticates with its secret --"
+  say "attested mode is additive, so the fallback path keeps working."
+  say "to roll back: delete ${BROKER_ID} and the agent client, and point"
+  say "tenant-policy's predicate back at ${AGENT_ID}."
 fi
 
 echo
