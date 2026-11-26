@@ -49,7 +49,7 @@ explaining why they are not secrets. They are placeholders **in prose only**.
 | 4 · Into git, on a branch | **partly done** | committed (`a85b987`); realm script proven; **the plan's Verify step has not run** |
 | 5 · Install ZTWIM | **done** | v1.1.3, 15/15 pods, trust domain `agentops.lab`, 95 entries registered |
 | 6 · SVID to a workload | **done** | SVID issued and decoded; all three Stage 8 questions answered favourably |
-| 7 · Upgrade OpenShell | **blocked** | needs a sandbox-image rebuild; `:test2` proved rebuilds are viable, but pin the base and the fork ref first |
+| 7 · Upgrade OpenShell | **done** | chart 0.0.92 → 0.0.116, CLI v0.0.88 → v0.0.116, gateway now mounts the Workload API socket |
 | 8 · SVID as client auth | **both routes de-risked** | route 1 needs a Keycloak feature flag we do not own; **route 3 is proven working** and needs nothing from Keycloak. Both still need the SVID on the agent's outbound call (Stage 7) |
 | 9 · Provenance | not started | needs images from you |
 
@@ -100,8 +100,13 @@ reverted without reading the log below. **Nothing here is GitOps-managed unless 
 | C15 | exchange env appended to `hermes-env.sh` | `/sandbox/hermes/hermes-env.sh` | `MCP_EXCHANGE_CLIENT_ID=hermes-agent`, `MCP_EXCHANGE_CLIENT_SECRET=<lab secret>`. **No `SHARE` override** — the `:test2` image carries the exchange itself | no — uploaded into the sandbox, **not** the bridge ConfigMap (that one selfHeals) | strip the block and re-run `start-hermes` |
 | C17 | ZTWIM operator | cluster-scoped, ns `zero-trust-workload-identity-manager` | Namespace + OperatorGroup + pinned Subscription, `installPlanApproval: Manual`, `startingCSV: zero-trust-workload-identity-manager.v1.1.3`, channel `stable-v1`, source `redhat-operators`. InstallPlan approved by hand | **no** — applied directly, *not* via the `bootstrap` Application (that is pinned to the released tag and owns shared infra for every tenant) | delete the CRs, then the Subscription and CSV, then the namespace |
 | C18 | SPIRE instance | cluster-scoped | five singleton CRs all named `cluster`: `ZeroTrustWorkloadIdentityManager` (trustDomain `agentops.lab`, clusterName `agentops`, bundle `spire-bundle`), `SpireServer` (sqlite3, 2Gi PVC, X509 1h / JWT 5m), `SpireAgent` (k8sPSAT node attestor), `SpiffeCSIDriver` (`csi.spiffe.io`), `SpireOIDCDiscoveryProvider` (managedRoute, 1 replica) | no | `oc delete -f` the five CRs |
+| C20 | Keycloak features enabled | `keycloak` CR, ns `keycloak` | `spec.features.enabled: [spiffe, client-auth-federated]`. Both were present in the RHBK 26.4.18 build but in `disabledFeatures`. Restarts Keycloak | **no** — RHDP-provisioned CR, patched directly | `oc patch keycloak keycloak -n keycloak --type merge -p '{"spec":{"features":null}}'` |
+| C21 | `<user>-openshell` Application repointed | `openshift-gitops` | `targetRevision: rh1-2027-lb1285-0.0.2` → `spiffe-spire` | yes — this *is* the Argo object | patch `targetRevision` back to the tag |
 | C19 | OIDC discovery Route | ns `zero-trust-workload-identity-manager` | host `spire-oidc.<apps-domain>`, created by the operator from `jwtIssuer` | no — operator-managed | removed with the `SpireOIDCDiscoveryProvider` CR |
 | C16 | **second predicate on `mcp-authz-policy`** | `<user>-agentops` | `has(auth.identity.azp) && auth.identity.azp == 'hermes-agent'`, appended to `tool-access-check.patternMatching.patterns` | the AuthPolicy is GitOps-managed but `<user>-policy` has selfHeal **off**, so the live patch persists | `oc patch ... --type=json -p '[{"op":"remove","path":"/spec/rules/authorization/tool-access-check/patternMatching/patterns/1"}]'`, or `argocd app sync <user>-policy` |
+| C22 | Identity provider `spiffe` | realm `waterplant-<user>` | `providerId: spiffe`, `enabled: true`, `config.issuer: spiffe://agentops.lab`, `config.bundleEndpoint: https://spire-oidc.<apps-domain>/keys`. The trust domain goes in **`issuer`** — `trustDomain` is rejected 400 | no — realm import is one-shot | `DELETE /admin/realms/<realm>/identity-provider/instances/spiffe` |
+| C23 | Auth flow `clients-federated` | realm `waterplant-<user>` | a copy of the built-in `clients` flow plus a fifth execution, `federated-jwt`, `ALTERNATIVE`. Bound as the realm's `clientAuthenticationFlow` | no | `PUT /admin/realms/<realm>` with `clientAuthenticationFlow: clients`, then `DELETE .../authentication/flows/<id>` |
+| C24 | `jwt.credential.*` on `hermes-agent` | realm `waterplant-<user>` | `jwt.credential.issuer: spiffe`, `jwt.credential.sub: spiffe://agentops.lab/ns/<user>-agentops/sa/<user>-openshell` (the OpenShell gateway). **Staged and inert** — `clientAuthenticatorType` is back to `client-secret` | no | remove the two attributes |
 
 Active sandbox policy version: **5**.
 Realm internal ids (this cluster only): `mcp-gateway` = `<uuid>`,
@@ -135,7 +140,12 @@ Kept in step deliberately, so nothing found by hand is lost. **Not yet pushed.**
 | `tenant-openshell/values.yaml` | +10: its own `keycloak.agentIdentity` block | — |
 | `bootstrap-tenant/templates/applications.yaml`, `openshell.yaml`, `values.yaml` | +47: forwards `agentIdentity` to **both** tenant charts from one place | — |
 
-**Totals: 12 files, 365 insertions, 0 deletions**, plus `apply-realm-identity.sh`. Nothing existing
+| `tenant-platform/templates/mcp-gateway.yaml` | +40 more: the `spiffe` identity provider on the realm, and the client's two `jwt.credential.*` attributes — both gated on `keycloak.agentIdentity.federated.enabled` | C22, C24 |
+| `tenant-platform/values.yaml` | +30 more: `keycloak.agentIdentity.federated` — `enabled`, `trustDomain`, `idpAlias`, `bundleEndpoint`, `subjectSpiffeId` | — |
+| `tenant-platform/files/apply-realm-identity.sh` | +100: section 3, gated on `FEDERATED_SPIFFE_ID` — creates the IdP, copies and extends the `clients` flow, rebinds it, and switches the client to `federated-jwt` | C22, C23, C24 |
+| `bootstrap-tenant/templates/applications.yaml`, `values.yaml` | +40 more: forwards the `federated` block to `tenant-platform` | — |
+
+**Totals (through Stage 8 route 1): 12 files, ~575 insertions, 0 deletions**, plus `apply-realm-identity.sh`. Nothing existing
 removed or rewritten.
 
 Verified with `helm template`: the rendered realm import matches the live realm field for field —
@@ -974,3 +984,487 @@ credential into a sandbox's outbound request is OpenShell's provider machinery �
 Route 3 also remains the architectural divergence recorded in
 [10](10-tool-call-walkthrough.md): two credentials at the enforcement point rather than one, never
 bound together. Proven working is not the same as preferred.
+
+### 2026-11-24 — Stage 7 complete: OpenShell 0.0.92 → 0.0.116
+
+**Keycloak features first.** `spiffe` and `client-auth-federated` were present in the RHBK 26.4.18
+build but listed in `disabledFeatures` — confirmed from the running server's `/admin/serverinfo`,
+not inferred. One patch to the CR, Keycloak restarted, both now `ENABLED`. The agent was verified
+answering afterwards. **Route 1 in Stage 8 is no longer blocked.**
+
+**The chart is NVIDIA's, not ours to build.** Found it at `oci://ghcr.io/nvidia/openshell/helm-chart`
+(`charts/helm-chart` and three other guesses all 403'd) and pulled 0.0.116. Recorded digest is the
+**OCI manifest digest**, not the tgz file hash — the two differ, and the existing Chart.yaml comment
+had used the manifest digest, so that convention was kept.
+
+**Checked before swapping** that every value `tenant-openshell` overrides still exists at 0.0.116:
+`podSecurityContext.fsGroup`, `securityContext.runAsUser`, `server.auth.allowUnauthenticatedUsers`,
+`server.sandboxJwt.k8sSaTokenTtlSecs`, `server.providerTokenGrants.spiffe.*`. A renamed key would
+have silently dropped an override.
+
+**One new hazard in 0.0.116, caught at render time.** It adds a preflight that fails unless Agent
+Sandbox appears in `.Capabilities.APIVersions` — which is empty when rendering without a cluster,
+including ArgoCD's client-side render. Left enabled, **every tenant sync would have failed** with
+"Agent Sandbox is required … not served by this cluster" while it demonstrably was. Disabled via
+`agentSandbox.preflight.enabled: false`, with the reasoning in values.
+
+**Deployed through Argo**, not by hand: `<user>-openshell` repointed to the branch. Worth noting
+the status is misleading mid-sync — `sync.status` read `Synced` at the new revision while
+`operationState.phase` was still `Running` and nothing had actually rolled. Poll
+`operationState.phase`, not `sync.status`.
+
+**Result:**
+
+```
+gateway        ghcr.io/nvidia/openshell/gateway:0.0.116
+cli            quay.io/rlundber/openshell-cli:test1   (openshell 0.0.116, ssh present)
+chart label    helm.sh/chart: helm-chart-0.0.116
+gateway.toml   provider_spiffe_workload_api_socket_path = "/spiffe-workload-api/spire-agent.sock"
+volumeMount    openshell-gateway: /spiffe-workload-api (readOnly)
+```
+
+**The gateway now holds a Workload API socket**, which 0.0.92 could not — its StatefulSet mounted
+no SPIFFE volume and its own unit test asserted `[openshell.gateway.spiffe]` was not rendered. That
+is what `token_exchange` provider grants need: the gateway presents its own JWT-SVID during the
+intermediate exchange.
+
+**Better than predicted: the existing sandbox survived.** I expected `hermie` to need recreating
+across a gateway major-version jump; instead the 0.0.116 gateway adopted the sandbox created by
+0.0.92 (`adopted sandbox hermie`), and the agent answered correctly straight after. No module-2
+replay needed.
+
+### A correction to something I reported earlier
+
+I claimed 0.0.116 had `gateway.spiffe` "4 times vs 0" in 0.0.92. That was a bad grep — `.` is a
+regex wildcard, so it matched unrelated text. The conclusion held, but on worse evidence than I
+gave. The real evidence is the volumeMount and the config key above, both read off the live cluster.
+
+### 2026-11-24 — Stage 8 route 1 proven: the agent authenticates with a SPIRE-attested SVID
+
+**`hermes-agent` can authenticate to Keycloak with a JWT-SVID and no secret at all.** Four cells,
+all on the live tenant, Keycloak 26.4.18 (RHBK):
+
+| Credential presented as `client_assertion` | Result |
+|---|---|
+| JWT-SVID for `spiffe://agentops.lab/ns/<user>-agentops/sa/hermes-openshell-bridge`, `aud` = the realm issuer | **200** — `azp: hermes-agent`, `sub` = the operator's uuid, `preferred_username: operator`, `aud` = the gateway resource, 18 roles |
+| the same SVID with `aud: https://wrong.example.com` | **400** `invalid_client` / *Invalid token audience* |
+| a different workload's SVID (`…/sa/hermes-plain`) | **401** `invalid_client` |
+| the old shared secret, `client_id` + `client_secret` | **400** `unauthorized_client` |
+
+The exchanged token is claim-for-claim identical to the secret-authenticated one. Nothing
+downstream of Keycloak changes: the AuthPolicy from Stage 3, the gateway, the policy predicate and
+the agent all see exactly what they saw before. Only *how the client proved it was the client*
+changed — from a string in `values.yaml` to a credential SPIRE attested and SPIRE can revoke.
+
+Then repeated with the **OpenShell gateway's** identity
+(`spiffe://agentops.lab/ns/<user>-agentops/sa/<user>-openshell`): also 200, same 18 roles. That is
+the identity the final wiring will use, and the reason is in the next section.
+
+### The trap: `client_not_found` is not about the client
+
+Every attempt failed for an hour with:
+
+```
+type="TOKEN_EXCHANGE_ERROR" clientId="hermes-agent" error="client_not_found"
+client_assertion_sub="spiffe://agentops.lab/ns/<user>-agentops/sa/hermes-openshell-bridge"
+```
+
+Keycloak had parsed the assertion correctly and named the right subject, so the error reads as "I
+looked that client up and it is not there". **It is not.** Reading
+`FederatedJWTClientAuthenticator` at 26.4.18: the authenticator never calls
+`context.setClient()`, so *every* failure inside it — bad signature, wrong audience, expired SVID,
+trust-domain mismatch, or the authenticator never running at all — surfaces as `client_not_found`.
+Upstream's own `SpiffeClientAuthTest.testInvalidTrustDomain` asserts exactly that error for a
+trust-domain mismatch.
+
+Two hypotheses died on the way, and both are worth recording because each looked right:
+
+**"`jwt.credential.sub` must be a searchable client attribute."** The lookup is
+`session.clients().searchClientsByAttributes(...)`, and `JpaRealmProvider` filters that map through
+`clientSearchableAttributes`. But `JpaClientProviderFactory.REQUIRED_SEARCHABLE_ATTRIBUTES` already
+contains `jwt.credential.issuer` and `jwt.credential.sub` unconditionally. **No build option is
+needed.** `kc.sh build --help-all | grep searchable` returning nothing was the correct answer, not a
+failed search. Confirmed live: `GET /clients?q=jwt.credential.sub:spiffe://…` returns
+`hermes-agent`.
+
+**The actual cause: the authenticator was not in the realm's client authentication flow.**
+
+```
+realm waterplant-<user>, flow `clients`:
+  client-secret ALTERNATIVE   client-jwt ALTERNATIVE
+  client-secret-jwt ALTERNATIVE   client-x509 ALTERNATIVE
+  (no federated-jwt)
+```
+
+`DefaultAuthenticationFlows.clientAuthFlow()` adds the `federated-jwt` execution **only when
+`CLIENT_AUTH_FEDERATED` is enabled at realm-creation time**. Our realms were imported before the
+feature flag went on the Keycloak CR, so they kept the four stock executions — and the admin API
+refuses to help:
+
+```
+POST /authentication/flows/clients/executions/execution
+→ 400 {"error":"It is illegal to add execution to a built in flow"}
+```
+
+The supported route is copy, extend, rebind:
+
+```
+POST /authentication/flows/clients/copy        {"newName":"clients-federated"}   → 201
+POST /authentication/flows/clients-federated/executions/execution
+                                               {"provider":"federated-jwt"}      → 201 (DISABLED)
+PUT  /authentication/flows/clients-federated/executions   requirement=ALTERNATIVE → 204
+PUT  /admin/realms/<realm>      {"clientAuthenticationFlow":"clients-federated"}  → 204
+```
+
+After which the first attempt returned 200. **A cluster provisioned with the feature already on
+needs none of this** — the built-in flow is built correctly in the first place. That asymmetry is
+now in both the chart comment and the script.
+
+Also settled, from `SpiffeIdentityProviderConfig` at the exact tag: the trust domain config key is
+**`issuer`**, not `trustDomain` (`getTrustDomain()` returns `getConfig().get(ISSUER)`), and it must
+match `^spiffe://[a-z0-9.\-_]*$`. And from `FederatedJWTClientValidator`: the SVID needs **exactly
+one** audience, equal to the realm issuer URL (`isMultipleAudienceAllowed()` is false), with
+`exp - iat ≤ 300`. SPIRE's 5-minute default JWT TTL sits exactly on that boundary.
+
+### The finding that reshapes the rest of Stage 8: OpenShell already implements route 1
+
+The in-sandbox refresher cannot do this. The Workload API is gRPC, the refresher is stdlib Python,
+and the sandbox pod has **no** `csi.spiffe.io` volume — it is created by the agent-sandbox operator
+with fixed labels and four fixed volumes, so we cannot add one.
+
+But the 0.0.116 OpenShell gateway does have one, and it does not need our help. Its provider-profile
+schema carries a `token_grant` block, read off the shipped binary and confirmed by `provider
+profile lint`:
+
+```
+credentials[].token_grant:
+  grant_type            token_exchange | client_credentials
+  token_endpoint        jwt_svid_audience      client_assertion_type
+  subject_token         { source: provider_credential, credential: <name>, subject_token_type }
+  requested_token_type  scopes   cache_ttl_seconds   audience_overrides
+```
+
+That is precisely what was proven by hand above: fetch a JWT-SVID for `jwt_svid_audience`, send it
+as the `client_assertion` of a `token_exchange` grant against `token_endpoint`. The gateway holds
+the only SPIFFE socket on the token path, which is why `jwt.credential.sub` is staged as the
+gateway's SPIFFE ID rather than the bridge's.
+
+`provider profile lint` also fixed the one gap: `token_exchange grants require subject_token`, and
+`subject_token.source must be provider_credential`. So the operator's token has to be another
+credential on the same profile. The refresh strategies the gateway supports are `static`,
+`oauth2_refresh_token`, `oauth2_client_credentials`, `google_service_account_jwt` and
+`aws_sts_assume_role` — **no password grant**.
+
+> **Superseded 2026-11-25.** I wrote that `oauth2_refresh_token` was the fit. It is not: the
+> subject credential is *broker-only* and so "cannot declare workload injection metadata such as
+> env vars, static placement, refresh, or token grant metadata" — the refresh strategies exist, but
+> not for this credential. It must be re-stamped from outside. See the entry below.
+
+This makes OpenShell the token broker — Uber's "token service" — instead of a script inside the
+sandbox. It is a better architecture than the one [05-spiffe-and-ztwim.md](05-spiffe-and-ztwim.md)
+proposed, and it reverses that document's "keep OpenShell off the critical path".
+
+### State left on the cluster, and why
+
+`hermes-agent` is back on `clientAuthenticatorType: client-secret`, and the sandboxed agent is
+exchanging normally again (`exchanged operator token for one acting as hermes-agent`). While the
+client was on `federated-jwt` the agent failed closed, exactly as designed — `ERROR: token exchange
+as hermes-agent failed: HTTP Error 401` — because nothing on the token path could present an SVID
+yet.
+
+Everything else is left in place and is inert: the Keycloak features (C20), the `spiffe` identity
+provider (C22), the `clients-federated` flow bound to the realm (C23), and the client's two
+`jwt.credential.*` attributes (C24). Re-enabling is one field:
+
+```
+FEDERATED_SPIFFE_ID=spiffe://agentops.lab/ns/<user>-agentops/sa/<user>-openshell \
+KC_PASS=<lab secret> ./apply-realm-identity.sh <user> <keycloak-host> <apps-domain>
+```
+
+That script was re-run against the live tenant and reported every step as already-present except
+the client switch, so section 3 is idempotent. Also cleaned up: the three throwaway probe pods, and
+the Keycloak CR's temporary `log-level` debug option (the `features` stay).
+
+### What remains in Stage 8
+
+1. Author the provider profile with the two credentials (`operator_token` via
+   a plain `--credential`, `gateway_token` via the `token_exchange` grant) and import it, plus a
+   loop to re-stamp the subject token.
+2. Create the provider with `--runtime-credentials`, seeded with the operator's refresh token.
+3. Teach the sandbox to read the gateway-minted token instead of running its own refresher —
+   a **sandbox image change**, so a build handoff.
+4. Flip the client to `federated-jwt` with the script, and delete `clientSecret` from
+   `values.yaml` and `bootstrap-tenant`.
+5. Re-run the Stage 3 four-cell proof through a real tool call.
+
+### Lab confirmed working after the revert
+
+A real tool call, asked of Hermie through the console's own path:
+
+```
+POST http://hermes-agent.<user>-agentops.svc:8787/v1/chat/completions
+→ "The current reservoir level is 63.45% of capacity. The inflow is 0.2475% per second,
+   the outflow is 0.243% per second. The total reservoir capacity is 5000 cubic metres."
+```
+
+So the exchanged token, the `azp == hermes-agent` predicate and the tool roles are all still
+working together. Note the method: the same curl from a throwaway pod times out with no response,
+which looks like a dead relay and is not — the tenant's NetworkPolicy only admits the console. Run
+agent probes **from the `water-plant-ui` pod**, not from an ad-hoc one.
+
+### 2026-11-25 — Two corrections to the Stage 8 plan, one proven on the cluster
+
+**Correction 1: the sandbox *can* hold a SPIFFE socket. I said it could not.**
+
+I claimed the sandbox pod is operator-created with four fixed volumes and that nothing we own could
+add a `csi.spiffe.io` mount. Wrong. `provider_spiffe_workload_api_socket_path` is documented as a
+CSI mount into gateway **and dedicated supervisor** pods, and ours is a dedicated supervisor.
+
+Settled by creating a throwaway sandbox on the 0.0.116 gateway rather than by argument:
+
+```
+pod default--svidtest
+  sa      user-gngp7-openshell-sandbox
+  volumes openshell-client-tls, spiffe-workload-api, openshell-sa-token,
+          openshell-supervisor-bin, workspace
+  csi     {"driver":"csi.spiffe.io","readOnly":true}
+  mount   agent: /spiffe-workload-api (srwxrwxrwx spire-agent.sock)
+```
+
+and the identity resolves:
+
+```
+token(spiffe://agentops.lab/ns/<user>-agentops/sa/<user>-openshell-sandbox)
+```
+
+`hermie` lacks the mount only because **0.0.92 created it and 0.0.116 merely adopted it** — the
+same adoption that Stage 7 recorded as a happy surprise is what hid this. Recreating `hermie` gets
+it. (First fetch returned `PermissionDenied: no identity issued`; that was propagation lag between
+the controller-manager writing the entry and the agent syncing, not a missing registration. The
+entry is there: `spire-server entry show` lists all three SAs in the tenant.)
+
+Throwaway sandbox and probe pod both deleted; `hermie` untouched and still exchanging.
+
+**Correction 2: `token_exchange` is a three-hop split, so it needs TWO federated clients.**
+
+I described the gateway as doing the exchange. Per the OpenShell docs it is split, deliberately:
+
+1. the **supervisor** asks the gateway for an *intermediate* token, presenting its own JWT-SVID;
+2. the **gateway** verifies that SVID, uses its subject as the intermediate token's audience, and
+   exchanges the **stored subject credential** using the **gateway's own** SVID as client assertion;
+3. the **supervisor** exchanges the intermediate token for the final token using **its own** SVID.
+
+The split exists so the stored subject credential never enters the sandbox; the gateway is declared
+broker-only and cannot carry workload injection metadata. Consequence for us: `azp` on the *final*
+token comes from step 3, so the client called **`hermes-agent` must be bound to the sandbox's
+SPIFFE ID**, not the gateway's. C24 currently stages the gateway's — that is the *intermediate*
+client, which needs to be a second, separately-named client.
+
+**Also: our exact use case shipped upstream.** NVIDIA/OpenShell issue
+[#1987](https://github.com/NVIDIA/OpenShell/issues/1987) "user-subject dynamic token grants" is
+closed, completed in PR #1970, and its stated outcome is this design verbatim — the final token's
+`sub` identifies the user while `azp` identifies the sandbox agent. It also states why
+`client_credentials` is not enough: there "the resulting token represents the
+sandbox/supervisor client rather than the user."
+
+**Confidence, stated honestly.** Correction 1 is proven on this cluster. Correction 2 and the
+upstream issue are read from docs published as **v0.1.6** against a build reporting **0.0.116**. The
+profile schema matched our binary field-for-field and `provider profile lint` enforced the same
+`subject_token.source must be provider_credential` rule, so they line up — but the three-hop
+behaviour is not yet cluster-proven, and the two-client implication follows from it. Do not treat
+the second client as settled until a real grant runs.
+
+### 2026-11-25 — Two more corrections, and a new document
+
+Written: [11-openshell-spiffe-flow.md](11-openshell-spiffe-flow.md) — two render-verified diagrams
+(where OpenShell sits in a SPIRE deployment; the token flow as a 14-step sequence) plus the
+corrections table. Indexed in the README.
+
+**Correction 3: both pods get a socket, and I had the mount scope wrong twice.** The single config
+key hides that with a *dedicated* supervisor, `provider_spiffe_workload_api_socket_path` CSI-mounts
+the Workload API socket into the gateway **and** the sandbox pod — each receiving its own identity
+from it, because each signs a different hop. Only *shared* supervisors get no socket. Ours is
+dedicated: `/opt/openshell/bin/openshell-sandbox` runs as PID 1 inside the sandbox pod.
+
+**Correction 4: "the sandbox holds no Keycloak credential" is false as written**, and it was my
+phrasing. The supervisor fetches an SVID and receives both tokens, and the supervisor *is* in the
+sandbox pod. The true claim is that **the agent** never holds them: Hermie carries a placeholder
+which the supervisor swaps for the real Bearer at egress — the same mechanism already substituting
+`${OPENAI_API_KEY}` for the model provider today. That distinction is the entire security property,
+and the loose phrasing erased it.
+
+A consequence worth noting: because injection happens at egress, the in-sandbox refresher would be
+**deleted** rather than modified, which may mean **no sandbox image change at all**. That would
+remove the one build handoff I said this route needed. Doc-derived, not yet proven.
+
+**One defect fixed on the way in.** The document arrived with a section reviewing
+`e-sandbox-to-mcp-end-to-end.svg`, a file that exists nowhere in either repo. The four corrections
+in it were sound — and three were errors in my own earlier descriptions — so the section was
+re-anchored to this document set rather than to an artifact nobody can open.
+
+### 2026-11-26 — A real role-set intersection is free, and per-tool tokens are possible
+
+Both tested directly on realm `waterplant-<user>`, both reverted, both stock Keycloak, and
+**neither needs an AuthPolicy change**.
+
+**A true intersection: `fullScopeAllowed: false` on the agent's client.** The roles in an issued
+token then become *the user's roles ∩ the client's scope mappings*. Verified in both directions —
+the second row was added on re-verification, because the first pass tested only one:
+
+| Setup | Exchanged token |
+|---|---|
+| `fullScopeAllowed: true` (today) | 18 roles |
+| `false`, no scope mappings | **0 roles** |
+| `false` + 3 telemetry roles mapped to the agent | **exactly those 3**; operator still holds 18 |
+| the same, with one of those 3 **revoked from the operator** | **2 roles** |
+
+```
+operator 18 ∩ agent 3 → 3     the agent narrows the human
+operator 17 ∩ agent 3 → 2     the human narrows the agent
+```
+
+Neither side can grant what the other lacks. This matters because what
+[02-target-architecture.md](02-target-architecture.md) calls "the intersection rule" is really
+*the operator's roles plus an `azp` check* — which is the right enforcement but not a role-set
+intersection. This makes it literal, for the price of one boolean, and `azp` /
+`preferred_username` are unaffected.
+
+It also suggests a better module exercise than the current one: revoke a tool from the **agent**
+and the operator keeps it in the UI while Hermie can no longer use it — making *what the human may
+do* versus *what the human may delegate* visible, which is the point of the module.
+
+**Per-tool tokens.** Put each tool role in its own optional client scope and request it at exchange
+time: `scope=tool-get_reservoir_level` yields exactly `tool:get_reservoir_level`; no `scope` yields
+none. And a requested scope can only ever *narrow* — asking for a scope whose role the operator
+does not hold drops it silently rather than granting it. Blast radius goes from "all 18 tools the
+operator holds" to "the one tool in flight".
+
+Costs: one client scope per tool (18, but `mcp-gateway.yaml` already loops over
+`keycloak.toolRoles`, so the chart generates them); one Keycloak round trip per distinct tool,
+cacheable via `token_grant.cache_ttl_seconds`; and `accessTokenLifespan` should drop from 1800s,
+since per-tool tokens only pay off when short-lived.
+
+One wrinkle: OpenShell's `audience_overrides` selects by host/port/**path**, and MCP is JSON-RPC to
+a single `/mcp` path with the tool named in the *body*. So that mechanism gives per-**server**
+granularity; per-tool must be driven by whatever requests the exchange.
+
+**Cluster verified back at baseline**: `fullScopeAllowed: true`, no agent scope-mappings, no
+`tool-*` client scopes in the realm, operator restored to 18 roles, and the exchange returning
+`azp: hermes-agent` with 18 roles.
+
+**Also landed:** `docs/agent-identity/diagrams/openshell-two-badges.excalidraw` (valid Excalidraw
+v2 scene, 40 elements) — open it by dragging the file onto <https://excalidraw.com>, and tick
+"Embed scene" when exporting so the image can be dragged back in and re-edited. One duplicate
+section in `11-openshell-spiffe-flow.md` was merged away on the way in; two sections had come to
+explain the same premise.
+
+### 2026-11-26 — Per-tool minting cannot be short-cut, and one unapproved change reverted
+
+**The minting side is the only cost; the checking side is already free.** A token carrying exactly
+one role *is* a per-tool token, and the existing predicate
+`('tool:' + x-mcp-toolname) in resource_access[x-mcp-servername].roles` already refuses everything
+else. No new claim and no AuthPolicy rule are needed.
+
+Both shortcuts that would avoid declaring 18 client scopes were tested, and Keycloak refuses all
+three:
+
+```
+scope=tool-does-not-exist          → 400 invalid_scope    "Invalid scopes: tool-does-not-exist"
+audience=tool:get_reservoir_level  → 400 invalid_client   "Audience not found"
+audience=<a real MCP client>       → 400 invalid_request  "Requested audience not available"
+```
+
+And there is a reason not to want the free-form version even if it worked: **a self-asserted
+designation authorises nothing.** If the agent could request `designation: emergency_shutdown` and
+have it stamped without Keycloak checking the operator holds that role, then a predicate comparing
+designation to the requested tool is satisfied by asking for the right designation. The check only
+means something because minting required proving entitlement — which is exactly the property the
+client-scope route has: ask for a tool the operator lacks and the result is no roles and no scope.
+
+So: 18 client-scope objects generated by the chart, and nothing else.
+
+**Reverted, then restored pinned: the Excalidraw MCP server in `.mcp.json`.** *(Corrected
+2026-11-26: the author had explicitly asked for this server — "can you help me install the
+excalidraw mcp that you can use instead" — in the subagent conversation, which this session could
+not see. Reverting it was wrong. Restored, pinned to `mcp-excalidraw-server@2.2.0`, which also
+answers the pinning objection below. Needs `/mcp` reconnect plus approval before use.)*
+
+Original note: A third-party Excalidraw MCP server was
+added to the project config as `npx -y mcp-excalidraw-server`. The package is real and does
+resolve to the repository claimed (`yctimlin/mcp_excalidraw`, 14 versions), so the entry was
+internally consistent — but it is unpinned, so it fetches and executes whatever `latest` is at
+every start, which contradicts this lab's own standing rule to pin every version. Installing an MCP
+server is the author's decision, so the file was restored; `.mcp.json` is back to `playwright`
+only. The hand-generated `diagrams/openshell-two-badges.excalidraw` needs no server to open.
+
+**Also corrected, then re-corrected:** this session retitled Stage 8b from "The decided design" to
+"The proposed design", believing the A-versus-D choice was still open. **It was not** — the author
+chose option A in the subagent conversation ("Okay let's go with your design"), along with per-tool
+tokens and the true intersection. The original title was right and has been restored, with the
+decision and its basis cited. A stale open question was also removed from that stage: whether
+`--credential` can replace `--from-oidc-token` was settled on 2026-11-25 (it can).
+
+**Lesson.** Decisions taken in a subagent conversation are invisible to the main session, and a
+cancelled subagent's transcript is the only record of them. Recover it from
+`~/.claude/projects/<project>/<session>/subagents/agent-<id>.jsonl` before assuming a question is
+still open — this session asked the author to decide something they had already decided, three
+times.
+
+### 2026-11-26 — Recovered the cancelled agent's last finding: the intermediate audience is not ours to choose
+
+The subagent was stopped one step after writing "Found something decision-critical while checking"
+and could not be resumed, so the finding was reconstructed from its transcript
+(`subagents/agent-aplease-explain-plainly-*.jsonl`, 218 entries). Its cluster session had expired;
+its last successful act was grepping the local copy of OpenShell's `profiles.md` for
+"intermediate". Those lines, verified against the file:
+
+> line 867 — `audience` … "For `token_exchange`, this is the **final** exchange audience; the
+> gateway intermediate exchange **always uses the verified supervisor SVID subject as its
+> audience**."
+>
+> line 875 — `audience_overrides` … "These overrides **do not affect** the gateway intermediate
+> exchange."
+>
+> line 877 — shared supervisors: "The intermediate audience is the stable sandbox SPIFFE ID."
+
+**So the intermediate token's `aud` is a `spiffe://…` URI, in both supervisor modes, and no profile
+field can change it.**
+
+**Why that is decision-critical — this part is inference, not yet verified.** Keycloak's standard
+token exchange requires the requesting client to be the subject token's `azp` or to appear in its
+`aud`; that requirement is why the `aud-hermes-agent` mapper on `mcp-gateway` exists at all, and
+why `mcp-token-refresh.py` carries the comment about 400 *"Client is not within the token
+audience"*. On hop 3 the subject token **is** the intermediate token, so the client performing it
+must appear in an `aud` that contains only a SPIFFE ID. The only way that matches is for the
+Keycloak client's `clientId` to be *literally* the sandbox's SPIFFE ID — client ids are arbitrary
+strings, so this may well work.
+
+If it does, the consequence lands on the policy rather than the plumbing: `azp` on the final token
+becomes `spiffe://agentops.lab/ns/<user>-agentops/sa/<user>-openshell-sandbox`, not `hermes-agent`.
+That breaks the predicate `auth.identity.azp == 'hermes-agent'` and replaces it with a
+**tenant-specific** value containing the namespace — which touches `mcp-gateway-policy.yaml`,
+`values.yaml`, artifact C24, and the lab narrative. Arguably `azp` carrying the attested workload
+identity is *better*; it is certainly not free, and it is the opposite of the correction recorded on
+2026-11-25 that "`azp` is a client id, not a SPIFFE ID".
+
+**Not yet tested, and it should be before option A is chosen.** The decisive experiment needs no
+OpenShell at all: create a client whose `clientId` is the sandbox SPIFFE ID, mint a token with
+`audience=<that client id>` to stand in for the intermediate token, then exchange it as that
+client. That answers it in two calls, non-destructively, with `hermes-agent` untouched.
+
+### Outstanding from the subagent conversation, now carried here
+
+Recovered from the cancelled subagent's transcript (9 author turns). Decided or requested there,
+and not yet done:
+
+| | Asked for | State |
+|---|---|---|
+| 1 | Option **A** — OpenShell native `token_exchange` | decided; Stage 8b is the build list |
+| 2 | Per-tool tokens, "Uber uses per-tool tokens so it has smaller blast radius" | decided; proven; Stage 8b Decision 3 |
+| 3 | True intersection by giving the agent its own tool roles | decided; proven; Stage 8b Decision 2 |
+| 4 | The plain-language explanation written into `11-openshell-spiffe-flow.md` | done |
+| 5 | **An Excalidraw diagram, redrawn with the Excalidraw MCP** | **outstanding** — hand-generated `diagrams/openshell-two-badges.excalidraw` is the fallback; the MCP is now pinned in `.mcp.json` and needs a reconnect plus approval |
+| 6 | "update the plan so it captures all, and has nice excalidraw diagrams, and then when we are happy we can start executing" | plan captures all; **diagrams outstanding**, so the gate to executing is not met |
+
+So the order is: reconnect the MCP → redraw the two-badges diagram and add the Stage 8b diagrams →
+review → execute Stage 8b.

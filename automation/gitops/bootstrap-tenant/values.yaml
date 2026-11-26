@@ -51,6 +51,24 @@ keycloak:
     enabled: true
     clientId: hermes-agent
     clientSecret: hermes-agent-lab-secret
+    # Put the SPIFFE identity provider and the client's jwt.credential.*
+    # attributes into the realm import, so a realm created on a cluster whose
+    # Keycloak CR has features.enabled: [spiffe, client-auth-federated] can
+    # authenticate the agent with a SPIRE-attested JWT-SVID instead.
+    #
+    # Inert on its own: switching the client's authenticator to federated-jwt
+    # takes the secret out of service, so it is left to
+    # tenant-platform/files/apply-realm-identity.sh. Leave this off until the
+    # Keycloak CR carries both preview features -- without them the import
+    # fails on an unknown identity provider type.
+    federated:
+      enabled: false
+      trustDomain: spiffe://agentops.lab
+      idpAlias: spiffe
+      # Empty derives https://spire-oidc.<domain>/keys and
+      # <trustDomain>/ns/<user>-agentops/sa/<user>-openshell respectively.
+      bundleEndpoint: ""
+      subjectSpiffeId: ""
 
 # ---------------------------------------------------------------------------
 # Where the per-participant Applications point.

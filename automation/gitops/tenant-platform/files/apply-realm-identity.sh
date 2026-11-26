@@ -15,9 +15,19 @@
 #                           preferred-username oidc-usermodel-property-mapper
 #   client <agent>          confidential, no service account, exchange enabled
 #   on that client          aud-mcp-gateway-resource, preferred-username
+# And, only when FEDERATED_SPIFFE_ID is set:
+#   idp spiffe              trust domain + SPIRE bundle endpoint
+#   flow clients-federated  a copy of the built-in `clients` flow + federated-jwt
+#   on that client          clientAuthenticatorType=federated-jwt, no secret
 #
 # Usage:
 #   KC_PASS=... ./apply-realm-identity.sh <username> <keycloak-host> <apps-domain> [agent-client-id] [agent-secret]
+#
+# To also swap the client's secret for a SPIRE-attested JWT-SVID (Stage 8
+# route 1), add FEDERATED_SPIFFE_ID. Optional overrides: FEDERATED_TRUST_DOMAIN,
+# FEDERATED_BUNDLE_ENDPOINT, FEDERATED_IDP_ALIAS, FEDERATED_FLOW_ALIAS.
+#   FEDERATED_SPIFFE_ID=spiffe://agentops.lab/ns/<user>-agentops/sa/<user>-openshell \\
+#   KC_PASS=... ./apply-realm-identity.sh ...
 #
 # Never echoes a secret. Reads KC_PASS from the environment, or prompts.
 
@@ -135,6 +145,115 @@ add_mapper "$AGENT_UUID" "preferred-username" "$(cat <<'JSON'
            "introspection.token.claim":"true","userinfo.token.claim":"true"}}
 JSON
 )"
+
+# --- 3. SPIFFE as the agent's credential (optional) --------------------------
+# Off unless FEDERATED_SPIFFE_ID is set. Replaces the client's shared secret
+# with a SPIRE-attested JWT-SVID, per docs/agent-identity Stage 8 route 1.
+#
+# Prerequisite the chart cannot supply: the Keycloak CR needs
+#   spec.features.enabled: [spiffe, client-auth-federated]
+# Both are preview, and on a shared RHDP cluster that CR is not ours. Without
+# them the `spiffe` identity provider type and the `federated-jwt` client
+# authenticator are simply absent and the calls below 400.
+#
+# The trap that cost a session: `federated-jwt` is added to a realm's client
+# authentication flow by DefaultAuthenticationFlows.clientAuthFlow() ONLY when
+# CLIENT_AUTH_FEDERATED is enabled AT REALM CREATION. A realm imported before
+# the flag was set keeps the four stock executions, the admin API refuses to
+# add one ("It is illegal to add execution to a built in flow"), and every
+# attempt fails as `client_not_found` -- which looks like the client lookup but
+# is actually the authenticator never running. FederatedJWTClientAuthenticator
+# never calls context.setClient(), so EVERY failure in it reports that error.
+# Hence the copy-extend-rebind below.
+if [ -n "${FEDERATED_SPIFFE_ID:-}" ]; then
+  TRUST_DOMAIN="${FEDERATED_TRUST_DOMAIN:-spiffe://agentops.lab}"
+  BUNDLE_ENDPOINT="${FEDERATED_BUNDLE_ENDPOINT:-https://spire-oidc.${APPS_DOMAIN}/keys}"
+  IDP_ALIAS="${FEDERATED_IDP_ALIAS:-spiffe}"
+  FLOW="${FEDERATED_FLOW_ALIAS:-clients-federated}"
+
+  # 3a. the SPIFFE identity provider. The config key for the trust domain is
+  # `issuer`, NOT `trustDomain`: SpiffeIdentityProviderConfig.getTrustDomain()
+  # reads IdentityProviderModel.ISSUER. It must match ^spiffe://[a-z0-9.\-_]*$
+  # or the create fails 400 "Invalid trust domain name".
+  if api "${KC}/admin/realms/${REALM}/identity-provider/instances/${IDP_ALIAS}" \
+       | grep -q '"alias"'; then
+    say "idp ${IDP_ALIAS}: already present"
+  else
+    code=$(curl -sk --max-time 30 -o /dev/null -w '%{http_code}' -X POST \
+      -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
+      "${KC}/admin/realms/${REALM}/identity-provider/instances" -d "$(cat <<JSON
+{"alias":"${IDP_ALIAS}","providerId":"spiffe","enabled":true,
+ "config":{"issuer":"${TRUST_DOMAIN}","bundleEndpoint":"${BUNDLE_ENDPOINT}"}}
+JSON
+)")
+    [ "$code" = 201 ] && say "idp ${IDP_ALIAS}: created" \
+      || { echo "  idp ${IDP_ALIAS}: FAILED (HTTP $code) -- is spiffe enabled on the Keycloak CR?" >&2; exit 1; }
+  fi
+
+  # 3b. a writable copy of the built-in `clients` flow, plus the execution.
+  if api "${KC}/admin/realms/${REALM}/authentication/flows" \
+       | python3 -c "import json,sys; sys.exit(0 if any(f['alias']=='${FLOW}' for f in json.load(sys.stdin)) else 1)"; then
+    say "flow ${FLOW}: already present"
+  else
+    code=$(curl -sk --max-time 30 -o /dev/null -w '%{http_code}' -X POST \
+      -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
+      "${KC}/admin/realms/${REALM}/authentication/flows/clients/copy" -d "{\"newName\":\"${FLOW}\"}")
+    [ "$code" = 201 ] && say "flow ${FLOW}: copied from clients" \
+      || { echo "  flow ${FLOW}: FAILED (HTTP $code)" >&2; exit 1; }
+  fi
+
+  EXEC_JSON=$(api "${KC}/admin/realms/${REALM}/authentication/flows/${FLOW}/executions" \
+    | python3 -c 'import json,sys; print(json.dumps(next((e for e in json.load(sys.stdin) if e.get("providerId")=="federated-jwt"), {})))')
+  if [ "$EXEC_JSON" = '{}' ]; then
+    code=$(curl -sk --max-time 30 -o /dev/null -w '%{http_code}' -X POST \
+      -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
+      "${KC}/admin/realms/${REALM}/authentication/flows/${FLOW}/executions/execution" \
+      -d '{"provider":"federated-jwt"}')
+    [ "$code" = 201 ] && say "execution federated-jwt: added" \
+      || { echo "  execution federated-jwt: FAILED (HTTP $code) -- is client-auth-federated enabled?" >&2; exit 1; }
+    EXEC_JSON=$(api "${KC}/admin/realms/${REALM}/authentication/flows/${FLOW}/executions" \
+      | python3 -c 'import json,sys; print(json.dumps(next(e for e in json.load(sys.stdin) if e.get("providerId")=="federated-jwt")))')
+  fi
+  # It lands DISABLED; an ALTERNATIVE sitting beside the four stock ones means
+  # the secret path keeps working for every other client in the realm.
+  code=$(curl -sk --max-time 30 -o /dev/null -w '%{http_code}' -X PUT \
+    -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
+    "${KC}/admin/realms/${REALM}/authentication/flows/${FLOW}/executions" \
+    -d "$(printf '%s' "$EXEC_JSON" | python3 -c 'import json,sys; e=json.load(sys.stdin); e["requirement"]="ALTERNATIVE"; print(json.dumps(e))')")
+  [ "$code" = 204 ] && say "execution federated-jwt: ALTERNATIVE" \
+    || { echo "  execution requirement: FAILED (HTTP $code)" >&2; exit 1; }
+
+  # 3c. bind the copy as the realm's client authentication flow
+  code=$(curl -sk --max-time 30 -o /dev/null -w '%{http_code}' -X PUT \
+    -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
+    "${KC}/admin/realms/${REALM}" -d "{\"realm\":\"${REALM}\",\"clientAuthenticationFlow\":\"${FLOW}\"}")
+  [ "$code" = 204 ] && say "realm clientAuthenticationFlow: ${FLOW}" \
+    || { echo "  flow binding: FAILED (HTTP $code)" >&2; exit 1; }
+
+  # 3d. the client itself. jwt.credential.sub and jwt.credential.issuer are
+  # already in JpaClientProviderFactory.REQUIRED_SEARCHABLE_ATTRIBUTES, so the
+  # attribute lookup needs no build option.
+  #
+  # FEDERATED_SPIFFE_ID is the SPIFFE ID of whichever workload holds the
+  # credential -- one client, one ID, because the lookup demands exactly one
+  # match. Today that is the OpenShell gateway, the only pod on the token path
+  # with a csi.spiffe.io mount.
+  code=$(curl -sk --max-time 30 -o /dev/null -w '%{http_code}' -X PUT \
+    -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
+    "${KC}/admin/realms/${REALM}/clients/${AGENT_UUID}" -d "$(cat <<JSON
+{"clientId":"${AGENT_ID}","clientAuthenticatorType":"federated-jwt",
+ "attributes":{"standard.token.exchange.enabled":"true",
+               "jwt.credential.issuer":"${IDP_ALIAS}",
+               "jwt.credential.sub":"${FEDERATED_SPIFFE_ID}"}}
+JSON
+)")
+  [ "$code" = 204 ] && say "client ${AGENT_ID}: federated-jwt <- ${FEDERATED_SPIFFE_ID}" \
+    || { echo "  client ${AGENT_ID} federated switch: FAILED (HTTP $code)" >&2; exit 1; }
+
+  echo
+  say "the shared secret no longer authenticates ${AGENT_ID}."
+  say "to roll back: PUT the client with clientAuthenticatorType=client-secret."
+fi
 
 echo
 echo "verify:"

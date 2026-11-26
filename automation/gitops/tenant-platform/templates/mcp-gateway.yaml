@@ -237,6 +237,41 @@ spec:
     bruteForceProtected: true
     accessTokenLifespan: 1800
     ssoSessionMaxLifespan: 1800
+{{- if and $kc.agentIdentity.enabled $kc.agentIdentity.federated.enabled }}
+{{- $fed := $kc.agentIdentity.federated }}
+{{- $domain := regexReplaceAll "^[^.]+\\." $kcHost "" }}
+{{- $bundle := $fed.bundleEndpoint | default (printf "https://spire-oidc.%s/keys" $domain) }}
+
+    # -----------------------------------------------------------------------
+    # SPIRE as an identity provider, so the agent's client can authenticate
+    # with an attested JWT-SVID instead of the shared secret below.
+    #
+    # Two non-obvious things, both of which cost a session:
+    #
+    #   The trust domain goes in `issuer`, NOT `trustDomain`.
+    #   SpiffeIdentityProviderConfig.getTrustDomain() reads
+    #   IdentityProviderModel.ISSUER. Anything else is rejected 400
+    #   "Invalid trust domain name", and the value must match
+    #   ^spiffe://[a-z0-9.\-_]*$.
+    #
+    #   This only works on a realm CREATED while the Keycloak CR has
+    #   features.enabled: [spiffe, client-auth-federated].
+    #   DefaultAuthenticationFlows.clientAuthFlow() adds the `federated-jwt`
+    #   execution to the built-in `clients` flow only when the feature is on at
+    #   realm-creation time, and the admin API refuses to add an execution to a
+    #   built-in flow afterwards ("It is illegal to add execution to a built in
+    #   flow"). A realm imported before the flag was set needs
+    #   files/apply-realm-identity.sh, which copies the flow, extends the copy
+    #   and rebinds it. Both paths end up equivalent.
+    # -----------------------------------------------------------------------
+    identityProviders:
+      - alias: {{ $fed.idpAlias | quote }}
+        providerId: spiffe
+        enabled: true
+        config:
+          issuer: {{ $fed.trustDomain | quote }}
+          bundleEndpoint: {{ $bundle | quote }}
+{{- end }}
 
     roles:
       realm:
@@ -378,6 +413,24 @@ spec:
           # claim), which needs 26.8+, a preview feature and FGAP v2 -- see
           # docs/agent-identity/04-keycloak-upgrade-path.md.
           standard.token.exchange.enabled: "true"
+{{- if $kc.agentIdentity.federated.enabled }}
+{{- $fed := $kc.agentIdentity.federated }}
+          # Which external subject may authenticate as this client, and through
+          # which identity provider. Both are already in
+          # JpaClientProviderFactory.REQUIRED_SEARCHABLE_ATTRIBUTES, so the
+          # attribute lookup Keycloak does here needs no build option.
+          #
+          # Inert until clientAuthenticatorType is also federated-jwt, which is
+          # deliberately not set here: that flip takes the secret out of
+          # service, and nothing on the token path can present an SVID until
+          # the OpenShell provider token grant is wired. See
+          # docs/agent-identity/09-implementation-plan.md Stage 8.
+          #
+          # One client, one SPIFFE ID: the lookup requires exactly one matching
+          # client, so this is whichever single workload holds the credential.
+          jwt.credential.issuer: {{ $fed.idpAlias | quote }}
+          jwt.credential.sub: {{ $fed.subjectSpiffeId | default (printf "%s/ns/%s/sa/%s-openshell" $fed.trustDomain $ns .Values.username) | quote }}
+{{- end }}
         protocolMappers:
           # Per-hop audience. Set by a fixed mapper rather than by passing
           # audience= on the exchange request: requesting an audience re-scopes

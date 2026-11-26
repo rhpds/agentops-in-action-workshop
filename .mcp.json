@@ -9,6 +9,18 @@
       "env": {
         "PATH": "/home/rollun/.nvm/versions/node/v20.20.2/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
       }
+    },
+    "excalidraw": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-excalidraw-server@2.2.0"
+      ],
+      "env": {
+        "PATH": "/home/rollun/.nvm/versions/node/v20.20.2/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "EXCALIDRAW_NO_AUTOSTART": "1"
+      }
     }
   }
 }

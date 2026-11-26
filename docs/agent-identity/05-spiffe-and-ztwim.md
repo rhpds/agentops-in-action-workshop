@@ -1,4 +1,4 @@
-# 05 — Attested workload identity: ZTWIM, SPIFFE, and why OpenShell is off the critical path
+# 05 — Attested workload identity: ZTWIM, SPIFFE, and where OpenShell sits
 
 The client secret in [02](02-target-architecture.md) is an interim measure. The target is a
 credential the agent cannot copy, cannot leak into a config file, and does not have to be
@@ -81,7 +81,7 @@ and a `ClusterSPIFFEID` is far simpler than going through OpenShell, and it isol
 question (will it accept an SVID as client auth?) from the OpenShell question entirely. The
 console already targets `hermes-plain` at baseline, so this is the live path, not a side quest.
 
-## Why OpenShell is off the critical path
+## Why OpenShell was off the critical path — and why it now owns it
 
 The newer OpenShell documentation describes exactly what we would want: a provider profile with
 `grant_type: token_exchange`, `client_assertion_type: urn:ietf:params:oauth:client-assertion-type:jwt-spiffe`,
@@ -117,6 +117,39 @@ matching CLI — `openshell-cli:0.1` ≙ v0.0.88 is the verified pair today, and
 `tenant-openshell/values.yaml` notes that the tags must stay in step). That upgrade touches the one
 component modules 2, 4 and 5 are built on, so it is its own project with its own re-verification.
 It should not gate the identity work.
+
+### Update, 2026-11-24: the upgrade happened, and it changes the conclusion above
+
+Stage 7 took the gateway to **0.0.116** and the CLI to a matching build, and the sandbox survived
+the jump. On that build the two things missing above are both present. Read off the live cluster:
+
+```
+gateway.toml  provider_spiffe_workload_api_socket_path = "/spiffe-workload-api/spire-agent.sock"
+volumeMount   openshell-gateway: /spiffe-workload-api (readOnly, csi.spiffe.io)
+```
+
+and the provider-profile schema now carries the `token_grant` block this section wished for —
+`grant_type: token_exchange`, `token_endpoint`, `jwt_svid_audience`, `client_assertion_type`,
+`subject_token: {source: provider_credential, credential: …}`, `requested_token_type`, `scopes`,
+`cache_ttl_seconds`, `audience_overrides`. Confirmed by `openshell provider profile lint`, which
+rejects a profile missing `subject_token` with exactly *"token_exchange grants require
+subject_token"*.
+
+**So the plan inverts.** This document proposed doing the SPIFFE work on `hermes-plain` with a plain
+`csi.spiffe.io` volume, keeping OpenShell out of it. That is no longer the better call, for a
+reason that is about the sandbox rather than about OpenShell: the sandbox pod is created by the
+agent-sandbox operator with four fixed volumes and no SPIFFE mount, and nothing we own can add one.
+The gateway therefore holds the **only** SPIFFE socket on the token path, which makes it the only
+candidate broker — and it happens to be the Uber-shaped one, since the sandbox then never receives
+a Keycloak credential at all.
+
+One consequence worth stating: because Keycloak's federated-client lookup requires exactly one
+matching client for a given `jwt.credential.sub`, one client means one SPIFFE ID. The agent's
+client is therefore bound to the gateway's identity
+(`spiffe://<trust-domain>/ns/<user>-agentops/sa/<user>-openshell`), not to each pod that hosts
+Hermie. That is the right shape — the agent identity belongs to the agent — but it does mean
+`hermes-plain` cannot present the same credential, and a second host would need either its own
+client or a shared `ClusterSPIFFEID` template.
 
 ## The open question: how does Keycloak verify an SVID?
 

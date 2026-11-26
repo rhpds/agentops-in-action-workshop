@@ -526,6 +526,49 @@ of one and never binds them, which diverges from Uber. It also still needs the O
 to get the SVID onto the agent's outbound call. Keep as the route of last resort if both the
 preview flag and the ingress change are refused.
 
+### Status, 2026-11-24: route 1 is proven at the protocol level
+
+**Done, verified on the live tenant.** `hermes-agent` authenticates with a SPIRE-attested JWT-SVID
+and no secret: correct SVID → 200 with the same 18 roles and the same claims as before; wrong
+audience → 400 *Invalid token audience*; another workload's SVID → 401; the old shared secret →
+400 `unauthorized_client`. Repeated successfully with the OpenShell gateway's own identity.
+
+Three things were learned that the earlier draft of this stage got wrong or did not know.
+
+**The preview flags were not the blocker they were billed as.** Patching the RHDP-provisioned
+Keycloak CR with `spec.features.enabled: [spiffe, client-auth-federated]` took one `oc patch` and
+one restart, and the agent came back working. Treat it as a request to make of RHDP for a delivery
+cluster, but not as a research risk.
+
+**`federated-jwt` is not in a realm imported before the flag went on.**
+`DefaultAuthenticationFlows.clientAuthFlow()` adds that execution to the built-in `clients` flow
+only when `CLIENT_AUTH_FEDERATED` is enabled *at realm-creation time*, and the admin API refuses to
+add an execution to a built-in flow afterwards. The fix is copy-extend-rebind, which
+`apply-realm-identity.sh` now does. A cluster provisioned with the flag already on needs none of
+it. Until that was found, every attempt failed as `client_not_found` — which is the error
+`FederatedJWTClientAuthenticator` reports for *any* failure, because it never calls
+`context.setClient()`. Do not read that error as "the client lookup failed".
+
+**OpenShell already implements this route, and should own it.** The 0.0.116 gateway holds the only
+`csi.spiffe.io` mount on the token path — the sandbox pod is operator-created with fixed volumes
+and cannot be given one — and its provider profiles carry a `token_grant` block with exactly
+`grant_type: token_exchange`, `jwt_svid_audience`, `client_assertion_type` and a `subject_token`
+reference. So the broker belongs in the gateway, not in a script inside the sandbox. That reverses
+this plan's earlier "keep OpenShell off the critical path", and it is a better architecture: the
+sandbox then holds no Keycloak *minting* credential, and the operator's password never reaches it.
+Be precise about that second claim: the supervisor runs inside the sandbox pod and does receive
+tokens — what it never holds is the human's password. See
+[11-openshell-spiffe-flow.md](11-openshell-spiffe-flow.md).
+
+**Remaining, in order.** (1) Author and import the provider profile — `operator_token` via
+a plain `--credential`, `gateway_token` via the `token_exchange` grant — and a loop to re-stamp the
+subject token, which does **not** refresh itself. (2) Create the provider with `--credential`
+(verified: `--runtime-credentials` is mutually exclusive with it, and `--from-oidc-token` needs a
+gateway registered for OIDC, which ours is not). (3) Teach the sandbox to consume the gateway-minted token instead of
+running its own refresher — a sandbox image change, so a build handoff. (4) Flip the client with
+`FEDERATED_SPIFFE_ID=…`, and delete `clientSecret` from `values.yaml` and `bootstrap-tenant`.
+(5) Re-run the Stage 3 four-cell proof through a real tool call.
+
 **Verify.** For option 1: a tool call succeeds only when both a valid SVID and a valid exchanged
 token are present, and fails when either is removed. For option 2: the exchange succeeds with no
 secret configured anywhere.
@@ -538,6 +581,102 @@ point validates workload attestation and human delegation side by side. That is 
 loud rather than presenting it as a consolation prize.
 
 ---
+---
+
+## Stage 8b — The decided design (2026-11-26)
+
+> **Decided by the author**, after working through the alternatives in
+> [11-openshell-spiffe-flow.md](11-openshell-spiffe-flow.md#the-alternatives-side-by-side):
+> option **A** — OpenShell's native `token_exchange`, which takes the operator's credential out of
+> the agent's pod — together with the true intersection (Decision 2) and per-tool tokens
+> (Decision 3). Nothing here has been executed yet.
+
+Stage 8 proved the *mechanism*. This is the shape we settled on, and what is left to build. Background and the plain-language reasoning are in
+[11-openshell-spiffe-flow.md](11-openshell-spiffe-flow.md).
+
+### Decision 1 — OpenShell's native `token_exchange` is the broker
+
+Chosen over a bespoke broker because it is the only option that gets the operator's credential out
+of the agent's pod. The gateway holds it; the sandbox only ever redeems a voucher minted for its
+own SPIFFE ID. Two SVIDs sign, so **two federated Keycloak clients** are required — the gateway's
+for the intermediate exchange, the sandbox's for the final one. `hermes-agent` must be bound to the
+**sandbox's** SPIFFE ID, since `azp` on the final token names whoever signed last. Artifact C24
+currently stages the gateway's and must be re-pointed.
+
+Known cost, not yet solved: the stored subject token **expires and cannot refresh itself**. Plan on
+the bridge supervisor re-stamping it on a timer.
+
+**Settled since this was written:** `--credential` does work in place of `--from-oidc-token`, so no
+gateway OIDC registration is needed. Proven on the live gateway — `provider create --credential
+operator_token=<token>` then `provider update` with a fresh one, both accepted; `--credential` and
+`--runtime-credentials` are mutually exclusive. See
+[11-openshell-spiffe-flow.md](11-openshell-spiffe-flow.md). The expiry loop itself is still to
+build.
+
+### Decision 2 — a true intersection, via `fullScopeAllowed: false`
+
+**Proven on the cluster 2026-11-26, then reverted.** Set `fullScopeAllowed: false` on the agent
+client and Keycloak issues *the user's roles ∩ the client's scope mappings*:
+
+| Agent client | Exchanged token |
+|---|---|
+| `fullScopeAllowed: true` (today) | all 18 of the operator's roles |
+| `false`, no scope mappings | 0 roles |
+| `false` + 3 telemetry roles mapped | exactly those 3, while the operator keeps all 18 |
+
+No AuthPolicy change: the existing `('tool:' + toolname) in resource_access[...]` predicate then
+enforces the intersection by itself. `azp` and `preferred_username` are unaffected.
+
+**Why this is worth doing beyond correctness:** it creates the exercise the module is missing.
+Revoke a tool from the *agent* and the operator still holds it in the UI while Hermie cannot use
+it — the difference between what a human may do and what they may delegate, made visible in two
+minutes.
+
+### Decision 3 — per-tool tokens
+
+**Proven on the cluster 2026-11-26, then reverted.** One **optional client scope per tool**,
+requested at exchange time:
+
+| Request | `scope` claim | roles |
+|---|---|---|
+| none | `roles groups` | none |
+| `scope=tool-get_reservoir_level` | `… tool-get_reservoir_level` | exactly `tool:get_reservoir_level` |
+| `scope=tool-get_reservoir_level`, operator **lacks** the role | scope silently dropped | **none** |
+
+The last row is the one that matters: a requested scope can only narrow, never grant.
+
+**Two shortcuts were tested and do not work.** Keycloak will not mint a designation you merely ask
+for:
+
+```
+scope=tool-does-not-exist          → 400 invalid_scope   "Invalid scopes: tool-does-not-exist"
+audience=tool:get_reservoir_level  → 400 invalid_client  "Audience not found"
+audience=<a real MCP client>       → 400 invalid_request "Requested audience not available"
+```
+
+So a free-form "which tool is this token for" claim cannot be stamped, and a self-asserted one
+would be worthless anyway — `designation == requested_tool` only means something if minting the
+designation required proving the operator holds that tool.
+
+**And no new AuthPolicy rule is needed.** A token carrying exactly one role *is* a per-tool token;
+the existing predicate already refuses everything else. The checking side is free — the cost is
+entirely on the minting side.
+
+### What Stage 8b has to build
+
+| # | Work | Where | Notes |
+|---|---|---|---|
+| 1 | `fullScopeAllowed: false` + per-tool scope mappings on the agent client | `mcp-gateway.yaml`, `apply-realm-identity.sh` | new values key for which tools the agent may be delegated |
+| 2 | One optional client scope per tool | `mcp-gateway.yaml` | the template already loops `keycloak.toolRoles`; generate from it |
+| 3 | Shorten the exchanged token's lifetime | realm | `accessTokenLifespan` is 1800s; per-tool tokens only pay off when short |
+| 4 | Second federated client for the gateway's SPIFFE ID; re-point `hermes-agent` to the sandbox's | `mcp-gateway.yaml`, `apply-realm-identity.sh` | see Decision 1 |
+| 5 | Author and import the provider profile; create the provider with `--credential` | new chart file | `token_grant` + broker-only subject credential. **Not** `--runtime-credentials` — mutually exclusive with `--credential`, and for `token_exchange` the subject credential *is* stored |
+| 6 | Re-stamp the subject token on a timer | `bridge-supervisor.sh` | keeps the operator password in the bridge, never the sandbox |
+| 7 | Request `scope=tool-X` per call | whatever drives the exchange | OpenShell `cache_ttl_seconds` to avoid a round trip per call |
+| 8 | Re-run the four-cell proof through a real tool call | — | plus a new cell: agent-revoked-but-operator-holds |
+
+**Not changing:** the AuthPolicy, the agent's token-file contract, and anything under `content/**`.
+
 
 ## Stage 9 — Provenance, and the tracing question
 

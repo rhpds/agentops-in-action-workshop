@@ -3,9 +3,13 @@
 Design documents for giving Hermie — the waterplant assistant participants operate in the
 *AgentOps in Action* lab — an identity of its own, distinct from the human operator it acts for.
 
-**Status: design only.** Nothing here is implemented. No chart, no image, and no lab content has
-been changed. [09-implementation-plan.md](09-implementation-plan.md) is the runbook for building it;
-everything else describes the target.
+**Status: being built, on a branch.** Stages 0–7 are done and verified on a live tenant, and
+Stage 8 route 1 — the agent authenticating with a SPIRE-attested JWT-SVID instead of a shared
+secret — is proven at the protocol level. `content/**` and `publishing-house/spec.yaml` are
+deliberately untouched; no lab instruction has changed.
+[09-implementation-plan.md](09-implementation-plan.md) is the runbook and
+[PROGRESS.md](PROGRESS.md) is the running record, including every artifact created on the cluster
+and how to undo it. Everything else describes the target.
 
 ## Why
 
@@ -90,11 +94,13 @@ resulting actor onto everything downstream.
 | [02-target-architecture.md](02-target-architecture.md) | The broker, the exchange, and the intersection rule. Why both facts must live in one token. |
 | [03-uber-mapping.md](03-uber-mapping.md) | Each Uber primitive → our implementation → what we cannot reproduce, and why. |
 | [04-keycloak-upgrade-path.md](04-keycloak-upgrade-path.md) | What FGAP is, the RHBK version question, and what a real `act` claim would buy. |
-| [05-spiffe-and-ztwim.md](05-spiffe-and-ztwim.md) | Attested workload identity with Zero Trust Workload Identity Manager, and why OpenShell is off the critical path. |
+| [05-spiffe-and-ztwim.md](05-spiffe-and-ztwim.md) | Attested workload identity with Zero Trust Workload Identity Manager, and where OpenShell sits — originally off the critical path, now the broker. |
 | [06-provenance.md](06-provenance.md) | How an actor reaches traces, work orders and plant-api — and killing `raised_by: "unknown"`. |
 | [07-phasing.md](07-phasing.md) | Proposed build order, verification gates, and image handoffs. |
 | [08-open-questions.md](08-open-questions.md) | Unverified assumptions and ranked risks, each with the command that settles it. |
 | [10-tool-call-walkthrough.md](10-tool-call-walkthrough.md) | **One tool call, end to end** — every hop and every credential, today and after; plus exactly where SPIRE does and does not sit. |
+| [PROGRESS.md](PROGRESS.md) | **The running record** — what is built, what is on the cluster with which settings, and every correction made along the way. |
+| [11-openshell-spiffe-flow.md](11-openshell-spiffe-flow.md) | **Where OpenShell meets SPIRE** — which pods get a Workload API socket, the three-hop token flow as NVIDIA documents it, and four corrections to how this document set described it. |
 | [09-implementation-plan.md](09-implementation-plan.md) | **The runbook** — every stage with its preconditions, verification, rollback and owner. Includes the ZTWIM install and the OpenShell upgrade. |
 
 ## Two things to carry into any implementation

@@ -251,6 +251,45 @@ keycloak:
     # templates/mcp-gateway.yaml. Move it to the catalog item's secret channel
     # if that ever stops being true.
     clientSecret: hermes-agent-lab-secret
+    # --- the attested replacement for that secret (Stage 8 route 1) ----------
+    # Verified working on 2026-11-24: the exchange succeeds with NO secret
+    # anywhere, the client authenticating with a SPIRE-attested JWT-SVID.
+    #
+    # `enabled` here only puts the SPIFFE identity provider and the client's
+    # two jwt.credential.* attributes into the realm import, which is inert
+    # until the client's clientAuthenticatorType is also federated-jwt. That
+    # last flip is deliberately NOT a chart value: it takes the shared secret
+    # out of service, and nothing on the token path can present an SVID until
+    # the OpenShell provider token grant is wired. Flip it with
+    # files/apply-realm-identity.sh (FEDERATED_SPIFFE_ID=...).
+    #
+    # Hard prerequisite the chart cannot supply: the Keycloak CR needs
+    #   spec.features.enabled: [spiffe, client-auth-federated]
+    # Both preview, and on a shared RHDP cluster that CR is not ours.
+    federated:
+      enabled: false
+      # Must equal the SpireServer's trustDomain in bootstrap-infra.
+      trustDomain: spiffe://agentops.lab
+      # Keycloak's own alias for the identity provider, and the value of the
+      # client's jwt.credential.issuer attribute.
+      idpAlias: spiffe
+      # Where Keycloak fetches SPIRE's JWKS. `/keys` is the SPIFFE bundle
+      # endpoint of bootstrap-infra's SpireOIDCDiscoveryProvider, which serves
+      # the JWKS with the SPIFFE-specific spiffe_sequence / spiffe_refresh_hint
+      # fields Keycloak's SpiffeBundleEndpointLoader expects.
+      #
+      # Empty derives https://spire-oidc.<domain>/keys, where <domain> is
+      # keycloak.host minus its first label -- the same derivation
+      # bootstrap-infra uses, since RHDP publishes Keycloak at sso.<domain>.
+      bundleEndpoint: ""
+      # The one SPIFFE ID allowed to authenticate as this client. One client,
+      # one ID: Keycloak's lookup requires exactly one matching client, so this
+      # names whichever single workload holds the credential. Today that is the
+      # OpenShell gateway -- the only pod on the token path with a
+      # csi.spiffe.io mount.
+      #
+      # Empty derives <trustDomain>/ns/<user>-agentops/sa/<user>-openshell.
+      subjectSpiffeId: ""
   # Every tool role declared in the realm, per MCP server.
   toolRoles:
     telemetry-mcp:

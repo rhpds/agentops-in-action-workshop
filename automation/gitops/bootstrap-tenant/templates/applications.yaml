@@ -119,6 +119,29 @@ spec:
           value: {{ .Values.keycloak.agentIdentity.clientId | quote }}
         - name: keycloak.agentIdentity.clientSecret
           value: {{ .Values.keycloak.agentIdentity.clientSecret | quote }}
+        {{- with .Values.keycloak.agentIdentity.federated }}
+        # The attested replacement for that secret. Only tenant-platform needs
+        # these -- they shape the realm import, not the refresher -- but they
+        # live here with the rest of the agent identity so a future cluster is
+        # configured from one block. Verified on 2026-11-24: the exchange
+        # succeeds with no secret anywhere. See docs/agent-identity/ Stage 8.
+        - name: keycloak.agentIdentity.federated.enabled
+          value: {{ .enabled | quote }}
+        {{- if .enabled }}
+        - name: keycloak.agentIdentity.federated.trustDomain
+          value: {{ .trustDomain | quote }}
+        - name: keycloak.agentIdentity.federated.idpAlias
+          value: {{ .idpAlias | quote }}
+        {{- with .bundleEndpoint }}
+        - name: keycloak.agentIdentity.federated.bundleEndpoint
+          value: {{ . | quote }}
+        {{- end }}
+        {{- with .subjectSpiffeId }}
+        - name: keycloak.agentIdentity.federated.subjectSpiffeId
+          value: {{ . | quote }}
+        {{- end }}
+        {{- end }}
+        {{- end }}
         {{- else }}
         - name: keycloak.agentIdentity.enabled
           value: "false"
