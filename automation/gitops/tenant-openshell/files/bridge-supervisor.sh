@@ -356,11 +356,13 @@ export MCP_TOKEN_URL='${MCP_TOKEN_URL}'
 export TOKEN_REFRESH_SECONDS='${TOKEN_REFRESH_SECONDS}'
 export MCP_EXCHANGE_CLIENT_ID='${MCP_EXCHANGE_CLIENT_ID}'
 export MCP_EXCHANGE_CLIENT_SECRET='${MCP_EXCHANGE_CLIENT_SECRET}'
-# Attested mode: the refresher publishes this placeholder instead of a token,
-# and the supervisor swaps it for the real Bearer at egress -- so no Keycloak
-# credential, and no operator password, ever enters the sandbox. Empty unless
-# keycloak.agentIdentity.attested, in which case the refresher behaves as before.
-export MCP_TOKEN_PLACEHOLDER='${MCP_TOKEN_PLACEHOLDER:-}'
+# Attested mode: in the SANDBOX the refresher publishes this placeholder
+# instead of a token, and the supervisor swaps it for the real Bearer at egress
+# -- so no Keycloak credential, and no operator password, ever enters the
+# sandbox. Renamed on the way in on purpose: the bridge must NOT set
+# MCP_TOKEN_PLACEHOLDER in its own environment, because it runs the same
+# refresher for its readiness probe and that probe needs a real realm JWT.
+export MCP_TOKEN_PLACEHOLDER='${SANDBOX_TOKEN_PLACEHOLDER:-}'
 # Availability marker; the local provider fetches pages directly over HTTP.
 export FIRECRAWL_API_URL=http://waterplant-docs:8080
 mkdir -p /sandbox/.hermes/plugins/web/firecrawl

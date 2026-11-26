@@ -497,8 +497,14 @@ spec:
             # egress-resolved placeholder. See docs/agent-identity Stage 8b.
             - { name: AGENT_IDENTITY_ATTESTED, value: "true" }
             - { name: SUBJECT_TOKEN_RESTAMP_SECONDS, value: {{ .Values.keycloak.agentIdentity.restampSeconds | quote }} }
-            # Forwarded into the sandbox by prepare()'s hermes-env.sh heredoc.
-            - { name: MCP_TOKEN_PLACEHOLDER, value: "${MCP_GATEWAY_TOKEN}" }
+            # Deliberately NOT called MCP_TOKEN_PLACEHOLDER. The bridge runs the
+            # same refresher for its OWN readiness probe, and that probe needs a
+            # real realm JWT -- the `mcp` listener's AuthPolicy accepts any
+            # valid one. Naming it MCP_TOKEN_PLACEHOLDER here made the bridge
+            # write the placeholder into its own token file and 401 forever,
+            # wedging prepare(). prepare() renames it on the way into the
+            # sandbox, which is the only place it should take effect.
+            - { name: SANDBOX_TOKEN_PLACEHOLDER, value: "${MCP_GATEWAY_TOKEN}" }
             {{- end }}
             {{- if and .Values.keycloak.agentIdentity.enabled (not .Values.keycloak.agentIdentity.attested) }}
             # The pre-attestation path: the in-sandbox refresher exchanges with

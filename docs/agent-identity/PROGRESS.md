@@ -1880,3 +1880,44 @@ ArgoCD renders from git, and all of the above is uncommitted. The realm side is 
 script applied it), but the bridge's provider profile, the placeholder env, the re-stamp loop and
 the image bump reach the cluster only once the branch is pushed. Until then the attested path cannot
 be exercised through the UI.
+
+### 2026-11-26 — Pushed and synced; one self-inflicted wedge found and fixed in source
+
+All three Applications reconciled to the pushed commit, Synced/Healthy, and the sync delivered
+exactly what it should:
+
+```
+AuthPolicy predicate   azp == 'spiffe://…/sa/<user>-openshell-sandbox'
+bridge env             AGENT_IDENTITY_ATTESTED=true   SUBJECT_TOKEN_RESTAMP_SECONDS=900
+                       MCP_EXCHANGE_CLIENT_SECRET     (absent)
+                       IMAGE_REF                      …/waterplant-hermes:test3
+```
+
+**Then the bridge wedged, and it was my bug.** `prepare()` never finished — the supervisor log was
+an unbroken wall of `HTTP Error 401` from `wait-for-gateway.py`.
+
+Chain of cause, worth recording because each step looked innocent:
+
+1. `wait-for-gateway.py` reads `$HERMES_HOME/mcp-tokens/gateway.json` and sends it as a Bearer to
+   list the gateway's tools. The bridge runs it for its own readiness gate.
+2. `mcp-auth-policy` (listener `mcp`, which is what the service hostname routes to — *not* the
+   `mcps` listener the tool calls use) requires **any valid realm JWT**. Verified: `initialize`
+   with no Authorization header is 401, and so is a bogus Bearer. My assumption that `tools/list`
+   was anonymous was wrong — the `anonymous` rule lives on the *other* listener.
+3. I had set `MCP_TOKEN_PLACEHOLDER` as a **bridge container env var**, intending it only to be
+   forwarded into the sandbox. But the bridge runs the same refresher, so it took the attested
+   branch too and wrote the placeholder into its own probe token file. Confirmed:
+   `/tmp/work/probe/mcp-tokens/gateway.json` contained `"access_token": "${MCP_GATEWAY_TOKEN}"`.
+4. So the bridge sent `Bearer ${MCP_GATEWAY_TOKEN}` to a listener demanding a real JWT, forever.
+
+Fixed in source by renaming the bridge-side variable to `SANDBOX_TOKEN_PLACEHOLDER`, with
+`prepare()`'s heredoc renaming it to `MCP_TOKEN_PLACEHOLDER` on the way into the sandbox — the only
+place it should take effect. Comments in both files now say why the names differ, since the obvious
+"simplification" of making them match is exactly the bug.
+
+**Note this is not a fallback.** The bridge's probe token is a plain operator password grant with
+`azp=mcp-gateway`; it authenticates to the `mcp` listener but satisfies nothing on `mcps`, where
+both tool-call predicates still require the attested agent. The readiness gate and the tool path
+are different listeners with different policies.
+
+**Needs one more push** to reach the cluster.
