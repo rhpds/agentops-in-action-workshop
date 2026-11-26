@@ -2068,3 +2068,220 @@ Also learned, and now recorded in the script comment: the two lines are load-bea
 so the obvious tidy-up of dropping the `:-` reintroduces a silent, two-steps-removed failure.
 
 **Needs a push:** `files/bridge-supervisor.sh`.
+
+### 2026-11-26 — The model key is an OpenShell 0.0.116 behaviour change, not a bug in our code
+
+Diffing against `main` was the right instinct and it found it. The model-key failure is **not** the
+attach-at-create-time theory I argued earlier — that was wrong, and a fresh sandbox with
+`--provider maas` at create time still fails the same way.
+
+**There is no `openai` provider profile on 0.0.116.** The builtin list is aws, aws-s3, google-cloud,
+aws-bedrock, deepinfra, google-vertex-ai, nvidia, claude-code, codex, copilot, cursor, github, pypi.
+`provider profile export openai` returns *"provider profile not found"*, yet
+`provider create --type openai` still succeeds — so the provider exists with a type nothing backs.
+
+The documentation states the consequence directly:
+
+> "The example `openai` and `anthropic` profiles bind credentials to their public vendor endpoints.
+> To use a proxy or compatible API at another host, **import a separate profile that declares that
+> host** and attach a provider created from that profile. OpenShell never broadens a profile's
+> credential boundary from a base URL environment variable alone: if a provider's `*_BASE_URL`
+> points outside the hosts its profile declares, the profile is treated as **endpointless** and its
+> credential **binds only through explicit sandbox policy**."
+
+So `maas` — an `openai`-typed provider whose `base_url` is MaaS — is endpointless, and the
+`model_endpoint` policy rule the lab adds does not name the provider, so nothing authorises the
+substitution. The proxy passes `${OPENAI_API_KEY}` through verbatim.
+
+**On 0.0.92 this could not happen:** `05-spiffe-and-ztwim.md` recorded that build's profile schema as
+"static-credential only" — no endpoints, no binding, so a placeholder resolved anywhere the policy
+allowed. Endpoint binding arrived with the upgrade.
+
+**So this is a real regression introduced by Stage 7's 0.0.92 → 0.0.116 bump, and it breaks the
+documented module-2 flow** (`module-02-sandbox-the-agent.adoc:120`, which promises "it puts an
+opaque placeholder in the environment and swaps it for the key at the proxy"). It is not caused by
+the identity work, and it will affect the workshop on any cluster running 0.0.116.
+
+The fix mirrors what we already do for `waterplant-mcp`: import a custom profile declaring the MaaS
+host, and create `maas` from that profile instead of `--type openai`. Not applied — the author asked
+for no changes to the model path, and this now also touches `content/**`, which is out of scope for
+this branch.
+
+### Honest accounting of this session's failures
+
+Nine distinct failures. Mine, and not:
+
+| # | Failure | Whose |
+|---|---|---|
+| 1 | both runtimes down after flipping `hermes-agent` to federated-jwt | mine |
+| 2 | model-key binding broken by detaching the provider | mine |
+| 3 | bridge wedged: `MCP_TOKEN_PLACEHOLDER` set on the bridge, not just forwarded | mine |
+| 4 | profile endpoint pointed at the OpenShell gateway, not the MCP gateway | mine |
+| 5 | profile endpoint L4-only, so a credentialed endpoint was refused | mine |
+| 6 | lint treated as a fatal gate for an already-imported profile | mine |
+| 7 | empty `hermes-env.sh` from `set -u` plus a truncating redirect | mine |
+| 8 | `sandbox create … -- true` puts the sandbox in Error on 0.0.116 | **OpenShell** |
+| 9 | model key not substituted — endpoint binding introduced in 0.0.116 | **OpenShell** |
+
+Seven of nine were mine. The OpenShell setup was not fragile: the sandbox created, both providers
+attached, the policy rules applied, the upload and `start-hermes` worked, and the relay adopted —
+all first time, once I used the documented commands from the right container.
+
+**Why so many at once, which is the useful lesson.** I changed the *credential contract* that
+everything in the bridge depends on — the token file, the exchange env, the secret — and then
+discovered its consumers one at a time: the in-sandbox refresher, the bridge's own readiness probe,
+and the `hermes-env.sh` heredoc. Enumerating the consumers of `MCP_EXCHANGE_*` and of the token file
+before changing it would have collapsed items 3 and 7 into one edit, and items 4–6 were avoidable by
+dry-running the new code against the live CLI, which is what eventually found them cheaply.
+
+### 2026-11-26 — RETRACTED: the "0.0.116 regression" was wrong, and the fix would have caused it
+
+The previous entry's claim is **withdrawn**. Verified against the OpenShell source at both tags
+(`ai-openshell/openshell`, tags `v0.0.92` and `v0.0.116`):
+
+* **There was never an `openai` builtin profile.** `BUILT_IN_PROFILE_YAMLS` in
+  `crates/openshell-providers/src/profiles.rs` is **byte-identical** at both tags — the same 13
+  entries, no `openai`, no `anthropic`. Nothing was removed. The `openai`/`anthropic` example
+  profiles are *added* later, at v0.1.0, when the builtins are dropped entirely.
+* **`--type openai` is correct usage on 0.0.116.** It is a *legacy provider type*
+  (`crates/openshell-providers/src/providers/openai.rs`), a registry separate from profiles. A test
+  is literally named `import_provider_profile_allows_legacy_provider_type_ids_without_built_in_profiles`.
+* **The docs I quoted are the wrong version.** That text is `latest` (v0.1.10). The version-pinned
+  0.0.116 docs document `--type openai` plus a base-URL config as the supported path for any
+  OpenAI-compatible host.
+* **The mechanism runs the opposite way to my description.** For an unprofiled legacy type,
+  `effective_endpoints` is `None`, so **no binding is recorded** and the credential resolves at any
+  endpoint network policy allows. Withholding requires a profile that *exists* and declares zero
+  endpoints.
+
+Only one part survives: static credential endpoint binding **was** introduced between the versions,
+at **v0.0.103** (`feat(proxy): bind static credentials to provider endpoints`, PR #2510).
+
+**The fix I was about to apply would have caused the very failure I was trying to fix.** Importing a
+profile that declares `api.openai.com` — or any profile at all — binds the credential to *that*
+host, so it would then refuse to resolve at MaaS. Having no profile is what makes it work. The
+author asked for verification before I applied it; that call saved a self-inflicted regression, and
+it is the second time in this session that a confident causal story of mine has not survived
+checking.
+
+### The actual root cause looks like `providers_v2_enabled`
+
+Measured in the sandbox:
+
+```
+printenv OPENAI_API_KEY   -> NOT set
+MCP_GATEWAY_TOKEN         -> NOT set
+```
+
+**Neither provider is injecting anything** — not `maas`, not `waterplant-mcp` — even though
+`sandbox provider list hermie` shows both attached. So this is **one shared cause, not two
+problems**: it is also why the attested MCP credential could never have resolved, since the
+placeholder Hermes sends has nothing to be swapped for.
+
+`openshell settings get` on the gateway:
+
+```
+providers_v2_enabled = <unset> (unset)
+```
+
+Providers v2 is the feature that makes attached provider profiles contribute credentials and policy.
+With it unset, attachment is recorded but injects nothing. It is a **gateway setting**, not a chart
+value, and nothing in `gateway.toml` or the vendored chart sets it — so it has been unset since the
+0.0.116 upgrade, and on 0.0.92 the key did not exist at all.
+
+**Not applied:** enabling it is a gateway-global change and was refused by this session's permission
+classifier, correctly — it affects every sandbox on that gateway. It needs the author's decision.
+The MaaS profile draft was linted but **deliberately not imported**, and should now be discarded.
+
+### 2026-11-26 — The original implementation, and my second refuted hypothesis
+
+PRs #64/#65/#66 are in `main`'s history and settle how key injection is meant to work.
+
+**PR #64** (`feat/openshell-credential-placeholders`) introduced `seed_provider()` exactly as it
+stands today — `--type openai`, `--credential OPENAI_API_KEY=$key`, `--config base_url=…` — with a
+sentinel in `config.yaml` swapped inside the sandbox by `seed_model_key()`.
+
+**PR #65** (`fix/openshell-model-key-env-ref`) replaced the sentinel with a literal
+`${OPENAI_API_KEY}` reference, because Hermes expands `${VAR}` in config values as it loads them
+(`hermes_cli/config.py`, `_expand_env_vars`). Its commit message states the diagnostic precisely:
+
+> "An unresolved reference is kept verbatim rather than blanked, so a sandbox started without
+> `--provider maas` shows `${OPENAI_API_KEY}` in its config rather than silently running with an
+> empty key."
+
+So the `Received=${OPENAI_API_KEY}` error is not a bug — it is the **designed symptom** of
+`OPENAI_API_KEY` being absent from the sandbox environment. It says nothing about *why*.
+
+**Measured properly this time.** My first reading used `oc exec`, which bypasses the supervisor;
+re-measured through `openshell sandbox exec`, which is the vantage point that matters:
+
+```
+OPENAI_API_KEY     EMPTY/unset
+MCP_GATEWAY_TOKEN  EMPTY/unset
+```
+
+Both absent, so the earlier reading stands and this is still one shared cause.
+
+**`providers_v2_enabled` is NOT the cause — second hypothesis refuted.** The 0.0.116 docs are
+explicit:
+
+> "When the setting is disabled or unset, attached provider profiles do not add network policy
+> entries to the effective policy. **Static provider credential placeholders still use the profile
+> endpoints as a resolution boundary.**"
+
+It governs *policy composition*, not credential delivery. Placeholder injection should happen with
+it unset. The gateway-global write was blocked by this session's permission classifier and is no
+longer worth running.
+
+**What remains unexplained, and the one deviation I have left.** Both providers are attached, the
+`model_endpoint` policy rule exists, the credential is stored, and nothing is injected. The single
+remaining difference from the known-good flow is that I created the sandbox with **`--detach`**
+rather than the documented `-- true`, because `-- true` puts the sandbox into `Error` on 0.0.116
+(`MainProcessExited`). Whether `--detach` changes credential materialisation is **untested**, and I
+am recording it as the next hypothesis rather than acting on it — two of my causal stories have
+already failed verification today, and the third should be tested on a throwaway sandbox, not on the
+participant's.
+
+### 2026-11-26 — SOLVED: a legacy-type provider delivers no credential on 0.0.116
+
+Proven on two throwaway sandboxes, so none of it depends on `hermie`, on `--detach`, or on anything
+this branch changed:
+
+| Sandbox | Provider | `OPENAI_API_KEY` in the sandbox |
+|---|---|---|
+| `probe-a` | `maas`, `--type openai` (legacy), created **without** `--detach`, long-running main process | **unset** |
+| `probe-b` | `maas-probe`, created from a profile **declaring the MaaS host** | **set**, 58 chars, `opensh…` — OpenShell's opaque placeholder |
+
+That also disposes of the `--detach` hypothesis: `probe-a` used the documented long-running form and
+still got nothing.
+
+**Why.** A legacy `--type openai` provider has no profile, therefore no profile endpoints; and
+OpenShell refuses to bind an unprofiled provider through sandbox policy (`failed_precondition`:
+*"policy credential binding requires an endpointless provider profile"*). With no valid resolution
+boundary it delivers nothing at all — confirmed directly: no credential env on the pod, and
+`OPENSHELL_MAIN_PROCESS_SPEC` is `{version, command, tty}` with no `env` key whatsoever. Hermes then
+keeps the literal `${OPENAI_API_KEY}`, which is exactly the symptom PR #65 designed to be visible.
+
+**This reconciles the subagent's warning with the original plan.** Its objection — "importing the
+profile is what would break you" — is correct *for the vendor `openai.yaml`*, whose endpoint is
+`api.openai.com`: that binds the credential away from MaaS. A profile declaring **our** host binds
+it exactly where it is needed. The distinction is the host, not the existence of a profile. My first
+instinct was right and my stated reason for it was wrong, which is worth separating.
+
+**Also corrected: a false comment in the original code.** PR #64's `seed_provider()` said it "uses
+the builtin openai profile", and there has never been such a profile in any version this lab has
+run. It worked on 0.0.92 because that build had no endpoint binding at all, not because a profile
+was doing anything.
+
+**Implemented in source:**
+
+| File | Change |
+|---|---|
+| `files/waterplant-maas-profile.yaml` | **new** — declares the MaaS host, `protocol: rest`, `access: full`, `OPENAI_API_KEY` as a bearer credential |
+| `files/bridge-supervisor.sh` | `seed_provider()` now lints-and-imports that profile (skipping when present) and creates `maas` with `--type waterplant-maas`; falls through to `provider update` when it exists |
+| `templates/bridge.yaml` | the profile into the ConfigMap |
+
+**Not yet done, and it needs the author's go-ahead:** a provider's type is fixed at creation, so the
+existing `maas` must be deleted and recreated from the profile — and because `--provider` binds at
+create time, the `hermie` sandbox must be recreated once more to pick it up. That is the last
+destructive step, and the one that finally makes the UI test possible.

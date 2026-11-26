@@ -1,0 +1,42 @@
+# Provider profile for the lab's MaaS model endpoint.
+#
+# Why this exists, measured on 0.0.116 with two throwaway sandboxes:
+#
+#   provider --type openai (the legacy type, as PR #64 created it)
+#     -> OPENAI_API_KEY is NOT injected into the sandbox at all. Not in the pod
+#        env, not in OPENSHELL_MAIN_PROCESS_SPEC. Hermes therefore keeps the
+#        literal ${OPENAI_API_KEY} from config.yaml -- which PR #65 deliberately
+#        made the visible symptom of "started without --provider maas" -- and
+#        LiteLLM rejects it as a virtual key.
+#
+#   provider created from THIS profile
+#     -> OPENAI_API_KEY is set to OpenShell's opaque 58-char placeholder, and
+#        the proxy substitutes the real key at egress.
+#
+# A legacy-type provider has no profile endpoints, and OpenShell refuses to bind
+# an unprofiled provider through sandbox policy, so it has no valid resolution
+# boundary and nothing is delivered. Declaring the host here supplies one.
+#
+# Declare the LAB's host, never api.openai.com: a profile binds the credential
+# to the hosts it names, so the vendor profile would bind it away from MaaS.
+#
+# Templated by tenant-openshell/templates/bridge.yaml; do not edit in place.
+id: waterplant-maas
+display_name: Waterplant model endpoint (MaaS)
+description: OpenAI-compatible inference at the lab's MaaS host
+category: inference
+inference_capable: true
+credentials:
+  - name: api_key
+    description: LiteLLM virtual key for the lab's MaaS endpoint
+    required: true
+    auth_style: bearer
+    header_name: authorization
+    env_vars:
+      - OPENAI_API_KEY
+endpoints:
+  - host: "__MODEL_HOST__"
+    port: 443
+    protocol: rest
+    access: full
+    enforcement: enforce

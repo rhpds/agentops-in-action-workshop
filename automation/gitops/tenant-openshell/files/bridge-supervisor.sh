@@ -72,16 +72,38 @@ connect_cli() {
 }
 
 # Holds the real model key in the gateway, so it never reaches config.yaml, the
-# lab guide or a terminal. Uses the builtin openai profile with the MaaS base
-# URL, which binds the credential to that host — verified resolving there on
-# cluster-dpvq7. Idempotent: create fails harmlessly when it already exists.
+# lab guide or a terminal.
+#
+# Created from a PROFILE that declares the MaaS host, not from the legacy
+# `--type openai`. There is no builtin `openai` profile on this build (the
+# comment that used to be here claimed otherwise), and a legacy-type provider has
+# no endpoints to bind its credential to, so OpenShell delivers nothing: measured
+# on 0.0.116, OPENAI_API_KEY was absent from the sandbox entirely and Hermes kept
+# the literal ${OPENAI_API_KEY} that PR #65 writes into config.yaml.
+# See files/waterplant-maas-profile.yaml.
+#
+# Idempotent: create falls through to update when the provider already exists.
 seed_provider() {
-  local key
+  local key profile host
   key=$(secret_value MODEL_API_KEY)
   [ -n "$key" ] || { log "no MODEL_API_KEY in $HERMES_ENV_SECRET; skipping provider"; return 0; }
-  openshell provider create --name "$PROVIDER_NAME" --type openai \
-    --credential "OPENAI_API_KEY=$key" \
-    --config "base_url=$MODEL_BASE_URL" >/dev/null 2>&1
+  host=${MODEL_BASE_URL#*://}; host=${host%%/*}; host=${host%%:*}
+  profile=/tmp/waterplant-maas-profile.yaml
+  sed -e "s|__MODEL_HOST__|${host}|" /config/waterplant-maas-profile.yaml > "$profile"
+  if openshell provider list-profiles 2>/dev/null | strip | grep -q '^ *waterplant-maas '; then
+    log "provider profile waterplant-maas already present"
+  elif openshell provider profile lint --file "$profile" >/dev/null 2>&1; then
+    openshell provider profile import --file "$profile" >/dev/null 2>&1 \
+      && log "provider profile waterplant-maas imported"
+  else
+    log "ERROR: waterplant-maas profile failed lint; the model key will not resolve"
+    openshell provider profile lint --file "$profile" 2>&1 | strip | sed 's/^/    /'
+    return 1
+  fi
+  openshell provider create --name "$PROVIDER_NAME" --type waterplant-maas \
+    --credential "OPENAI_API_KEY=$key" >/dev/null 2>&1 \
+    || openshell provider update "$PROVIDER_NAME" \
+         --credential "OPENAI_API_KEY=$key" >/dev/null 2>&1
   log "provider $PROVIDER_NAME ready; attach it with: openshell sandbox create ... --provider $PROVIDER_NAME"
 }
 

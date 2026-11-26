@@ -225,6 +225,8 @@ data:
 {{ .Files.Get "files/bridge-supervisor.sh" | indent 4 }}
   waterplant-mcp-profile.yaml: |
 {{ .Files.Get "files/waterplant-mcp-profile.yaml" | indent 4 }}
+  waterplant-maas-profile.yaml: |
+{{ .Files.Get "files/waterplant-maas-profile.yaml" | indent 4 }}
   mcp-token-refresh.py: |
 {{ .Files.Get "files/mcp-token-refresh.py" | indent 4 }}
   wait-for-gateway.py: |
