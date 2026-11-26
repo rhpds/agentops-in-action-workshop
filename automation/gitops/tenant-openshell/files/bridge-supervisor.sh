@@ -123,13 +123,29 @@ seed_mcp_provider() {
       -e "s|__REALM_ISSUER__|${MCP_TOKEN_URL%/protocol/openid-connect/token}|" \
       -e "s|__MCP_GATEWAY_HOST__|${mcp_host}|" \
       /config/waterplant-mcp-profile.yaml > "$profile"
-  if ! openshell provider profile lint --file "$profile" >/dev/null 2>&1; then
-    log "ERROR: waterplant-mcp profile failed lint; not importing"
-    openshell provider profile lint --file "$profile" 2>&1 | strip | sed 's/^/    /'
-    return 1
+  # Import only when absent. `lint` refuses an id that already exists
+  # ("custom provider profile 'waterplant-mcp' already exists"), and `update`
+  # needs a resource_version taken from an export, which is more ceremony than
+  # a startup script should carry. So: lint-and-import the first time, and
+  # afterwards trust what is there.
+  #
+  # The trade-off, stated plainly: a CHANGED profile in git will NOT be
+  # re-applied to a workspace that already has one. To force a refresh:
+  #   openshell provider delete waterplant-mcp
+  #   openshell provider profile delete waterplant-mcp
+  # then restart the bridge.
+  if openshell provider list-profiles 2>/dev/null | strip | grep -q '^ *waterplant-mcp '; then
+    log "provider profile waterplant-mcp already present; leaving it alone"
+  else
+    if ! openshell provider profile lint --file "$profile" >/dev/null 2>&1; then
+      log "ERROR: waterplant-mcp profile failed lint; not importing"
+      openshell provider profile lint --file "$profile" 2>&1 | strip | sed 's/^/    /'
+      return 1
+    fi
+    openshell provider profile import --file "$profile" >/dev/null 2>&1 \
+      && log "provider profile waterplant-mcp imported" \
+      || { log "ERROR: waterplant-mcp profile import failed"; return 1; }
   fi
-  openshell provider profile import --file "$profile" >/dev/null 2>&1 \
-    && log "provider profile waterplant-mcp imported"
   tok=$(operator_access_token)
   [ -n "$tok" ] || { log "ERROR: no operator token; cannot seed $MCP_PROVIDER_NAME"; return 1; }
   # --credential, NOT --runtime-credentials: for a token_exchange profile the

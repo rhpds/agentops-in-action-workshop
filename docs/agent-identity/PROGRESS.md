@@ -1959,3 +1959,34 @@ So the profile and provider now exist on the gateway, and the bridge's own `seed
 idempotent over them (`create` falls through to `update`).
 
 **Needs a push:** `files/waterplant-mcp-profile.yaml` and `files/bridge-supervisor.sh`.
+
+### 2026-11-26 — Profile seeding: lint cannot validate an id that already exists
+
+The synced bridge failed seeding again, with a different message:
+
+```
+field=id  custom provider profile 'waterplant-mcp' already exists
+```
+
+My `seed_mcp_provider` did lint -> import -> create, and treated any lint failure as fatal, so a
+profile that was *already correctly imported* blocked the provider creation behind it.
+
+`provider profile update` is not the answer either:
+
+```
+field=resource_version  custom provider profile update requires a non-zero resource_version;
+                        export the current profile before editing it
+```
+
+— optimistic concurrency, requiring an export-edit-submit cycle, which is more ceremony than a
+startup script should carry.
+
+**Resolved as: import only when absent.** Lint-and-import the first time (where it earned its keep
+by catching the wrong host and the L4 endpoint), and afterwards trust what is there. The trade-off
+is recorded in the script rather than left implicit: **a changed profile in git will NOT be
+re-applied to a workspace that already has one.** Forcing a refresh is two commands plus a bridge
+restart, documented in the comment.
+
+Detection dry-run against the live gateway confirms the new branch takes the "already present" path.
+
+**Needs a push:** `files/bridge-supervisor.sh`.
