@@ -184,6 +184,27 @@ provenance:
   # second trace beside every real one in the participant's experiment.
   # Turning this off keeps every hop, including 401s at the public listener.
   toolCallsOnly: true
+  # Fold each gateway provenance trace into the agent's own trace, then
+  # delete the original -- so the participant sees ONE trace per turn carrying
+  # waterplant.actor and a waterplant.verified_calls list, instead of their
+  # turn plus a gateway trace per tool call sorted in among it.
+  #
+  # This is a post-hoc join, and it has to be: the agent emits no W3C trace
+  # context and the MCP broker forwards no unknown headers, so the two traces
+  # cannot be linked at source and the broker is not ours to change.
+  stitch:
+    enabled: false
+    # The collector exports to this port on localhost instead of to MLflow,
+    # so no loose gateway trace is ever created.
+    receiverPort: 4319
+    # How often the buffer is drained. Spans arrive within ~1s of the call
+    # (the collector's batch timeout) and the agent's trace is usually
+    # already there, so this is the only remaining latency and it is small.
+    tickSeconds: 1
+    # A span whose turn never appears -- the agent died mid-call, say -- is
+    # emitted as its own trace after this rather than dropped. Visible beats
+    # silently missing. The gateway access log has it either way.
+    unmatchedTimeoutSeconds: 300
   resources:
     requests: { cpu: 10m, memory: 64Mi }
     limits:   { cpu: 200m, memory: 192Mi }

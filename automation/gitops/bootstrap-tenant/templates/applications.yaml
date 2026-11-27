@@ -114,6 +114,13 @@ spec:
         # no error anywhere.
         - name: provenance.enabled
           value: {{ .Values.policy.provenanceEnabled | quote }}
+        # Fold the gateway's provenance traces into the agent's own trace
+        # and delete the originals. Without it a participant gets their turn
+        # plus one gateway trace per tool call, sorted in among it -- correct
+        # but unreadable. Its own value so it can be turned off for debugging
+        # without turning provenance off.
+        - name: provenance.stitch.enabled
+          value: {{ and .Values.policy.provenanceEnabled .Values.policy.provenanceStitch | quote }}
         - name: keycloak.host
           value: {{ $keycloakHost | quote }}
         {{- if .Values.keycloak.agentIdentity.enabled }}

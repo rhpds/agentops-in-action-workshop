@@ -2928,3 +2928,209 @@ Correlation is time + tool name; `jti` cannot serve, since it identifies the tok
 across calls within its cache TTL.
 
 `tp=%REQ(TRACEPARENT)%` stays in the access-log format — it is what made this diagnosable.
+
+---
+
+### 2026-11-27 — the N-extra-traces problem: solved by promotion + post-hoc stitching
+
+Two complaints, both valid: a gateway trace showed no actor or tool, and every turn produced one
+main trace plus N gateway traces. Both now fixed, and the second needed real digging.
+
+**Why the first happened.** The provenance values were **span** attributes. MLflow turns an OTLP
+*resource* attribute into a trace tag — that is how `service.name` appears — but its API returns
+`trace_info` with no spans, so a span attribute is invisible in the trace list and to anything
+reading over REST. Fixed with the collector's `groupbyattrs` processor, which moves them to
+resource level and re-groups so two batched calls cannot share one actor. Gateway traces now carry
+`waterplant.actor/tool/server/mcp_method` as visible tags.
+
+Also: a tool call crosses the gateway twice and only hop 2 carries anything, so hop 1 was shipping
+an empty trace per call. The `filter` processor now drops any span that is not an authorized tool
+call (`provenance.toolCallsOnly`).
+
+**Why nesting at source is impossible — two independent breaks, both measured.**
+
+1. *The agent emits no trace context.* No gateway trace has ever shared a trace id with an agent
+   trace. MLflow's trace id **is** the OTel trace id, so if `hermes-otel` propagated context the
+   two would have merged by themselves.
+2. *The MCP broker forwards no unknown headers.* A marker injected by Authorino on hop 1 arrives
+   **absent** on hop 2. Independently: the two hops carry different `traceparent` trace ids and
+   hop 2's root span has an empty Parent ID, even though Envoy injects `traceparent` upstream
+   whenever tracing is on — so the broker received a context and dropped it.
+
+Break 2 is decisive: it sits between the agent and the only span carrying the actor, so even a
+perfectly instrumented agent would lose it. Checked the broker for a way in and found none —
+`MCPGatewayExtension.spec` has no telemetry fields, and while the binary embeds the OTel SDK
+(`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `W3C`) it contains **no `otelhttp`**, so it
+has no HTTP instrumentation to propagate with. Header smuggling is out for the same reason as
+traceparent.
+
+**So the join is done afterwards.** A `stitcher` sidecar in the collector pod
+(`tenant-platform/files/provenance-stitcher.py`) polls MLflow, matches each gateway trace to the
+agent turn whose `[request_time, request_time+execution_duration]` window contains it, writes
+`waterplant.actor` and a `waterplant.verified_calls` list onto that trace, and deletes the
+gateway trace. Two endpoints make it possible, both found by probing because the obvious
+spellings 404:
+
+```
+PATCH /mlflow/api/3.0/mlflow/traces/{trace_id}/tags   {key, value}
+POST  /mlflow/api/2.0/mlflow/traces/delete-traces     {experiment_id, request_ids}
+```
+
+A sidecar rather than console code, because the console would need an image build and this needs
+none — the python image is already pulled for the init container beside it, and the MLflow
+credential and CA are already mounted in that pod.
+
+**Measured on a two-tool turn:**
+
+```
+tr-b1c561bb...  hermes-agent  "Final: reservoir level and pump 4 status please."
+    waterplant.actor          [{'role':'subject','sub':'operator'},
+                               {'role':'agent','sub':'spiffe://.../user-gngp7-openshell-sandbox'}]
+    waterplant.verified_calls tool=get_pump_status      server=.../telemetry-mcp
+                              tool=get_reservoir_level  server=.../telemetry-mcp
+```
+
+One trace per turn, actor on it, nothing left behind.
+
+**Honest about what it is:** a post-hoc join on time, not a real parent/child link. Time-window
+matching is sound because one tenant runs one agent answering one turn at a time; it would not be
+sound for a concurrent agent, which is why the stitcher checks containment rather than nearest.
+The gateway spans' own detail is discarded with the deleted trace and survives only in the access
+log — which is why that log stays. `provenance.stitch.deleteAfterFold=false` keeps both.
+
+**Shipped:** `provenance.toolCallsOnly`, `provenance.stitch.{enabled,intervalSeconds,settleSeconds,deleteAfterFold}`,
+`files/provenance-stitcher.py`, the `groupbyattrs` processor, and `policy.provenanceStitch`
+forwarded from bootstrap-tenant. Test residue cleaned: 26 orphan gateway traces deleted, the hop-1
+marker removed from `mcp-auth-policy`, the live EnvoyFilter re-applied from chart output.
+
+---
+
+### 2026-11-27 — real nesting achieved: the gateway's actor is now a child span of the tool call
+
+I was wrong to say a parent/child link was unreachable. It is unreachable *in the request path* --
+both breaks there are real and stand -- but not unreachable overall.
+
+**The fact that unlocked it: MLflow's trace id IS the OTel trace id** (`tr-` + 32 hex). A span
+POSTed to `/v1/traces` carrying an existing trace's id is filed into that trace. Verified by
+watching a trace's span list grow from 6 to 7 after a POST.
+
+Normal distributed tracing joins because every hop extracts `traceparent`, emits under the same
+trace id, and injects downstream. One hop here refuses and is not ours to change, so the context
+is re-attached afterwards instead. Same end state.
+
+**Three steps, each needed by the next:**
+
+1. `groupbyattrs` promotes the provenance values from span to **resource** attributes, which is
+   what makes them MLflow trace tags and therefore readable over REST at all.
+2. `GET /mlflow/ajax-api/2.0/mlflow/get-trace-artifact?request_id=<id>` returns the agent trace's
+   full span tree with base64 `span_id`/`parent_span_id`. The documented API returns none. This
+   revealed that the agent's trace **already has a span per tool call**
+   (`tool.mcp_gateway_<prefix>_<toolname>`), so the gateway's record can be parented to the exact
+   call it verifies.
+3. The stitcher re-emits the gateway span with `traceId` = the agent's and `parentSpanId` = that
+   tool span, then deletes the gateway trace.
+
+**Measured:**
+
+```
+tr-b060a089...  svc=hermes-agent  "Final nesting check: reservoir level and pump 4 status."
+   - agent
+     - llm.qwen3-235b-a22b
+       - api.qwen3-235b-a22b
+       - tool.mcp_gateway_telemetry_get_reservoir_level
+         - gateway verified: get_reservoir_level
+       - tool.mcp_gateway_telemetry_get_pump_status
+         - gateway verified: get_pump_status
+       - api.qwen3-235b-a22b
+```
+
+**Four traps, all now fixed with the reason recorded in the code:**
+
+1. `service.name` on the emitted span **relabels the host trace** -- MLflow derives trace tags
+   from ingested span resources, so the agent's trace was renamed `mcp-gateway-<user>`. The
+   stitcher echoes the host's own value now.
+2. Timestamps must be the gateway span's real ones; emitting with `now` stretched a trace's
+   `execution_duration` from 5.5s to 10679s, since MLflow recomputes across all spans.
+3. A ConfigMap-only change does **not** restart the pod -- the mounted file updates while the
+   running python keeps its original code, so an edit appears deployed and is not. `checksum/config`
+   now hashes the stitcher source.
+4. `get-trace-artifact` is an `ajax-api` endpoint (what the UI uses, not a documented API), so it
+   is treated as best-effort: on failure the span still attaches, at the trace root.
+
+**Console vs sidecar, since the question was explicitly reopened.** The console is a reasonable
+home and the matching logic would be identical -- neither component can know the gateway's trace
+id in advance. The sidecar won on two points: no image build (the python image is already pulled
+for the init container beside it, and the MLflow credential and CA are already mounted in that
+pod), and it covers all traffic rather than only turns that went through the console.
+
+---
+
+### 2026-11-27 — two follow-ups: the triplicated spans, and matching vs attachment
+
+**Triplicated verification spans.** A turn saying "turn on pump 3" produced six verification
+spans across two tools. Not a stitcher bug — there were genuinely six gateway traces. Opening a
+session to an MCP server costs three gateway requests and the broker stamps **all three** with
+the same `x-mcp-toolname`:
+
+```
+mcpmethod=initialize                 status=200
+mcpmethod=notifications/initialized  status=202
+mcpmethod=tools/call                 status=200   <- the only real invocation
+```
+
+The collector's filter now also requires `waterplant.mcp_method == "tools/call"`, which is the
+AuthPolicy's own predicate, so the two agree by construction. Verified: a two-tool turn hitting a
+cold `control-mcp` session now yields exactly one verification span per tool. Earlier tests missed
+this because the telemetry session was already warm — only the FIRST call to a server shows it.
+
+**Loose traces while waiting.** Gateway traces are visible until the stitcher folds them, i.e. up
+to `settle + interval`. Lowered from 45+30 to **15+10**, so the window is ~25s rather than ~75s.
+Safe because an unmatched trace is simply retried next cycle rather than dropped.
+
+**Clarification I owed, having conflated two things.** Matching and attachment are separate:
+
+- *Attachment* — where the span goes once the host trace is known — is now exact, a real
+  parent/child edge under the agent's own `tool.*` span.
+- *Matching* — which agent trace a gateway trace belongs to — is still a time-window inference.
+  That is precisely what `traceparent` answers for free in ordinary distributed tracing, where the
+  request carries the answer. Ours cannot, because the broker strips it.
+
+So the nesting work fixed attachment, not matching. Matching remains sound only because one tenant
+runs one agent answering one turn at a time.
+
+---
+
+### 2026-11-27 — buffered design: no loose traces at all
+
+Replaced "collector writes to MLflow, stitcher folds and deletes" with "collector hands spans to
+the stitcher, stitcher writes once, into the right trace".
+
+**Measured, same turn shape each time:**
+
+| design | loose trace visible | provenance span attached |
+|---|---|---|
+| collector -> MLflow, settle 45s / poll 30s | 8.1s -> 20.3s | 20.3s |
+| same, timings tightened (batch 1s, settle 2s, poll 5s) | 6.1s -> 12.2s | 12.2s |
+| collector -> stitcher | **never** | **8.1s** |
+
+Most of the original latency was self-inflicted. The collector's `batch.timeout` was 5s for a
+handful of spans per turn, and `settleSeconds` was a blind wait for the agent's trace to exist --
+which the matcher already handled by retrying. The measurement killed it outright: the agent's
+trace was in MLflow **4.0s** after the turn started, before the gateway span had even been
+exported. There was nothing to wait for.
+
+The buffered design removes the loose trace rather than shortening its life, and takes the poll
+interval out of the path entirely -- a span's arrival is the trigger. It also drops the
+`delete-traces` calls and the MLflow search for gateway traces.
+
+**Verified:** a two-tool turn across `control-mcp` and `telemetry-mcp` produced correct nesting
+under each `tool.*` span, and the experiment contains only `hermes-agent` traces -- zero gateway
+traces, zero unmatched.
+
+**Trap that cost one deploy:** the `otlphttp` exporter **gzips by default**. The receiver has to
+decompress or every payload fails UTF-8 decoding and the spans disappear with one log line.
+
+**Deliberate costs:** a buffered span is in memory only, so a pod restart loses it from MLflow
+(never from the gateway access log, which is the durable copy); and a span whose turn never
+appears is emitted as its own trace after `unmatchedTimeoutSeconds` under
+`service.name: waterplant-unmatched`, rather than dropped.

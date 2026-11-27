@@ -88,6 +88,10 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "1"
 data:
+{{- if .Values.provenance.stitch.enabled }}
+  provenance-stitcher.py: |
+{{ .Files.Get "files/provenance-stitcher.py" | indent 4 }}
+{{- end }}
   collector.yaml: |
     extensions:
       # The whole reason this pod exists. filename, never token: the
@@ -105,7 +109,11 @@ data:
             endpoint: 0.0.0.0:4318
     processors:
       batch:
-        timeout: 5s
+        # 1s, not the usual 5s. This is the first term in how long a gateway
+        # trace sits visible in the participant's experiment before being
+        # folded away, and the volume is a handful of spans per turn -- there
+        # is nothing to batch for.
+        timeout: 1s
         send_batch_size: 64
 {{- if .Values.provenance.toolCallsOnly }}
       # A tool call crosses this gateway TWICE and Envoy traces both hops, but
@@ -129,7 +137,34 @@ data:
           span:
             - 'attributes["waterplant.tool"] == nil'
             - 'attributes["waterplant.tool"] == "none"'
+            # mcp_method matters as much as the tool name. Opening a session
+            # to an MCP server costs three gateway requests -- initialize,
+            # notifications/initialized and the tools/call itself -- and the
+            # broker stamps ALL THREE with the same x-mcp-toolname. Filtering
+            # on the tool alone therefore records one tool call three times,
+            # which is what it did: a single "turn on pump 3" produced six
+            # verification spans across two tools. Only tools/call is an
+            # actual invocation, and it is the same predicate the AuthPolicy
+            # uses to decide authorization, so the two agree by construction.
+            - 'attributes["waterplant.mcp_method"] != "tools/call"'
 {{- end }}
+      # Promote the provenance values from SPAN attributes to RESOURCE
+      # attributes. This is what makes them visible at all: MLflow turns an
+      # OTLP resource attribute into a trace TAG (that is how service.name
+      # appears), but its API returns trace_info without spans -- so a span
+      # attribute is invisible both in the trace list and to anything reading
+      # over REST. Measured: a gateway trace carrying waterplant.actor on the
+      # span came back with tags holding only service.name.
+      #
+      # groupbyattrs rather than a transform statement, because it also
+      # re-groups spans so that two calls batched together do not end up
+      # sharing one resource and therefore one actor.
+      groupbyattrs:
+        keys:
+          - waterplant.actor
+          - waterplant.tool
+          - waterplant.server
+          - waterplant.mcp_method
       # Envoy names its spans after the operation; this makes the experiment
       # readable by saying which gateway produced them.
       resource:
@@ -138,6 +173,28 @@ data:
             value: {{ printf "mcp-gateway-%s" .Values.username | quote }}
             action: upsert
     exporters:
+{{- if .Values.provenance.stitch.enabled }}
+      # To the stitcher beside us in this pod, NOT to MLflow. Writing to
+      # MLflow directly works, but it creates a loose trace per tool call
+      # that is then folded and deleted -- measured at ~6s visible in the
+      # participant's experiment. Handing spans to the stitcher means no
+      # loose trace is ever created, and the arrival of the span is itself
+      # the trigger, so no poll interval sits in the path.
+      #
+      # Plaintext localhost: same pod, same network namespace. The MLflow
+      # credential is applied by the stitcher on the way out, not here.
+      otlphttp/stitcher:
+        endpoint: {{ printf "http://localhost:%v" .Values.provenance.stitch.receiverPort | quote }}
+        # JSON so the stitcher can parse it with the standard library; the
+        # default proto encoding would need generated protobuf bindings.
+        encoding: json
+        tls:
+          insecure: true
+        retry_on_failure:
+          enabled: true
+          initial_interval: 1s
+          max_elapsed_time: 30s
+{{- end }}
       otlphttp/mlflow:
         # traces_endpoint, not endpoint: otlphttp APPENDS /v1/traces to
         # `endpoint`, and MLflow's ingest already lives at the server root
@@ -179,8 +236,8 @@ data:
       pipelines:
         traces:
           receivers: [otlp]
-          processors: [{{ if .Values.provenance.toolCallsOnly }}filter, {{ end }}resource, batch]
-          exporters: [otlphttp/mlflow{{ if .Values.provenance.debugExporter }}, debug{{ end }}]
+          processors: [{{ if .Values.provenance.toolCallsOnly }}filter, {{ end }}groupbyattrs, resource, batch]
+          exporters: [{{ if .Values.provenance.stitch.enabled }}otlphttp/stitcher{{ else }}otlphttp/mlflow{{ end }}{{ if .Values.provenance.debugExporter }}, debug{{ end }}]
       telemetry:
         logs:
           # debugExporter forces info, because the debug exporter writes its
@@ -209,9 +266,12 @@ spec:
       labels:
         app.kubernetes.io/name: {{ $sa }}
       annotations:
-        # Roll the pod when the config changes; a ConfigMap edit alone leaves
-        # the old config loaded and nothing says so.
-        checksum/config: {{ printf "%s|%s|%v|%v" .Values.ui.mlflowApiUrl (.Values.provenance.logLevel | default "warn") .Values.provenance.debugExporter .Values.provenance.toolCallsOnly | sha256sum }}
+        # Roll the pod when the config changes. Hash the rendered ConfigMap
+        # inputs INCLUDING the stitcher source: a ConfigMap-only change
+        # updates the mounted file but the running python process keeps the
+        # code it started with, so the edit appears to deploy and does
+        # nothing. Cost an hour the first time.
+        checksum/config: {{ printf "%s|%s|%v|%v|%s" .Values.ui.mlflowApiUrl (.Values.provenance.logLevel | default "warn") .Values.provenance.debugExporter .Values.provenance.toolCallsOnly (.Files.Get "files/provenance-stitcher.py") | sha256sum }}
     spec:
       serviceAccountName: {{ $sa }}
       initContainers:
@@ -264,6 +324,10 @@ spec:
               assert "__MLFLOW_EXPERIMENT_ID__" in cfg, "placeholder missing from ConfigMap"
               open("/shared/collector.yaml", "w").write(
                   cfg.replace("__MLFLOW_EXPERIMENT_ID__", str(exp_id)))
+              # The stitcher needs the id too, and must not resolve it again:
+              # two resolvers racing on first run would both try to create the
+              # experiment.
+              open("/shared/experiment-id", "w").write(str(exp_id))
               print("provenance-collector: experiment %s, config written" % exp_id)
               PY
           env:
@@ -294,6 +358,49 @@ spec:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities: { drop: [ALL] }
+{{- if .Values.provenance.stitch.enabled }}
+        # Folds each gateway provenance trace into the agent's own trace and
+        # deletes the original, so a participant sees ONE trace per turn
+        # carrying the verified actor, rather than their turn plus N gateway
+        # traces sorted in among it.
+        #
+        # A sidecar rather than a change to the console, because the console
+        # would need an image build and this needs none: the python image is
+        # already pulled for the init container beside it, and the MLflow
+        # credential and CA are already mounted here.
+        #
+        # It exists at all because the join cannot happen at source. The agent
+        # emits no W3C trace context, and the MCP broker forwards no unknown
+        # headers -- a marker injected on hop 1 arrives absent on hop 2 --
+        # so neither traceparent nor a smuggled correlation id can cross it,
+        # and the broker is a vendor image. Measured; see
+        # docs/agent-identity/13-tool-path-components.md.
+        - name: stitcher
+          image: {{ .Values.provenance.resolverImage | quote }}
+          command: ["python3", "-u", "/conf/provenance-stitcher.py"]
+          env:
+            - { name: MLFLOW_API_URL, value: {{ .Values.ui.mlflowApiUrl | quote }} }
+            - { name: NAMESPACE, value: {{ $ns | quote }} }
+            - { name: GATEWAY_SERVICE_NAME, value: {{ printf "mcp-gateway-%s" .Values.username | quote }} }
+            - { name: STITCH_RECEIVER_PORT, value: {{ .Values.provenance.stitch.receiverPort | quote }} }
+            - { name: STITCH_TICK_SECONDS, value: {{ .Values.provenance.stitch.tickSeconds | quote }} }
+            # A span whose turn never appears is emitted as its own trace
+            # after this, rather than dropped: visible beats silently missing.
+            - { name: STITCH_UNMATCHED_TIMEOUT_SECONDS, value: {{ .Values.provenance.stitch.unmatchedTimeoutSeconds | quote }} }
+          ports:
+            - { containerPort: {{ .Values.provenance.stitch.receiverPort }}, name: otlp-stitch }
+          volumeMounts:
+            - { name: config, mountPath: /conf, readOnly: true }
+            - { name: shared, mountPath: /shared, readOnly: true }
+            - { name: mlflow-ca, mountPath: /etc/mlflow-ca, readOnly: true }
+          resources:
+            requests: { cpu: 5m, memory: 48Mi }
+            limits:   { cpu: 100m, memory: 128Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+{{- end }}
       volumes:
         - name: config
           configMap:
