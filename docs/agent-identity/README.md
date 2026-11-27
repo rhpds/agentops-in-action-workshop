@@ -99,6 +99,7 @@ resulting actor onto everything downstream.
 | [07-phasing.md](07-phasing.md) | Proposed build order, verification gates, and image handoffs. |
 | [08-open-questions.md](08-open-questions.md) | Unverified assumptions and ranked risks, each with the command that settles it. |
 | [12-tool-call-walkthrough-v2.md](12-tool-call-walkthrough-v2.md) | **One tool call, end to end — start here.** All 18 hops as built: what is on the wire, why, and how it changes, with a diagram of every payload. Supersedes 10. |
+| [13-tool-path-components.md](13-tool-path-components.md) | **Every component in the tool request path** — what identity each one holds, whether it can emit a span, and why exactly one can do both. The reasoning behind doing provenance at the gateway rather than in the MCP servers. |
 | [10-tool-call-walkthrough.md](10-tool-call-walkthrough.md) | *Superseded by 12.* The same walk as originally designed — every hop and every credential, today and after; plus exactly where SPIRE does and does not sit. |
 | [PROGRESS.md](PROGRESS.md) | **The running record** — what is built, what is on the cluster with which settings, and every correction made along the way. |
 | [11-openshell-spiffe-flow.md](11-openshell-spiffe-flow.md) | **Where OpenShell meets SPIRE** — which pods get a Workload API socket, the three-hop token flow as NVIDIA documents it, and four corrections to how this document set described it. |

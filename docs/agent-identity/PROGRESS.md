@@ -2621,3 +2621,143 @@ the live client still shows 18 **default** `tool-*` scopes. Source and cluster a
 The `perToolScopes` value keeps its name but its comment now states plainly what it does and does
 not buy: it makes `delegableTools` expressible and the intersection real; it does **not** give
 per-call narrowing while OpenShell mints the token.
+
+---
+
+### 2026-11-27 — Stage 9 gate measured: the shim does propagate, and the broker mostly bypasses the gateway
+
+Open question 2 — *"does the wasm-shim propagate Authorino success headers upstream?"* — was the
+one assumption Stage 9's whole design rested on, and it was worth settling **before** writing
+plant-api / MCP-server / `traces.py` source, because all of that is image-gated and would have been
+wasted if the answer were no.
+
+**First, the data plane is the shim, not native ext_authz.** `EnvoyFilter/kuadrant-mcp-gateway`
+loads `kuadrant-wasm-shim` from `kuadrant-operator-wasm`; there is no `WasmPlugin` resource and no
+native `ext_authz` filter. Native `ext_authz` would apply `ok_response.headers_to_add` for free.
+The shim is its own implementation, so the question was real.
+
+**Answer: yes.** Deployed shim is **0.14.2** (`RELATED_IMAGE_WASMSHIM` →
+`rhcl-1/wasm-shim-rhel9`; the served `plugin.wasm` carries `service.version 0.14.2`). Our filter
+config uses the **legacy `actionSets`** schema, handled by
+`src/configuration/legacy_translation.rs::build_auth_on_reply`, which maps
+`ok_response.headers` — what Authorino fills from `response.success.headers` — to
+`Operation::Headers(target: Request)`.
+
+**The caveat is the interesting half.** The same function turns
+`response_headers_to_add`, `headers_to_remove` and `query_parameters_*` into a **terminal failure**
+logging `Unsupported field in OkHttpResponse`. The shim does not ignore what it cannot do; it fails
+closed. Authorino does not expose those fields for success responses so we are safe, but "extras
+get dropped" would have been the wrong mental model. The deployed `plugin.wasm` contains that exact
+string, so this is our binary and not just upstream source.
+
+**Second finding, unplanned and it corrects `06-provenance.md`: the broker bypasses the gateway for
+everything except `tools/call`.** A throwaway MCP server (`hdr-echo`) was registered on
+`user-gngp7` and logged every request. All of them arrived as
+`Host: hdr-echo.user-gngp7-agentops.svc.cluster.local:8080`, `User-Agent: mcp-broker`,
+`Gateway-Server-Id: user-gngp7-agentops/hdr-echo:hdrecho_:echo.mcp.local` — straight to the
+ClusterIP Service. That covered `initialize`, `ping`, `tools/list` and the GET SSE stream; none
+carried an `x-mcp-*` header or touched the `mcps` AuthPolicy. So the actor header can only ever
+appear on tool calls, every consumer must treat its absence as ordinary, and the policy's
+`anonymous` authentication rule covers less than it appears to.
+
+**What I did not manage to confirm, stated plainly.** I did not see the header arrive on the wire.
+Doing so needed either a Keycloak client and role for the probe server, or a predicate narrowing
+the tool-access check so the probe's call would not 403. The second was refused by the sandbox and
+correctly so — narrowing an authorization rule to make a test pass is not a trade worth making.
+The verdict is therefore *version-matched source plus a live Authorino accept* (`Accepted=True`,
+`Enforced=True` on the real CEL), not an observed header. One `curl` settles it once a consumer
+exists to log it.
+
+**Built:** `tenant-policy` renders `response.success.headers` with the chain-shaped
+`x-waterplant-actor` expression, gated on `mcpGateway.provenance.enabled`, **default off** — the
+header is useless until plant-api, the three `client.py` files and `traces.py` can read it, and
+those need images that do not exist. Flip it in the same change that ships them. Verified both
+ways: `helm template` renders 0 occurrences off, 1 on, and the rendered AuthPolicy parses.
+
+**Cluster left clean.** `hdr-echo` Deployment, Service, HTTPRoute, ConfigMap and
+MCPServerRegistration all deleted; the live AuthPolicy patch reverted so `spec.rules.response` holds
+only `unauthorized` again, `Accepted=True Enforced=True`; three registrations Ready at 7/5/6 tools;
+no pods outside Running/Completed.
+
+**Also re-read, not merely cited:** the
+[Kuadrant OTEL example](https://docs.kuadrant.io/1.4.x/kuadrant-operator/examples/otel/#architecture).
+The architecture section is operator reconciliation only — Zap tee core → OTLP logs, Prometheus
+bridge → metrics, operator traces → Collector → Loki/Tempo/Prometheus/Grafana. Authorino and the
+wasm-shim do not appear, and there is no `traceparent` propagation or per-decision span. The
+correction already in `09-implementation-plan.md` stands, and Stage 9's option 2 (Envoy/istio
+data-plane tracing) remains a separate unanswered spike.
+
+---
+
+### 2026-11-27 (later) — Stage 9 solved at the gateway: provenance with zero application code
+
+The constraint that reshaped this: **changing the MCP servers does not scale.** We may not own
+every MCP server, and we would not want to patch each one as servers are added. So the question
+became "which component in the tool path can emit the identity without touching any application",
+and answering it properly meant enumerating the whole path. That enumeration is now
+[13-tool-path-components.md](13-tool-path-components.md).
+
+**The shape of the problem:** the components that hold the verified identity cannot emit a span,
+and the components that emit spans do not hold the identity.
+
+- wasm-shim 0.14.2 — has everything in CEL, but its span fields are compile-time `info_span!`
+  macros (`action_set`, `hostname`, `request_id`, `action`, `otel.status_*`). No hook.
+- Authorino — *resolves* the identity, but `AuthService/Check` carries only `authorino.request_id`
+  and `guid:x-request-id`, and `spec.tracing.tags` are static OTel resource attributes.
+- MCP broker / ext_proc — vendor images, no configurable spans.
+- The agent — owns the MLflow trace but never sees the token; anything it wrote would be
+  self-asserted, which is the exact anti-pattern this work exists to remove.
+
+**The exception, and the answer: the gateway's Envoy on the second hop.** It is the only point
+where the verified actor, the tool name, the server name and a tracer all coexist.
+
+**Proven on the wire.** An EnvoyFilter in the tenant namespace added an access-log format; a real
+console turn produced both principals, the tool and the decision:
+
+```
+WATERPLANT-ACTOR ts=... reqid=3cd9015f-... authority=telemetry-mcp.mcp.local
+  tool=get_reservoir_level server=user-gngp7-agentops/telemetry-mcp mcpmethod=tools/call
+  actor={"chain":[{"role":"subject","sub":"operator"},
+                  {"role":"agent","sub":"spiffe://.../user-gngp7-openshell-sandbox"}],
+         "jti":"ntrtte:1f313fd7-..."} status=200 dur=17
+```
+
+That one line retires three open items at once: the wasm-shim really does apply Authorino's
+`response.success.headers` to the **upstream** request (previously argued from version-matched
+source only); filter-added request headers are visible to Envoy's stream-end formatter, which is
+the same machinery `tracing.custom_tags.request_header` uses; and an EnvoyFilter in the tenant
+namespace is accepted and programmed with no change to the shared mesh config.
+
+**A correction it also forced: `jti` is not the join key.** OpenShell caches the exchanged token,
+so every call inside the cache TTL carries the same `jti` — measured, two turns calling two
+different tools gave byte-identical `jti` and different `x-request-id`. `x-request-id` is the
+per-call key; `jti` scopes which minted credential acted. Both are now in the log format, and
+[06](06-provenance.md) has been corrected.
+
+**Also ruled out, with reasons recorded so they are not re-proposed:**
+
+- *istio `Telemetry` CR* — `customTags` has no `metadata` kind, and its tracing providers must come
+  from `meshConfig.extensionProviders`. The live mesh config declares none, is Helm-managed by
+  `sail-library`, and there is no `Istio` CR on the cluster, so there is no supported API to add
+  one. Envoy's own `CustomTag` oneof is richer than what `Telemetry` exposes, and an EnvoyFilter
+  reaches all of it.
+- *The Kuadrant OTEL example* — re-read at the `#architecture` anchor. Operator reconciliation
+  only; Authorino, Limitador, the shim and Envoy are all out of scope. And independently, the
+  per-request tracing that does exist carries no identity. It fails at the **payload**, not the
+  transport — MLflow already ingests OTLP, which is what the `mlflow_tracing` egress rule is for.
+
+**Source, with no drift.** `tenant-policy` gained `templates/provenance-accesslog.yaml` and
+`mcpGateway.provenance.{enabled,logPrefix}`; the AuthPolicy's `response.success.headers` block was
+already there. Both are behind the one `provenance.enabled` flag, default **off**. The live tenant
+currently runs with it **on** — the cluster matches `--set mcpGateway.provenance.enabled=true`
+exactly, applied from `helm template` output rather than by hand, and the hand-made probe objects
+were deleted. `user-gngp7-policy` has `automated: {}` with no selfHeal, so the next sync reverts to
+the chart default until the flag is set in git.
+
+**Still open — the export leg.** The header half is done; nothing yet ships these to MLflow.
+`agent-hermes-plain.yaml:502-517` gives the required shape (`/v1/traces`, plus
+`x-mlflow-experiment-id`, `Authorization: Bearer`, `X-MLflow-Workspace`, and the `/etc/mlflow-ca`
+CA). Envoy's `envoy.tracers.opentelemetry` takes an `http_service` with `request_headers_to_add`,
+and the lab already issues an 8760h ServiceAccount token per tenant, so a static bearer is viable.
+Unknown: whether MLflow accepts OTLP spans from a non-SDK producer, and whether they join the
+agent's trace (needs `traceparent` from `hermes-otel`) or form their own.

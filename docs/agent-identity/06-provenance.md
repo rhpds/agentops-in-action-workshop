@@ -31,10 +31,102 @@ flowchart LR
     class H key
 ```
 
-`jti` — the token's unique id, already present in today's token — is the join key. One tool call
-produces a gateway decision, an MCP server log line, a plant-api audit row and an MLflow trace, and
-`jti` is what proves they are the same event. That single property is what turns four separate logs
-into an audit trail.
+**Correction, measured 2026-11-27: `jti` is not the join key.** The original design said it was —
+"the token's unique id, already present in today's token" — and that reasoning only holds if a
+token is minted per call. It is not. OpenShell caches the exchanged token (`token_grant`
+`cache_ttl_seconds`), so every tool call inside that TTL carries the **same** `jti`. Two separate
+console turns calling two different tools (`get_reservoir_level`, `get_pump_status`) produced
+byte-identical `jti` values and different `x-request-id` values.
+
+So the two identifiers divide the work:
+
+| Identifier | Scope | Use |
+|---|---|---|
+| `jti` | the **token** — stable across every call in its cache TTL | "which minted credential acted" |
+| `x-request-id` | the **call** — Envoy generates one per request | the join key across gateway, server and trace |
+
+`x-request-id` is what turns separate logs into an audit trail. `jti` still earns its place beside
+it: it ties a burst of calls back to one exchange, which is exactly what you want when asking
+whether an agent re-authenticated between two actions.
+
+## Measured on the cluster, 2026-11-27 — two findings that change this document
+
+Two assumptions in the original draft were tested on tenant `user-gngp7`. One holds; one was
+wrong, and the wrong one narrows the design in a useful way.
+
+### 1. The injected header does reach the MCP server — but this was not a given
+
+The gateway's data plane is the **Kuadrant wasm-shim**, not native Envoy `ext_authz`
+(`EnvoyFilter/kuadrant-mcp-gateway` loads `kuadrant-wasm-shim` from `kuadrant-operator-wasm`).
+Native `ext_authz` applies `ok_response.headers_to_add` for free; the shim is a separate
+implementation, so "Authorino emits it" and "the upstream sees it" are two different claims.
+
+The deployed shim is **0.14.2** — `RELATED_IMAGE_WASMSHIM` on the kuadrant operator points at
+`rhcl-1/wasm-shim-rhel9`, and the served `plugin.wasm` carries `service.version 0.14.2` in its
+OpenTelemetry resource attributes. Our gateway's filter config uses the **legacy `actionSets`
+schema**, which that shim runs through `src/configuration/legacy_translation.rs`
+(`build_auth_on_reply`). It builds, in order:
+
+| Predicate | Operation |
+|---|---|
+| `has(auth.denied_response)` | Deny, terminal |
+| `ok_response.response_headers_to_add / headers_to_remove / query_parameters_*` non-empty | **Fail, terminal** — logs `Unsupported field in OkHttpResponse` |
+| `has(ok_response) && has(dynamic_metadata)` | Store as `auth` dynamic metadata |
+| `has(ok_response)` | **`Operation::Headers(target: Request, headers: ok_response.headers)`** |
+
+Authorino populates `response.success.headers` into `OkHttpResponse.headers` — the fourth row. So
+it is injected into the request forwarded upstream. **Route A is viable.**
+
+**The sharp edge, worth carrying forward:** the second row means the shim does *not* silently
+ignore fields it cannot implement — it **fails the request closed**. Authorino does not expose
+`response_headers_to_add` for success responses, so this configuration is safe, but anyone adding
+to this block should not assume an unsupported extra would be harmlessly dropped. The deployed
+`plugin.wasm` contains that exact log string, so this is our binary and not merely upstream source.
+
+**Resolved 2026-11-27 — now observed on the wire, not merely argued from source.** An EnvoyFilter
+added a gateway access-log format reading the header, and a real console turn produced:
+
+```
+WATERPLANT-ACTOR ts=2026-11-27T12:24:19.649Z reqid=3cd9015f-d7f8-4bbf-822b-5bf250f87791
+  authority=telemetry-mcp.mcp.local tool=get_reservoir_level
+  server=user-gngp7-agentops/telemetry-mcp mcpmethod=tools/call
+  actor={"chain":[{"role":"subject","sub":"operator"},
+                  {"role":"agent","sub":"spiffe://agentops.lab/ns/user-gngp7-agentops/sa/user-gngp7-openshell-sandbox"}],
+         "jti":"ntrtte:1f313fd7-..."} status=200 dur=17
+```
+
+Both principals, the tool, the server and the decision — at the gateway, with no code in any MCP
+server. See [13](13-tool-path-components.md) for the full path analysis.
+
+### 2. Only `tools/call` crosses the gateway — everything else bypasses it entirely
+
+This one was wrong in the original draft, and it matters.
+
+A throwaway MCP server was registered on the tenant and logged every request it received. **Every**
+broker request arrived as:
+
+```
+Host: hdr-echo.user-gngp7-agentops.svc.cluster.local:8080
+User-Agent: mcp-broker
+Gateway-Server-Id: user-gngp7-agentops/hdr-echo:hdrecho_:echo.mcp.local
+```
+
+— straight to the ClusterIP Service, **not** through the gateway. That covered `initialize`,
+`ping`, `tools/list` and the GET SSE stream. None of them carried any `x-mcp-*` header, and none
+of them passed through the `mcps` listener or its AuthPolicy.
+
+Consequences for this design:
+
+- **The actor header can only ever appear on `tools/call`.** That is the right scope — provenance
+  attaches to actions, not to protocol chatter — but it must be stated, not assumed.
+- **Every consumer must treat the header's absence as normal**, not as an error or as a tampering
+  signal. An MCP server that rejects a request without `x-waterplant-actor` would break its own
+  discovery.
+- The policy's `anonymous` authentication rule is therefore doing less than it appears to: the
+  protocol traffic it was written for does not reach the gateway from the broker at all.
+- It also means **the MCP servers' own health and discovery path is unauthenticated by
+  construction** — a fact about the lab's architecture worth knowing independently of provenance,
+  though not a new exposure (the Service is namespace-local and covered by the NetworkPolicy).
 
 ## Where the actor is created
 

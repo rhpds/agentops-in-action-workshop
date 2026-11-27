@@ -150,6 +150,55 @@ spec:
             - predicate: "has(auth.identity.azp) && auth.identity.azp == '{{ $expectedAzp }}'"
             {{- end }}
     response:
+{{- if .Values.mcpGateway.provenance.enabled }}
+      # Stage 9 -- provenance. The actor is created HERE and nowhere else:
+      # this is the last hop before the MCP server and the only point that has
+      # verified both principals. Everything downstream copies it; nothing
+      # downstream recomputes it.
+      #
+      # Emitted as an ordered CHAIN, not as two scalar fields, even though it
+      # only ever holds two entries today. When RHBK >= 26.8 makes a real
+      # RFC 8693 `act` claim available, ONLY this expression changes -- it
+      # walks `act` instead of reading sub and azp, and every consumer is
+      # untouched. Modelling it as subject=...;agent=... would turn that into
+      # a schema migration across plant-api, the trace tags and the QA
+      # assertions. See docs/agent-identity/04-keycloak-upgrade-path.md.
+      #
+      # Verified it actually arrives: the data plane here is the Kuadrant
+      # wasm-shim (EnvoyFilter/kuadrant-mcp-gateway loads kuadrant-wasm-shim),
+      # NOT native Envoy ext_authz, so this was not a given. In shim 0.14.2 --
+      # the version this cluster serves -- the legacy actionSet translation
+      # maps ok_response.headers, which is what Authorino populates from
+      # response.success.headers, to Operation::Headers(target: Request).
+      # So it lands on the request forwarded upstream.
+      #
+      # The sharp edge, worth knowing before adding anything here: the same
+      # translation turns response_headers_to_add, headers_to_remove and the
+      # query_parameters_* fields into a TERMINAL FAILURE with the log line
+      # "Unsupported field in OkHttpResponse". The shim does not ignore what
+      # it cannot do -- it fails the request closed. Authorino does not expose
+      # those fields for success responses, so this block is safe, but do not
+      # assume an unsupported extra would be silently dropped.
+      success:
+        headers:
+          x-waterplant-actor:
+            plain:
+              # has() guards are mandatory, not defensive style. The anonymous
+              # authentication rule above leaves auth.identity empty, and an
+              # unguarded field access is a CEL ERROR -- which fails the
+              # request -- not an empty string.
+              #
+              # preferred_username before sub: a UUID in an audit row tells a
+              # participant nothing, and reading the actor is the whole point.
+              expression: >
+                '{"chain":[{"role":"subject","sub":"' +
+                (has(auth.identity.preferred_username) ? auth.identity.preferred_username :
+                  (has(auth.identity.sub) ? auth.identity.sub : 'anonymous')) +
+                '"},{"role":"agent","sub":"' +
+                (has(auth.identity.azp) ? auth.identity.azp : 'none') +
+                '"}],"jti":"' +
+                (has(auth.identity.jti) ? auth.identity.jti : '') + '"}'
+{{- end }}
       unauthorized:
         # Served as JSON so the agent's MCP client will read the body. It
         # parses a non-2xx body only when the content type says JSON, and

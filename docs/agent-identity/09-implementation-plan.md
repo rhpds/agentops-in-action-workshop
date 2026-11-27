@@ -784,6 +784,53 @@ a given tool call.
    [06](06-provenance.md). Still needed to get an actor into plant-api regardless of tracing, since
    a trace is not a work-order field.
 
+### Amended 2026-11-27 after measuring on `user-gngp7`
+
+Two things moved.
+
+**The gating question is answered: the injected header does reach the MCP server.** Option 3 below
+is therefore the route, and option 1 (Authorino's logs) stays as the cross-check rather than the
+fallback. Detail, including the fail-closed caveat on unsupported `OkHttpResponse` fields, is in
+[06](06-provenance.md).
+
+**But the header's reach is narrower than this plan assumed.** The broker contacts MCP servers
+**directly by Service DNS** for `initialize`, `ping`, `tools/list` and the SSE stream — only
+`tools/call` crosses the gateway's `mcps` listener. So the actor appears on tool calls and nothing
+else, and every consumer must treat its absence as ordinary. That is the right scope for
+provenance, but it was not what the design said.
+
+**The design changed, because the original one does not scale.** Routing the actor through the
+three MCP servers was rejected on ownership grounds: we may not own every MCP server, and we would
+not want to patch each one as servers are added. That ruled out `client.py` forwarding, and with
+it `raised_by_verified` in plant-api, since the gateway is not on the server→plant-api hop.
+
+**The replacement is gateway-only and needs no application code anywhere.** Enumerating every
+component in the tool path (now [13](13-tool-path-components.md)) showed the shape of the problem:
+the components holding the verified identity cannot emit a span, and the components emitting spans
+do not hold the identity. The wasm-shim's span fields are compile-time macros; Authorino's
+`Check` span carries only request ids; the broker and ext_proc are vendor images; the agent owns
+the trace but never sees the token. The one exception is **the gateway's Envoy on the second hop**,
+where the verified actor, the tool name, the server name and a tracer all coexist.
+
+**Built, and proven on the wire:** `tenant-policy` renders the AuthPolicy `response.success.headers`
+block *and* `templates/provenance-accesslog.yaml` — an EnvoyFilter in the tenant namespace adding a
+gateway access-log line — both behind `mcpGateway.provenance.enabled`, default off. A real console
+turn produced both principals, the tool, the server and the decision in one line. That also
+retired the open question about whether the shim propagates Authorino's success headers: it does.
+
+**Correction this forced:** `jti` is *not* the per-call join key — OpenShell caches the exchanged
+token, so calls inside the cache TTL share a `jti`. `x-request-id` is the per-call key. Both are in
+the log format; [06](06-provenance.md) is corrected.
+
+**Dropped from Stage 9:** `raised_by_verified`, the plant-api audit list and `GET /audit`, header
+forwarding in the three `client.py`, and `tag_trace()` in `ui/traces.py`. **Zero images are now
+required for the gateway half.**
+
+**Still open — the export leg.** Nothing yet ships these records to MLflow.
+`agent-hermes-plain.yaml:502-517` gives the required shape; Envoy's `envoy.tracers.opentelemetry`
+can express it. Unknown: whether MLflow accepts OTLP spans from a non-SDK producer, and whether
+they join the agent's trace (needs `traceparent` from `hermes-otel`) or stand alone.
+
 ### Actions
 
 - Authorino response header emitting the actor as an **ordered list** — see the
@@ -835,8 +882,12 @@ path:
 1. **Does the MCP broker forward an unknown header between the `mcp` and `mcps` hops?** This now
    gates the leading Stage 8 option, having been a footnote when it was only a fallback. Cheapest
    decisive test in the back half of the plan — do it early.
-2. Does the **wasm-shim propagate Authorino success headers** upstream? (Stage 9 — verified the shim
-   rather than native ext_authz is in the path, so this is not a given.)
+2. ~~Does the **wasm-shim propagate Authorino success headers** upstream?~~ **ANSWERED — yes.**
+   The deployed shim is 0.14.2, and its legacy-actionSet translation maps `ok_response.headers`
+   (what Authorino fills from `response.success.headers`) to
+   `Operation::Headers(target: Request)`. Caveat worth keeping: the same translation turns
+   `response_headers_to_add` and friends into a **terminal failure**, not a silent drop. Measured
+   2026-11-27; see [06](06-provenance.md).
 3. Does the **OpenShell upgrade** preserve every command modules 2, 4 and 5 depend on, and what does
    `providers_v2_enabled` change about existing policy semantics? (Stage 7 — the only stage that can
    break the existing lab.)

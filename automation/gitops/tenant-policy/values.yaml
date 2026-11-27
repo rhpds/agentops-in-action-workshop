@@ -33,6 +33,29 @@ mcpGateway:
   # Whether this participant has a gateway at all (tenant-platform's
   # mcpGateway.enabled, forwarded by bootstrap-tenant). Gates the rollout Job.
   enabled: false
+  # Stage 9 -- provenance. Authorino injects x-waterplant-actor on the mcps
+  # listener, naming the human and the agent as an ordered chain plus the
+  # token's jti as the join key. See templates/mcp-gateway-policy.yaml and
+  # docs/agent-identity/06-provenance.md.
+  #
+  # Default OFF, and deliberately so. Turning it on is safe on its own -- the
+  # header is additive and nothing breaks if no one reads it -- but nothing
+  # reads it yet: plant-api's raised_by_verified, the three MCP servers'
+  # client.py forwarding, and the MLflow trace tags all need image builds that
+  # do not exist. Flip it on in the same change that ships those, so there is
+  # one rollout and not two.
+  #
+  # Scope to expect, measured rather than assumed: the broker reaches MCP
+  # servers DIRECTLY by Service DNS for initialize, ping, tools/list and the
+  # SSE stream -- only tools/call crosses the gateway's mcps listener. So this
+  # header appears on tool calls and on nothing else, and every consumer must
+  # treat its absence as normal rather than as an error.
+  provenance:
+    enabled: false
+    # Prefix on the gateway access-log line, so a participant (or a grep) can
+    # pick provenance records out of ordinary Envoy traffic. See
+    # templates/provenance-accesslog.yaml.
+    logPrefix: WATERPLANT-ACTOR
   # PostSync Job that makes a sync take effect: it restarts the gateway's Envoy
   # and the agent. See templates/mcp-gateway-rollout.yaml.
   rollout:

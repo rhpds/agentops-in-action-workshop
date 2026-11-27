@@ -1,0 +1,92 @@
+{{- if and .Values.mcpGateway.enforced .Values.mcpGateway.provenance.enabled }}
+{{- $ns := printf "%s-%s" .Values.username .Values.namespaceSuffix -}}
+{{/*
+Stage 9 -- provenance, the gateway half.
+
+Writes one access-log line per request carrying the verified actor, the tool
+and the MCP server. Together with the AuthPolicy's response.success.headers
+block (templates/mcp-gateway-policy.yaml) this is the ENTIRE provenance
+mechanism: no MCP server, plant-api or agent code is involved, and nothing
+here is per-server, so an MCP server registered tomorrow by someone else is
+covered the moment it appears. That scaling property is the reason this lives
+at the gateway rather than in the three client.py files -- we may not own
+every MCP server, and we would not want to patch each one.
+
+Why an EnvoyFilter and not an istio Telemetry CR. Telemetry's customTags
+supports only literal/environment/header, and its tracing providers must come
+from meshConfig.extensionProviders. The live mesh config
+(cm/istio-openshift-gateway, namespace openshift-ingress) declares NO
+extensionProviders, is Helm-managed by sail-library, and there is no Istio CR
+on the cluster -- so there is no supported API to add one, and hand-editing it
+would touch a ConfigMap shared by every gateway on the cluster. An EnvoyFilter
+in this namespace reaches the full Envoy API and changes nothing outside the
+tenant. Kuadrant already installs three EnvoyFilters here.
+
+Measured on user-gngp7 2026-11-27, a real console turn:
+
+  PROVPROBE authority=telemetry-mcp.mcp.local path=/mcp
+    tool=get_reservoir_level server=user-gngp7-agentops/telemetry-mcp
+    mcpmethod=tools/call
+    actor={"chain":[{"role":"subject","sub":"operator"},
+                    {"role":"agent","sub":"spiffe://.../user-gngp7-openshell-sandbox"}],
+           "jti":"ntrtte:2f818059-..."} status=200
+
+Note what that proves beyond the log line itself: the Kuadrant wasm-shim
+really does apply Authorino's response.success.headers to the UPSTREAM
+request, and filter-added request headers are visible to Envoy's stream-end
+formatter -- the same machinery tracing.custom_tags.request_header uses. See
+docs/agent-identity/13-tool-path-components.md.
+
+IMPORTANT, and it corrects an earlier assumption: `jti` is NOT a per-call
+identifier here. OpenShell caches the exchanged token (token_grant
+cache_ttl_seconds), so every tool call made within that TTL carries the SAME
+jti -- measured directly, two separate console turns produced byte-identical
+jti values. jti therefore identifies the TOKEN, which is still useful (it
+scopes "which minted credential acted"), but the per-call join key must be
+Envoy's x-request-id, which is why reqid is in the format above.
+
+A tool call crosses this Envoy TWICE. Hop 1 is the public `mcp` listener
+(authority = the gateway Service DNS, x-mcp-servername = "mcpBroker"); hop 2
+is the internal `mcps` listener (authority = <server>.mcp.local) and is the
+only hop carrying the real tool name and the actor. Expect two lines per call,
+and read the one whose authority ends in .mcp.local. Protocol traffic
+(initialize, ping, tools/list, the SSE stream) never reaches this Envoy at
+all -- the broker calls MCP servers directly by Service DNS -- so absence of a
+line is normal and is not evidence of a missing call.
+*/}}
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: mcp-provenance-accesslog
+  namespace: {{ $ns }}
+  labels:
+    rhdp.redhat.com/lab: agentops-in-action
+    rhdp.redhat.com/editable: "true"
+spec:
+  workloadSelector:
+    labels:
+      gateway.networking.k8s.io/gateway-name: {{ .Values.mcpGateway.gatewayName }}
+  configPatches:
+    - applyTo: NETWORK_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: envoy.filters.network.http_connection_manager
+      patch:
+        # MERGE, not ADD: proto merge appends to the repeated access_log
+        # field, so the gateway's existing /dev/stdout logger is kept and this
+        # one is added beside it.
+        operation: MERGE
+        value:
+          typed_config:
+            '@type': type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+            access_log:
+              - name: waterplant-provenance
+                typed_config:
+                  '@type': type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+                  log_format:
+                    text_format_source:
+                      inline_string: "{{ .Values.mcpGateway.provenance.logPrefix }} ts=%START_TIME(%Y-%m-%dT%H:%M:%S.%3fZ)% reqid=%REQ(X-REQUEST-ID)% authority=%REQ(:AUTHORITY)% path=%REQ(:PATH)% tool=%REQ(X-MCP-TOOLNAME)% server=%REQ(X-MCP-SERVERNAME)% mcpmethod=%REQ(X-MCP-METHOD)% actor=%REQ(X-WATERPLANT-ACTOR)% status=%RESPONSE_CODE% dur=%DURATION%\n"
+{{- end }}
