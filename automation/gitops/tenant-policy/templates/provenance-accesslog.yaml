@@ -1,5 +1,6 @@
 {{- if and .Values.mcpGateway.enforced .Values.mcpGateway.provenance.enabled }}
 {{- $ns := printf "%s-%s" .Values.username .Values.namespaceSuffix -}}
+{{- $otlpCluster := "waterplant_provenance_otlp" -}}
 {{/*
 Stage 9 -- provenance, the gateway half.
 
@@ -88,5 +89,78 @@ spec:
                   '@type': type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
                   log_format:
                     text_format_source:
-                      inline_string: "{{ .Values.mcpGateway.provenance.logPrefix }} ts=%START_TIME(%Y-%m-%dT%H:%M:%S.%3fZ)% reqid=%REQ(X-REQUEST-ID)% authority=%REQ(:AUTHORITY)% path=%REQ(:PATH)% tool=%REQ(X-MCP-TOOLNAME)% server=%REQ(X-MCP-SERVERNAME)% mcpmethod=%REQ(X-MCP-METHOD)% actor=%REQ(X-WATERPLANT-ACTOR)% status=%RESPONSE_CODE% dur=%DURATION%\n"
+                      inline_string: "{{ .Values.mcpGateway.provenance.logPrefix }} ts=%START_TIME(%Y-%m-%dT%H:%M:%S.%3fZ)% reqid=%REQ(X-REQUEST-ID)% tp=%REQ(TRACEPARENT)% authority=%REQ(:AUTHORITY)% path=%REQ(:PATH)% tool=%REQ(X-MCP-TOOLNAME)% server=%REQ(X-MCP-SERVERNAME)% mcpmethod=%REQ(X-MCP-METHOD)% actor=%REQ(X-WATERPLANT-ACTOR)% status=%RESPONSE_CODE% dur=%DURATION%\n"
+{{- if .Values.mcpGateway.provenance.tracing.enabled }}
+            # The same facts as the access log, but as an OTLP span, so they
+            # land in MLflow beside the agent's own trace instead of in a pod's
+            # stdout. custom_tags read the SAME request headers the log format
+            # does -- proven to be populated at this point in the filter chain,
+            # since the log line carries them.
+            #
+            # Exported to the per-tenant collector, not straight to MLflow:
+            # MLflow needs a bearer token and Envoy's exporter takes only a
+            # literal, so a rotating projected token cannot reach it. See
+            # tenant-platform/templates/provenance-collector.yaml.
+            tracing:
+              provider:
+                name: envoy.tracers.opentelemetry
+                typed_config:
+                  '@type': type.googleapis.com/envoy.config.trace.v3.OpenTelemetryConfig
+                  service_name: {{ printf "mcp-gateway-%s" .Values.username | quote }}
+                  http_service:
+                    http_uri:
+                      uri: {{ printf "http://%s/v1/traces" .Values.mcpGateway.provenance.tracing.collectorAuthority | quote }}
+                      cluster: {{ $otlpCluster | quote }}
+                      timeout: 5s
+              # Every tool call, not a sample. This is an audit record, and a
+              # sampled audit record answers "who did this" only sometimes.
+              # Volume is bounded by how fast a human can chat with an agent.
+              random_sampling:
+                value: 100
+              client_sampling:
+                value: 100
+              overall_sampling:
+                value: 100
+              custom_tags:
+                - tag: waterplant.actor
+                  request_header:
+                    name: x-waterplant-actor
+                    default_value: "none"
+                - tag: waterplant.tool
+                  request_header:
+                    name: x-mcp-toolname
+                    default_value: "none"
+                - tag: waterplant.server
+                  request_header:
+                    name: x-mcp-servername
+                    default_value: "none"
+                - tag: waterplant.mcp_method
+                  request_header:
+                    name: x-mcp-method
+                    default_value: "none"
+    # Envoy needs a cluster to export to, and names it in the tracer config
+    # above. Defined here rather than relying on istio's generated
+    # outbound|4318||... name, which is an implementation detail of the mesh
+    # registry and would break silently if it changed. Kuadrant defines its
+    # own auth-service cluster the same way.
+    - applyTo: CLUSTER
+      match:
+        context: GATEWAY
+      patch:
+        operation: ADD
+        value:
+          name: {{ $otlpCluster }}
+          type: STRICT_DNS
+          connect_timeout: 1s
+          lb_policy: ROUND_ROBIN
+          load_assignment:
+            cluster_name: {{ $otlpCluster }}
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        socket_address:
+                          address: {{ (splitList ":" .Values.mcpGateway.provenance.tracing.collectorAuthority) | first | quote }}
+                          port_value: {{ (splitList ":" .Values.mcpGateway.provenance.tracing.collectorAuthority) | last }}
+{{- end }}
 {{- end }}

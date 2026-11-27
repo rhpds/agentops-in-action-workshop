@@ -106,6 +106,14 @@ spec:
         # This participant's own MCP Gateway, and the Keycloak it trusts.
         - name: mcpGateway.enabled
           value: {{ .Values.platform.mcpGateway | quote }}
+        # Stage 9 provenance: the per-tenant OTLP collector that carries the
+        # gateway's verified actor into MLflow. Forwarded from the SAME value
+        # as the policy side below, because the two halves are useless apart:
+        # a collector with nothing exporting to it is a wasted pod, and a
+        # gateway exporting to a collector that is not there drops spans with
+        # no error anywhere.
+        - name: provenance.enabled
+          value: {{ .Values.policy.provenanceEnabled | quote }}
         - name: keycloak.host
           value: {{ $keycloakHost | quote }}
         {{- if .Values.keycloak.agentIdentity.enabled }}
@@ -263,6 +271,21 @@ spec:
         # call, because the agent would still present a plain operator token.
         - name: mcpGateway.agentIdentityEnforced
           value: {{ .Values.policy.agentIdentityEnforced | quote }}
+        # Stage 9 provenance: Authorino injects the verified actor and the
+        # gateway writes it to its access log. Forwarded from the same gate as
+        # agentIdentityEnforced because it is only meaningful once the
+        # exchange names both principals -- before that the actor chain would
+        # carry the shared public client as the agent and assert nothing.
+        - name: mcpGateway.provenance.enabled
+          value: {{ .Values.policy.provenanceEnabled | quote }}
+        # The OTLP half. collectorAuthority is derived, not configured: it is
+        # the Service tenant-platform's provenance-collector template creates,
+        # and inventing a second place to spell it would only let the two
+        # drift.
+        - name: mcpGateway.provenance.tracing.enabled
+          value: {{ .Values.policy.provenanceEnabled | quote }}
+        - name: mcpGateway.provenance.tracing.collectorAuthority
+          value: {{ printf "mcp-provenance-collector.%s.svc.cluster.local:4318" (include "tenant.namespace" .) | quote }}
         {{- with .Values.keycloak.agentIdentity.federated }}
         # The policy's azp predicate must name whichever client signs the FINAL
         # exchange. Forwarded from the same block tenant-platform reads, so the

@@ -2757,7 +2757,174 @@ the chart default until the flag is set in git.
 **Still open — the export leg.** The header half is done; nothing yet ships these to MLflow.
 `agent-hermes-plain.yaml:502-517` gives the required shape (`/v1/traces`, plus
 `x-mlflow-experiment-id`, `Authorization: Bearer`, `X-MLflow-Workspace`, and the `/etc/mlflow-ca`
-CA). Envoy's `envoy.tracers.opentelemetry` takes an `http_service` with `request_headers_to_add`,
-and the lab already issues an 8760h ServiceAccount token per tenant, so a static bearer is viable.
+CA). Envoy's `envoy.tracers.opentelemetry` takes an `http_service` with `request_headers_to_add`.
 Unknown: whether MLflow accepts OTLP spans from a non-SDK producer, and whether they join the
 agent's trace (needs `traceparent` from `hermes-otel`) or form their own.
+
+**Correction, same day:** the "8760h ServiceAccount token per tenant" asserted above does not
+exist. `agent-hermes-plain.yaml:460` reads the pod's **projected** SA token, which rotates, and the
+tenant namespace contains no `kubernetes.io/service-account-token` Secret. See the next entry.
+
+---
+
+### 2026-11-27 (later still) — the MLflow export leg: ingest proven, credential is the blocker
+
+Picking up the one piece Stage 9 still lacked: getting the gateway's provenance records into
+MLflow as OTEL, with no application code.
+
+**The ingest works, and better than expected.** A hand-crafted OTLP/HTTP **JSON** span — exactly
+the shape Envoy's `envoy.tracers.opentelemetry` emits — POSTed to
+`https://mlflow.…svc.cluster.local:8443/v1/traces` returned **200** and materialised as a real
+trace in the participant's experiment:
+
+```
+trace_id            tr-1d9a2bde0a7fdc4a8a5dc2fbb772f67b
+state               OK
+execution_duration  0.010s          <- derived from the span's own start/end, so it was parsed
+tags                service.name: mcp-gateway        <- OTLP *resource* attribute became a tag
+                    mlflow.trace.spansLocation: TRACKING_STORE
+```
+
+Two useful facts fall out. MLflow accepts spans from a producer that is not the MLflow SDK, and
+OTLP **resource attributes land as MLflow trace tags** — so a static `service.name` per gateway is
+free labelling. Per-request values (actor, tool, server) go in **span** attributes; the v3
+`GetTrace` endpoint returns only `trace_info` and no spans, but it does that for a genuine
+`hermes-otel` trace too, so that is an API shape, not evidence of a dropped span.
+
+**The blocker is authentication.** Both unauthenticated and workspace-only POSTs return:
+
+```
+401 UNAUTHENTICATED: Missing Authorization header or X-Forwarded-Access-Token header
+```
+
+And — correcting a claim I made earlier today and have now fixed in
+[13](13-tool-path-components.md) — **there is no long-lived token to hand Envoy.**
+`agent-hermes-plain.yaml:460` reads the pod's *projected* ServiceAccount token, which rotates, and
+the tenant namespace holds no `kubernetes.io/service-account-token` Secret. Envoy's OTLP exporter
+takes a **static** header value. That is the entire remaining problem.
+
+**Three ways out, none free — this is a decision, not a finding:**
+
+| Option | Cost | Objection |
+|---|---|---|
+| **A. Static token in the EnvoyFilter** | Smallest change | A ServiceAccount credential sitting in a namespaced object the participant can read, and in git unless a PostSync Job injects it — in which case the object drifts from the chart by design |
+| **B. A small OTLP forwarder per tenant** | One extra pod; ConfigMap + Deployment + Service in the chart | Envoy exports plaintext in-namespace, the forwarder mounts its own projected token and forwards to MLflow. No credential in git, rotation handled properly. Costs a pod against a quota already tight at 30 tenants, and there is no OpenTelemetry operator on this cluster so the image is deployed directly |
+| **C. Stop at the access log** | Zero | The gateway access log already carries actor, tool, server, `reqid` and status, proven working. No MLflow integration, so no single pane with the agent's own trace |
+
+My read: **B** is the only one that is both honest about credentials and free of application
+code, and it is the one I would build — but it spends a pod per tenant, which is the kind of call
+that should not be made silently.
+
+**Also still open, independent of the above:** whether the gateway's spans would *join* the
+agent's MLflow trace or stand beside it. Joining needs `traceparent` on the agent's outbound MCP
+call; `hermes-otel` has not been checked for that. Standalone spans still carry the full actor
+chain and the tool — they would just need correlating on `x-request-id`.
+
+**Test residue:** two probe traces (`service.name: mcp-gateway`, `mcp-gateway-noauth`) now exist
+in experiment 3 on `user-gngp7`. Harmless, but they are mine, not the participant's.
+
+---
+
+### 2026-11-27 (end of day) — option B built: the gateway's verified actor now reaches MLflow
+
+Chose option B from the previous entry and built it. Stage 9's export leg is done.
+
+**Why B rather than a static token.** Every workload here authenticates to MLflow by re-reading
+the projected ServiceAccount token from disk per request, because a cached copy "would start
+401ing hours into a workshop" (`traces.py:92`). Envoy cannot do that — its OTLP exporter takes a
+literal header baked into the xDS config. Option A would have meant creating a long-lived
+ServiceAccount token to defeat a rotation this codebase deliberately designed around, and parking
+it in an object the participant can read. B is not a new idea: it is the same pattern applied a
+fourth time, by the only kind of thing that can apply it — a process that can re-read a file.
+
+```
+Envoy hop 2 ──OTLP/http, plaintext, in-namespace──▶ collector ──OTLP + rotating bearer + CA──▶ MLflow
+```
+
+**Shipped.**
+
+- `tenant-platform/templates/provenance-collector.yaml` — ServiceAccount, Role/RoleBinding for
+  `experiments.mlflow.kubeflow.org` (same verbs as hermes-plain, since writing a trace needs
+  create/update), ConfigMap, init container that resolves the experiment id, Deployment, Service.
+  Gated on `provenance.enabled`, default off. In tenant-platform, not tenant-policy, because it
+  holds a credential and the platform Application has selfHeal ON — a participant editing policy
+  must not be able to silently delete the evidence layer.
+- `tenant-policy/templates/provenance-accesslog.yaml` — the EnvoyFilter now also carries an
+  `envoy.tracers.opentelemetry` provider, four `custom_tags`, 100% sampling and its own CLUSTER
+  for the collector. Gated on `mcpGateway.provenance.tracing.enabled`.
+- `bootstrap-tenant` forwards one value, `policy.provenanceEnabled`, to **both** charts, and
+  derives `collectorAuthority` rather than letting it be configured twice. The two halves are
+  useless apart: a collector with nothing exporting to it is a wasted pod, and a gateway exporting
+  to a collector that is not there drops spans with no error anywhere.
+
+**Proven end to end**, span as received and exported by the collector:
+
+```
+waterplant.actor      {"chain":[{"role":"subject","sub":"operator"},
+                                {"role":"agent","sub":"spiffe://.../user-gngp7-openshell-sandbox"}],
+                       "jti":"ntrtte:6ea29ec2-..."}
+waterplant.tool       get_reservoir_level
+waterplant.server     user-gngp7-agentops/telemetry-mcp
+waterplant.mcp_method tools/call
+guid:x-request-id     0319bd36-a8a4-9ceb-b210-9f154014b963
+http.status_code      200
+```
+
+In MLflow each turn now shows one `hermes-agent` trace plus two `mcp-gateway-<user>` traces, one
+per gateway hop. Envoy and istio attributes ride along free.
+
+**Three traps, each of which cost a deploy cycle, all now fixed in the chart with the reason
+written beside them:**
+
+1. `otlphttp` appends `/v1/traces` to `endpoint`, and MLflow's ingest is already at `/v1/traces` —
+   so `endpoint` POSTs to `/v1/v1/traces`. Use `traces_endpoint`.
+2. The collector's `${env:VAR}` expansion runs after the YAML parse and re-infers the type, so an
+   all-digits experiment id arrives as an int and the collector refuses to start
+   (`expected type 'configopaque.String', got unconvertible type 'int'`). The init container
+   substitutes into quoted text instead and writes the finished config.
+3. The `debug` exporter logs at INFO, so with the default `warn` it prints nothing — which reads
+   exactly like "no spans are arriving". The chart now forces `info` when `debugExporter` is on.
+
+**Verified components before building:** `registry.redhat.io/rhosdt/opentelemetry-collector-rhel8`
+pulls on this cluster and is otelcol 0.140.1, shipping the otlp receiver, otlphttp exporter and
+bearertokenauth extension. There is no OpenTelemetry operator here, so it is a plain Deployment.
+
+**Still open.** The gateway's spans stand beside the agent's trace rather than nesting inside it.
+Joining needs `traceparent` on the agent's outbound MCP call; Envoy already extracts inbound trace
+context, so if `hermes-otel` propagated one they would nest with no further work. Not yet checked.
+Until then `x-request-id` is the correlation key.
+
+**Cluster state:** `user-gngp7` runs with provenance fully on, applied from `helm template` output
+at chart defaults (debug exporter off). Chart and bootstrap defaults remain off.
+
+---
+
+### 2026-11-27 — two follow-ups on the OTLP leg: the empty second trace, and why nesting is impossible
+
+**The empty trace.** A tool call crosses the gateway twice and Envoy traced both, so every call
+produced two MLflow traces — and the one that sorts first is often the useless one. Hop 1 is the
+public `/mcp` listener: no tool name yet, and `mcp-auth-policy` injects no actor, so its span
+arrives `waterplant.tool=none`, `waterplant.actor=none`. Confirmed by span name:
+
+```
+mcp-gateway.user-gngp7-agentops.svc...:8080/*     tool=none              actor=none
+telemetry-mcp.user-gngp7-agentops.svc...:8080/*   tool=get_reservoir_level  actor={"chain":[...]}
+```
+
+Fixed with the collector's `filter` processor (`provenance.toolCallsOnly`, default on), dropping
+any span that is not an authorized tool call. One gateway trace per call now. Stated cost:
+unauthenticated 401s at the public listener no longer reach MLflow — they stay in the access log.
+
+**Nesting under the agent's trace is not achievable from our side.** Measured rather than assumed:
+hop 1 and hop 2 carry *different* `traceparent` trace ids, and hop 2's root span has an **empty
+Parent ID**. Envoy injects `traceparent` upstream whenever tracing is on, so hop 1 did hand the
+broker a context; the broker made the hop-2 request without it. The chain breaks **inside the MCP
+broker**, a vendor image.
+
+The consequence is worth being precise about: instrumenting the agent to propagate `traceparent`
+would be necessary but **not sufficient**, because the broker sits between the agent and the only
+span that carries the actor. So no amount of work on our side produces the single nested view.
+Correlation is time + tool name; `jti` cannot serve, since it identifies the token and is shared
+across calls within its cache TTL.
+
+`tp=%REQ(TRACEPARENT)%` stays in the access-log format — it is what made this diagnosable.

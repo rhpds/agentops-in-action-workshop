@@ -136,12 +136,91 @@ TLS:      the CA mounted at /etc/mlflow-ca
 ```
 
 Envoy's `envoy.tracers.opentelemetry` takes an `http_service` with `request_headers_to_add`, so all
-three headers are expressible. The bearer would normally rotate, but this lab already issues one
-**8760h** ServiceAccount token per tenant, so a static value is viable.
+three headers are expressible.
 
-Open:
+**Built and working, 2026-11-27.** Measured in this order:
 
-1. Does MLflow accept OTLP spans from a producer that is not the MLflow SDK?
-2. Do the gateway's spans **join the agent's trace**, or form their own? Joining needs `traceparent`
-   on the agent's outbound MCP call, which `hermes-otel` has not been checked for. Separate traces
-   still carry actor + tool + decision; they would just need correlating, and `jti` is the key.
+| Question | Result |
+|---|---|
+| Does MLflow accept OTLP from a non-SDK producer? | **Yes.** A hand-crafted OTLP/HTTP JSON span POSTed to `/v1/traces` returned `200` and materialised as a trace, `state: OK`, `execution_duration` derived from the span's own timings |
+| Do OTLP resource attributes survive? | **Yes** — `service.name` comes back as an MLflow **trace tag** |
+| Is authentication required? | **Yes.** Unauthenticated returns `401 UNAUTHENTICATED: Missing Authorization header or X-Forwarded-Access-Token header` |
+| Is there a long-lived token for Envoy? | **No.** Correcting an earlier claim here: there is no 8760h ServiceAccount token. `agent-hermes-plain.yaml:460` reads the pod's **projected** token, which rotates, and the namespace holds no `kubernetes.io/service-account-token` Secret |
+
+That last row is the whole design problem. Every workload here authenticates to MLflow the same
+way — re-read the projected token from disk on each request, because a cached copy "would start
+401ing hours into a workshop" (`traces.py:92`). **Envoy cannot do that**: its OTLP exporter takes a
+literal header baked into the xDS config — no file read, no refresh hook, no credential plugin.
+
+So the fix is not to defeat rotation with a long-lived token in the EnvoyFilter. It is to put the
+export behind *a process that can re-read a file* — the lab's existing pattern, applied a fourth
+time. A per-tenant OpenTelemetry Collector
+(`tenant-platform/templates/provenance-collector.yaml`) receives OTLP in-namespace over plaintext
+and forwards to MLflow with `bearertokenauth`, whose upstream docs say "a file-backed token is
+picked up as the file changes".
+
+```
+Envoy hop 2 ──OTLP/http, plaintext, in-namespace──▶ collector ──OTLP + rotating bearer + CA──▶ MLflow
+```
+
+**Proven end to end.** The span the collector received and exported:
+
+```
+waterplant.actor      {"chain":[{"role":"subject","sub":"operator"},
+                                {"role":"agent","sub":"spiffe://agentops.lab/ns/user-gngp7-agentops/
+                                                       sa/user-gngp7-openshell-sandbox"}],
+                       "jti":"ntrtte:6ea29ec2-..."}
+waterplant.tool       get_reservoir_level
+waterplant.server     user-gngp7-agentops/telemetry-mcp
+waterplant.mcp_method tools/call
+guid:x-request-id     0319bd36-a8a4-9ceb-b210-9f154014b963
+http.status_code      200     upstream_cluster  outbound|8080||telemetry-mcp...
+```
+
+Envoy and istio's own attributes come along free. In MLflow, each turn now produces one
+`hermes-agent` trace and two `mcp-gateway-<user>` traces — one per gateway hop.
+
+**Three traps worth knowing, each of which cost a deploy cycle:**
+
+1. `otlphttp` **appends** `/v1/traces` to `endpoint`, and MLflow's ingest already lives at
+   `/v1/traces` — so `endpoint` POSTs to `/v1/v1/traces`. Use `traces_endpoint` and spell the URL.
+2. The collector's own `${env:VAR}` expansion runs **after** the YAML parse and re-infers the type,
+   so an all-digits experiment id arrives as an int: `expected type 'configopaque.String', got
+   unconvertible type 'int'`. The init container substitutes into quoted text instead.
+3. The `debug` exporter writes its span dump at **INFO**, so with the default `warn` telemetry
+   level it prints nothing — indistinguishable from "no spans are arriving". The chart forces
+   `info` whenever `debugExporter` is on.
+
+**Both hops are traced, and only one is worth keeping.** Hop 1 is the public `/mcp` listener,
+where there is no tool name yet and the AuthPolicy injects no actor, so its span arrives with
+`waterplant.tool=none` and `waterplant.actor=none`. Unfiltered that puts **two** traces in the
+experiment per call, one of them empty, sorting indistinguishably beside the real one. The
+collector's `filter` processor drops any span that is not an authorized tool call
+(`provenance.toolCallsOnly`, default on). The cost, stated because it is real: unauthenticated
+401s at the public listener disappear from MLflow too, since they never acquire a tool name. They
+remain in the gateway access log.
+
+## Why the gateway's spans cannot nest under the agent's trace
+
+They stand beside the agent's trace in the same experiment rather than inside it, and this is
+**not** fixable from our side. Measured:
+
+| Evidence | Reading |
+|---|---|
+| Hop 1 request carries `tp=00-5b8f70a3…-01`, hop 2 carries `tp=00-2efcbb3f…-01` | Different trace ids — the two hops are unrelated traces |
+| Hop 2's **root span has an empty Parent ID** | No usable inbound trace context was extracted, so Envoy started a new trace |
+
+Envoy injects `traceparent` toward its upstream whenever tracing is on, so hop 1's Envoy *did*
+hand the MCP broker a trace context. The broker then made the hop-2 request without it. So the
+chain breaks **inside the MCP broker**, which is a vendor image
+(`registry.redhat.io/rhcl-tech-preview/mcp-gateway-rhel9`).
+
+That ordering matters: instrumenting the agent to emit `traceparent` would be necessary but **not
+sufficient**. Even a perfectly propagating agent loses the context at the broker, and the broker
+is exactly the hop that stands between the agent and the span carrying the actor. Nesting needs a
+change we do not own.
+
+Until then, correlate on **time plus tool name**: the agent's own trace records which tool it
+called, and the gateway's span records who the platform verified for that same tool a moment
+later. `jti` does not serve here — it identifies the token, which is shared across every call in
+its cache TTL.

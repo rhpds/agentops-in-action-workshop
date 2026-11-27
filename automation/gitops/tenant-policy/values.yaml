@@ -56,6 +56,20 @@ mcpGateway:
     # pick provenance records out of ordinary Envoy traffic. See
     # templates/provenance-accesslog.yaml.
     logPrefix: WATERPLANT-ACTOR
+    # Export the same facts as OTLP spans so they land in MLflow beside the
+    # agent's own trace, instead of only in the gateway pod's stdout. The
+    # access log needs nothing else to work and survives this being off; it is
+    # just not durable, queryable, or joined to the turn the participant is
+    # looking at.
+    #
+    # Requires tenant-platform's provenance.enabled -- the per-tenant OTLP
+    # collector that holds the MLflow credential. bootstrap-tenant forwards
+    # both from one place so they cannot drift apart: a gateway exporting to a
+    # collector that is not there drops spans silently.
+    tracing:
+      enabled: false
+      # host:port of that collector's Service, in this namespace.
+      collectorAuthority: ""
   # PostSync Job that makes a sync take effect: it restarts the gateway's Envoy
   # and the agent. See templates/mcp-gateway-rollout.yaml.
   rollout:

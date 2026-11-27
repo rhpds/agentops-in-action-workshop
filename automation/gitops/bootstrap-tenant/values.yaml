@@ -201,6 +201,18 @@ policy:
   # Set it to false ONLY alongside agentIdentity.enabled: false, or every tool
   # call is refused with the misleading "I don't have sufficient permissions".
   # See docs/agent-identity/PROGRESS.md.
+  # Stage 9 provenance. Authorino injects x-waterplant-actor on the internal
+  # listener and the gateway logs it with the tool, the server and a per-call
+  # x-request-id -- the evidence layer's answer to "who asked?", produced
+  # entirely at the gateway with no code in any MCP server, plant-api or the
+  # agent. See docs/agent-identity/13-tool-path-components.md.
+  #
+  # OFF by default. The mechanism is proven on a live tenant and is additive
+  # (nothing breaks if no one reads the header), but nothing consumes it yet:
+  # the MLflow export leg is unbuilt because Envoy's OTLP exporter needs a
+  # static bearer and MLflow's projected ServiceAccount token rotates. Turn it
+  # on when that is resolved, or now if the access log alone is wanted.
+  provenanceEnabled: false
   agentIdentityEnforced: true
   mcpGatewayEnforced: true
 

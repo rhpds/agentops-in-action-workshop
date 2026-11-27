@@ -1,0 +1,321 @@
+{{- if .Values.provenance.enabled }}
+{{- $ns := printf "%s-%s" .Values.username .Values.namespaceSuffix -}}
+{{- $sa := "mcp-provenance-collector" -}}
+{{/*
+Stage 9 -- provenance, the export leg.
+
+Why this pod exists at all, because it is the one piece that looks avoidable
+and is not. The gateway's Envoy is the only component in the tool path that
+holds the verified actor AND can emit a span (see
+docs/agent-identity/13-tool-path-components.md). It can export OTLP directly.
+But MLflow's OTLP endpoint demands a bearer token, and every other workload
+here solves that the same way -- re-read the projected ServiceAccount token
+from disk on each request, because the projection rotates and a cached copy
+starts 401ing hours into a workshop (traces.py:92, and the same pattern in
+agent-hermes-plain.yaml and the hermes_otel plugin).
+
+Envoy cannot do that. Its OTLP exporter takes a literal header baked into the
+xDS config: no file read, no refresh hook, no credential plugin on that path.
+A token pasted in would freeze at render time and expire mid-lab.
+
+So this collector is not a new idea -- it is the lab's existing pattern
+applied a fourth time, by the only kind of thing that can apply it: a process
+that can re-read a file. The bearertokenauth extension does exactly that;
+upstream's wording is "a file-backed token is picked up as the file changes".
+
+The alternative considered and rejected was a long-lived ServiceAccount token
+baked into the EnvoyFilter. That is a non-rotating credential sitting in a
+namespaced object the participant can read, to defeat a rotation this codebase
+deliberately designed around. A pod is the cheaper price.
+
+Lives in tenant-platform, not tenant-policy, on purpose: this is infrastructure
+with a credential, and the platform Application has selfHeal ON. A participant
+editing their policy must not be able to silently delete the evidence layer.
+The two policy-side objects -- the AuthPolicy actor header and the gateway
+EnvoyFilter -- stay in tenant-policy where participants may edit them.
+*/}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $sa }}
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: {{ $sa }}
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+---
+{{/*
+MLflow runs --app-name=kubernetes-auth, so every API call becomes a
+SelfSubjectAccessReview against these strings. Nothing serves
+mlflow.kubeflow.org and nothing needs to -- see the longer explanation in
+ui.yaml, including why `oc auth can-i` answers "no" even when this is granted.
+Same verbs as hermes-plain: writing a trace needs create/update, not just read.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $sa }}-mlflow
+  namespace: {{ $ns }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+rules:
+  - apiGroups: ["mlflow.kubeflow.org"]
+    resources: ["experiments"]
+    verbs: ["get", "list", "create", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $sa }}-mlflow
+  namespace: {{ $ns }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $sa }}-mlflow
+subjects:
+  - kind: ServiceAccount
+    name: {{ $sa }}
+    namespace: {{ $ns }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $sa }}-config
+  namespace: {{ $ns }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+data:
+  collector.yaml: |
+    extensions:
+      # The whole reason this pod exists. filename, never token: the
+      # projection is rotated and the extension re-reads it on change.
+      bearertokenauth:
+        scheme: Bearer
+        filename: /var/run/secrets/kubernetes.io/serviceaccount/token
+    receivers:
+      otlp:
+        protocols:
+          http:
+            # Plaintext, and that is fine: the Service is namespace-local and
+            # tenant-policy's NetworkPolicy already confines ingress to this
+            # namespace. The credential is added on the way OUT, not here.
+            endpoint: 0.0.0.0:4318
+    processors:
+      batch:
+        timeout: 5s
+        send_batch_size: 64
+{{- if .Values.provenance.toolCallsOnly }}
+      # A tool call crosses this gateway TWICE and Envoy traces both hops, but
+      # only the second one carries anything: hop 1 is the public /mcp
+      # listener, where there is no tool name yet and the AuthPolicy injects
+      # no actor, so its span arrives with waterplant.tool=none and
+      # waterplant.actor=none. Shipping it would put two traces in the
+      # participant's experiment per call, one of them empty, and the empty
+      # one sorts indistinguishably beside the real one.
+      #
+      # So drop any span that is not an authorized tool call. This also drops
+      # the ext_proc child spans, which carry no provenance either.
+      #
+      # What this costs, and it is a real cost: unauthenticated rejections at
+      # the public listener (401) disappear too, because they never acquire a
+      # tool name. They are still in the gateway access log. Set
+      # toolCallsOnly=false to keep every hop as a separate trace.
+      filter:
+        error_mode: ignore
+        traces:
+          span:
+            - 'attributes["waterplant.tool"] == nil'
+            - 'attributes["waterplant.tool"] == "none"'
+{{- end }}
+      # Envoy names its spans after the operation; this makes the experiment
+      # readable by saying which gateway produced them.
+      resource:
+        attributes:
+          - key: service.name
+            value: {{ printf "mcp-gateway-%s" .Values.username | quote }}
+            action: upsert
+    exporters:
+      otlphttp/mlflow:
+        # traces_endpoint, not endpoint: otlphttp APPENDS /v1/traces to
+        # `endpoint`, and MLflow's ingest already lives at the server root
+        # /v1/traces -- so `endpoint` would POST to /v1/v1/traces and 404.
+        # Spelling the full URL removes the guesswork.
+        traces_endpoint: {{ printf "%s/v1/traces" (.Values.ui.mlflowApiUrl | trimSuffix "/") | quote }}
+        auth:
+          authenticator: bearertokenauth
+        tls:
+          # openshift-service-serving-signer, which no public root knows.
+          ca_file: /etc/mlflow-ca/service-ca.crt
+        headers:
+          X-MLflow-Workspace: {{ $ns | quote }}
+          # Which experiment the spans land in. MLflow addresses experiments by
+          # id and the chart knows only the name, so the init container
+          # resolves it and substitutes here.
+          #
+          # A placeholder rather than the collector's own ${env:...} expansion,
+          # which looks like the obvious tool and is not: expansion happens
+          # after the YAML parse and re-infers the type, so an all-digits id
+          # arrives as an int and the collector refuses to start with
+          # "expected type 'configopaque.String', got unconvertible type
+          # 'int'". Substituting into quoted text keeps it a string.
+          x-mlflow-experiment-id: "__MLFLOW_EXPERIMENT_ID__"
+        retry_on_failure:
+          enabled: true
+          initial_interval: 2s
+          max_elapsed_time: 60s
+{{- if .Values.provenance.debugExporter }}
+      # Prints every span, attributes included, to this pod's log. The only
+      # straightforward way to see what the gateway actually tagged: MLflow's
+      # API returns trace_info without spans, so a span attribute that never
+      # arrived looks identical to one that did.
+      debug:
+        verbosity: detailed
+{{- end }}
+    service:
+      extensions: [bearertokenauth]
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [{{ if .Values.provenance.toolCallsOnly }}filter, {{ end }}resource, batch]
+          exporters: [otlphttp/mlflow{{ if .Values.provenance.debugExporter }}, debug{{ end }}]
+      telemetry:
+        logs:
+          # debugExporter forces info, because the debug exporter writes its
+          # span dump at INFO and the default warn silently swallows it --
+          # which reads exactly like "no spans are arriving" and sends you
+          # debugging the gateway instead of the log level.
+          level: {{ if .Values.provenance.debugExporter }}"info"{{ else }}{{ .Values.provenance.logLevel | default "warn" | quote }}{{ end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $sa }}
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: {{ $sa }}
+    rhdp.redhat.com/lab: agentops-in-action
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $sa }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ $sa }}
+      annotations:
+        # Roll the pod when the config changes; a ConfigMap edit alone leaves
+        # the old config loaded and nothing says so.
+        checksum/config: {{ printf "%s|%s|%v|%v" .Values.ui.mlflowApiUrl (.Values.provenance.logLevel | default "warn") .Values.provenance.debugExporter .Values.provenance.toolCallsOnly | sha256sum }}
+    spec:
+      serviceAccountName: {{ $sa }}
+      initContainers:
+        # MLflow's OTLP ingest wants the experiment ID, and the chart knows
+        # only the name. Same resolve-or-create the hermes-plain seed does,
+        # and the same failure mode if RBAC is missing: say which permission,
+        # rather than falling through to create and reporting that instead.
+        - name: resolve-experiment
+          image: {{ .Values.provenance.resolverImage | quote }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              python3 - <<'PY'
+              import json, os, ssl, urllib.error, urllib.request
+              base = os.environ["MLFLOW_API_URL"].rstrip("/") + "/mlflow/api/2.0/mlflow"
+              ctx = ssl.create_default_context(cafile="/etc/mlflow-ca/service-ca.crt")
+              hdr = {
+                  "Authorization": "Bearer " + open(
+                      "/var/run/secrets/kubernetes.io/serviceaccount/token").read().strip(),
+                  "X-MLflow-Workspace": os.environ["NAMESPACE"],
+                  "Content-Type": "application/json",
+              }
+              name = os.environ["MLFLOW_EXPERIMENT"]
+              try:
+                  req = urllib.request.Request(
+                      base + "/experiments/get-by-name?experiment_name=" + name, headers=hdr)
+                  exp_id = json.load(urllib.request.urlopen(
+                      req, timeout=20, context=ctx))["experiment"]["experiment_id"]
+              except urllib.error.HTTPError as exc:
+                  if exc.code in (401, 403):
+                      raise SystemExit(
+                          "provenance-collector: MLflow refused the lookup (%d); the "
+                          "ServiceAccount needs get/list/create on "
+                          "experiments.mlflow.kubeflow.org" % exc.code)
+                  if exc.code != 404:
+                      raise
+                  req = urllib.request.Request(
+                      base + "/experiments/create", method="POST", headers=hdr,
+                      data=json.dumps({"name": name}).encode())
+                  exp_id = json.load(urllib.request.urlopen(
+                      req, timeout=20, context=ctx))["experiment_id"]
+
+              # Write the finished config rather than the bare id. The
+              # collector's own env expansion cannot be used here (see the
+              # header comment), and the root filesystem is read-only, so
+              # substituting at startup in the collector container would need
+              # another writable mount for no gain.
+              cfg = open("/conf/collector.yaml").read()
+              assert "__MLFLOW_EXPERIMENT_ID__" in cfg, "placeholder missing from ConfigMap"
+              open("/shared/collector.yaml", "w").write(
+                  cfg.replace("__MLFLOW_EXPERIMENT_ID__", str(exp_id)))
+              print("provenance-collector: experiment %s, config written" % exp_id)
+              PY
+          env:
+            - { name: MLFLOW_API_URL, value: {{ .Values.ui.mlflowApiUrl | quote }} }
+            - { name: NAMESPACE, value: {{ $ns | quote }} }
+            - { name: MLFLOW_EXPERIMENT, value: {{ .Values.ui.mlflowExperiment | default .Values.username | quote }} }
+          volumeMounts:
+            - { name: config, mountPath: /conf, readOnly: true }
+            - { name: shared, mountPath: /shared }
+            - { name: mlflow-ca, mountPath: /etc/mlflow-ca, readOnly: true }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+      containers:
+        - name: collector
+          image: {{ .Values.provenance.collectorImage | quote }}
+          args: ["--config=/shared/collector.yaml"]
+          ports:
+            - { containerPort: 4318, name: otlp-http }
+          volumeMounts:
+            - { name: config, mountPath: /conf, readOnly: true }
+            - { name: shared, mountPath: /shared, readOnly: true }
+            - { name: mlflow-ca, mountPath: /etc/mlflow-ca, readOnly: true }
+          resources:
+            requests: {{ .Values.provenance.resources.requests | toYaml | nindent 14 }}
+            limits: {{ .Values.provenance.resources.limits | toYaml | nindent 14 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+      volumes:
+        - name: config
+          configMap:
+            name: {{ $sa }}-config
+        - name: shared
+          emptyDir: {}
+        - name: mlflow-ca
+          configMap:
+            name: mlflow-service-ca
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $sa }}
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: {{ $sa }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  selector:
+    app.kubernetes.io/name: {{ $sa }}
+  ports:
+    - { name: otlp-http, port: 4318, targetPort: 4318 }
+{{- end }}

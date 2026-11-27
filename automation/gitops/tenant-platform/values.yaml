@@ -143,6 +143,52 @@ docs:
 # and token-exchange over HTTP (§D3). `hint` is what the gateway's
 # discover_tools meta-tool returns to help an agent choose a server.
 # ---------------------------------------------------------------------------
+# Stage 9 -- provenance. The OTLP forwarder that carries the gateway's verified
+# actor into MLflow. See templates/provenance-collector.yaml for why a pod is
+# needed at all, and docs/agent-identity/13-tool-path-components.md for the
+# component-by-component reasoning behind doing this at the gateway.
+#
+# The two policy-side halves live in tenant-policy under its own
+# mcpGateway.provenance.enabled: the AuthPolicy that injects the actor, and the
+# EnvoyFilter that logs and traces it. bootstrap-tenant forwards both from one
+# place so they cannot drift apart -- a collector with nothing exporting to it
+# is a wasted pod, and a gateway exporting to a collector that is not there
+# drops spans silently.
+provenance:
+  # OFF by default. Costs one pod per tenant, which is a real charge against a
+  # quota that is already tight at 30 tenants, so it is opt-in rather than
+  # assumed.
+  enabled: false
+  # Red Hat's build of the OpenTelemetry Collector. Verified to pull on an RHDP
+  # cluster and to ship the three components this needs: the otlp receiver, the
+  # otlphttp exporter and the bearertokenauth extension (otelcol 0.140.1).
+  # There is no OpenTelemetry operator on these clusters, so this is a plain
+  # Deployment rather than an OpenTelemetryCollector CR.
+  collectorImage: registry.redhat.io/rhosdt/opentelemetry-collector-rhel8:latest
+  # Resolves the MLflow experiment id before the collector starts. Only needs
+  # python3 and the service CA; the UBI python image is already pulled on these
+  # clusters for other workloads.
+  resolverImage: registry.access.redhat.com/ubi9/python-311:latest
+  # warn keeps the log quiet in a workshop. Set to info or debug when checking
+  # whether spans are actually leaving -- the collector reports export failures
+  # at warn, but says nothing on success.
+  logLevel: warn
+  # Also print every span, attributes included, to the collector's log. Off
+  # by default -- it is verbose. Turn it on to answer "is the gateway actually
+  # tagging the actor?", which MLflow's API cannot answer directly: it returns
+  # trace_info without spans, so a missing attribute looks like a present one.
+  debugExporter: false
+  # Export only spans that are an authorized tool call. On by default: the
+  # gateway traces BOTH hops of every call, and hop 1 (the public /mcp
+  # listener) has no tool name and no injected actor, so it would put an empty
+  # second trace beside every real one in the participant's experiment.
+  # Turning this off keeps every hop, including 401s at the public listener.
+  toolCallsOnly: true
+  resources:
+    requests: { cpu: 10m, memory: 64Mi }
+    limits:   { cpu: 200m, memory: 192Mi }
+
+# ---------------------------------------------------------------------------
 mcp:
   servers:
     - name: telemetry-mcp
