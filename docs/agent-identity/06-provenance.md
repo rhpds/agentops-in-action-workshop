@@ -1,5 +1,24 @@
 # 06 — Provenance: making the evidence layer answer "who asked?"
 
+> **SUPERSEDED IN PART — read [13-tool-path-components.md](13-tool-path-components.md) first.**
+>
+> The *goal* of this document stands, and so does the actor chain it specifies. **How the actor is
+> delivered has changed completely**, because the route described below does not scale: it routed
+> the actor through the three MCP servers' `client.py`, and we may not own every MCP server, nor
+> want to patch each one as servers are added.
+>
+> | This document says | What was actually built |
+> |---|---|
+> | MCP servers read `x-waterplant-actor` and forward it ("Route A") | **Nothing in any MCP server changes.** The gateway's Envoy emits the actor as an OTLP span |
+> | `raised_by_verified` beside `raised_by` in plant-api | **Dropped.** The gateway is not on the server→plant-api hop, so it cannot be reached without the server change above |
+> | `GET /audit` and an actor on control actions | **Dropped**, same reason |
+> | `ui/traces.py` gains `tag_trace()` | **Dropped.** The console never sees the verified actor; anything it wrote would be self-asserted |
+> | `jti` is the join key | **Wrong** — corrected in place below. `jti` identifies the token; `x-request-id` identifies the call |
+>
+> **Zero images are needed for what shipped.** Everything is chart configuration plus one sidecar
+> built from images already pulled on the cluster.
+
+
 Identity at the gateway solves authorization. It does not by itself solve attribution — and
 attribution is what this lab actually runs on. Every module from 1 to 6 asks participants to prove
 something from a trace, a tool result, or plant state. None of those records a principal today.

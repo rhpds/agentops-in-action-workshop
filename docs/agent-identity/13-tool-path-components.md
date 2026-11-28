@@ -10,6 +10,30 @@ The short version, and the reason the answer took so long to find:
 
 Everything below was measured on tenant `user-gngp7` on 2026-11-27 unless marked otherwise.
 
+## Diagrams
+
+![How one tool call's identity reaches MLflow](diagrams/trace-flow.png)
+
+*The tracing path on its own — the three stages, both places the trace context dies, and what
+each identifier means. [editable master](diagrams/trace-flow.excalidraw)*
+
+![One tool call — the flow](diagrams/tool-call-flow.png)
+
+*The same call including the identity half: 21 numbered steps from the participant's message to
+the span landing in MLflow. [editable master](diagrams/tool-call-flow.excalidraw)*
+
+Both `.png` files carry the scene embedded in a `tEXt` chunk, so either can be dragged back into
+Excalidraw and edited. Regenerate with:
+
+```bash
+cd docs/agent-identity/diagrams
+python3 gen-trace-flow.py trace-flow.excalidraw && python3 render.py trace-flow.excalidraw trace-flow.png 1.6
+python3 gen-tool-call-flow.py tool-call-flow.excalidraw && python3 render.py tool-call-flow.excalidraw tool-call-flow.png 1.6
+```
+
+`render.py` needs only `google-chrome` — it builds an SVG and screenshots it headless, then
+re-embeds the scene and reads it back to verify.
+
 ## The path
 
 A tool call crosses the gateway's Envoy **twice**. That is the single most important structural
@@ -280,6 +304,47 @@ One trace per turn, a real parent/child edge, and the verified actor sitting und
 belongs to. `waterplant.actor` and `waterplant.verified_calls` are also written as trace **tags**,
 because span attributes are not searchable from the trace list and tags are.
 
+### Upstream check: the broker's non-propagation is deliberate, not a version gap
+
+Investigated 2026-11-28, because "upgrade the broker" is the obvious first thing anyone will
+suggest. It does not help.
+
+**Our build is already the newest published.** Digest `054b0646…` is **0.7.1 / rhcl-1.4.1**,
+published 2026-06-24 — the latest of six images in the Red Hat catalog for
+`rhcl-tech-preview/mcp-gateway-rhel9`.
+
+**Upstream is [Kuadrant/mcp-gateway](https://github.com/Kuadrant/mcp-gateway)**, and it does have
+OpenTelemetry: `internal/otel/otel.go` installs a composite W3C propagator
+(`propagation.TraceContext{}` + `Baggage{}`) *unconditionally*, outside the `TracesEnabled()`
+gate, and that code landed 2026-02-16 — months before our June build. So the propagator is
+present in the binary we run.
+
+**But there is exactly one propagation call site in the entire repository:**
+
+```
+internal/mcp-router/tracing.go:50:  return otel.GetTextMapPropagator().Extract(ctx, carrier)
+```
+
+An `Extract`. **No `Inject`, anywhere**, and no `otelhttp` in `go.mod` — so the hairpin HTTP
+client that makes the hop-2 request has no instrumentation to inject with either. The broker reads
+trace context and never writes it.
+
+**And it was cut on purpose.** Issue
+[#575 "[Router] Trace Context Propagation in MCP"](https://github.com/Kuadrant/mcp-gateway/issues/575),
+closed 2026-02-23, scoped the router half in and struck the broker half out — including, verbatim
+and struck through, *"Propagate trace context to upstream MCP server HTTP calls"*.
+
+**No flag can turn it on.** `/mcp_gateway --help` exposes 19 flags and not one concerns tracing or
+headers. `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` would make the broker export its *own* spans
+(`TracesEnabled()` is just that variable being non-empty), but it cannot create an `Inject` that
+is not in the code — and in any case the operator builds a fixed env list (`OAUTH_*`,
+`GATEWAY_SIGNING_KEY`, `TRUSTED_HEADER_PUBLIC_KEY`) with no OTEL wiring and no passthrough field
+on `MCPGatewayExtension`, so there is no supported way to set it.
+
+So the time-window match is not a workaround for something we failed to configure. It stands until
+upstream reopens the struck-out half of #575 — which is worth filing, since the gateway is exactly
+the component whose spans most need to join the caller's trace.
+
 ### The collector exports to the stitcher, not to MLflow
 
 An earlier version let the collector write gateway spans to MLflow and had the stitcher fold and
@@ -369,3 +434,67 @@ anything driving the agent still gets its provenance attached.
 The matching logic would be identical either way, since neither component can know the gateway's
 trace id in advance.
 
+
+## The pipeline, end to end
+
+Everything below is chart configuration plus one sidecar. **No application code and no image
+builds** — the collector is Red Hat's published OpenTelemetry Collector and the sidecar runs the
+UBI python image already pulled for the init container beside it.
+
+```
+Envoy hop 2 (mcps listener)
+   │  AuthPolicy response.success.headers  ->  x-waterplant-actor
+   │  ext_proc                             ->  x-mcp-toolname / servername / method
+   │  HCM tracing: custom_tags read those headers onto the span
+   ▼  OTLP/http, gzip, plaintext, localhost:4319
+collector (otelcol 0.140.1)
+   │  filter       drop anything that is not mcp_method == tools/call
+   │  groupbyattrs promote waterplant.* from span to resource attributes
+   │  resource     set service.name = mcp-gateway-<user>
+   │  batch        timeout 1s
+   ▼
+stitcher sidecar
+   │  buffer in memory until the agent's trace exists
+   │  match   agent turn whose [request_time, +duration] window contains the span
+   │  parent  the agent's own tool.mcp_gateway_<prefix>_<tool> span
+   ▼  OTLP/http + rotating bearer + service CA
+MLflow  /v1/traces   ->  filed into the agent's existing trace
+```
+
+### Turning it on
+
+One value, forwarded by `bootstrap-tenant` to both charts so the halves cannot drift:
+
+| Value | Effect |
+|---|---|
+| `policy.provenanceEnabled` | AuthPolicy actor header + gateway EnvoyFilter (tenant-policy) **and** the collector (tenant-platform) |
+| `policy.provenanceStitch` | the stitcher sidecar; only meaningful with the above |
+
+Both default **off**. With provenance on and stitch off, gateway traces land in MLflow as their
+own traces — correct, just unjoined.
+
+### Where to look when it is not working
+
+| Symptom | Look at |
+|---|---|
+| no provenance anywhere | the gateway access log — `oc logs` the gateway pod, grep `WATERPLANT-ACTOR`. If the line is there with a real `actor=`, the gateway half is fine and the problem is downstream |
+| `actor=-` in that log | the AuthPolicy's `response.success.headers` is missing, or the call is hop 1 (`authority` does not end `.mcp.local`) |
+| spans leave the gateway but nothing reaches MLflow | `provenance.debugExporter=true` prints every span with attributes. It forces the collector's log level to `info`, because the debug exporter writes at INFO and the default `warn` swallows it silently |
+| spans reach the stitcher but never attach | its log prints `attached N, orphaned N, pending N` each cycle. `pending` climbing means no host trace is matching |
+| a trace tagged `service.name: waterplant-unmatched` | a span whose turn never appeared, emitted standalone after `unmatchedTimeoutSeconds` rather than dropped |
+
+### Sampling
+
+`random_sampling`, `client_sampling` and `overall_sampling` are all **100**. This is an audit
+record, and a sampled audit record answers "who did this" only sometimes. Volume is bounded by how
+fast a human can converse with an agent — a handful of spans per turn.
+
+### What is durable and what is not
+
+The **gateway access log** is the durable copy: every verified call appears there, including the
+protocol traffic and the 401s that never reach MLflow. It survives stitching failures, collector
+restarts and MLflow outages — and is lost on pod restart, so it is a debugging record rather than
+an archive.
+
+A span held in the stitcher's buffer is **in memory only**. A pod restart loses it from MLflow.
+That is the price of never creating a loose trace, and it is why the access log stays.

@@ -3134,3 +3134,88 @@ decompress or every payload fails UTF-8 decoding and the spans disappear with on
 (never from the gateway access log, which is the durable copy); and a span whose turn never
 appears is emitted as its own trace after `unmatchedTimeoutSeconds` under
 `service.name: waterplant-unmatched`, rather than dropped.
+
+---
+
+### 2026-11-28 — upstream check on the MCP broker: non-propagation is deliberate
+
+Checked whether a flag, a newer image or upstream source fixes the broker's refusal to carry trace
+context. It does not, and the reason is worth recording so "just upgrade the broker" is not
+re-proposed.
+
+**Already on the newest build.** Our digest `054b0646...` is **0.7.1 / rhcl-1.4.1**, published
+2026-06-24 -- the latest of six `rhcl-tech-preview/mcp-gateway-rhel9` images in the Red Hat
+catalog.
+
+**Upstream does have OTel.** [Kuadrant/mcp-gateway](https://github.com/Kuadrant/mcp-gateway)'s
+`internal/otel/otel.go` installs a composite W3C propagator (`TraceContext` + `Baggage`)
+*unconditionally*, outside the `TracesEnabled()` gate, and that landed 2026-02-16 -- months before
+our June build. The propagator is in the binary we run.
+
+**But there is exactly one propagation call site in the repo:**
+
+```
+internal/mcp-router/tracing.go:50:  return otel.GetTextMapPropagator().Extract(ctx, carrier)
+```
+
+An `Extract`. No `Inject` anywhere, and no `otelhttp` in `go.mod`, so the hairpin client making the
+hop-2 request has nothing to inject with either. This matches the measurement exactly: the broker
+receives a context and drops it.
+
+**It was descoped on purpose.** Issue #575 "[Router] Trace Context Propagation in MCP", closed
+2026-02-23, kept the router half and struck the broker half -- including, verbatim and struck
+through, "Propagate trace context to upstream MCP server HTTP calls".
+
+**No flag reaches it.** `--help` lists 19 flags, none about tracing or headers.
+`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` would make the broker export its own spans, but cannot
+conjure an `Inject` that is not in the code -- and the operator builds a fixed env list
+(`OAUTH_*`, `GATEWAY_SIGNING_KEY`, `TRUSTED_HEADER_PUBLIC_KEY`) with no OTEL wiring and no
+passthrough field on `MCPGatewayExtension`, so there is no supported way to set it anyway.
+
+Conclusion: the time-window match is not papering over a missed setting. Worth filing upstream to
+reopen the struck-out half of #575.
+
+---
+
+### 2026-11-28 — tracing written up, stale provenance docs corrected, two diagrams
+
+**Docs corrected.** Three documents still described the provenance route that was abandoned:
+
+- `06-provenance.md` — now opens with a superseded banner and a table of what it says vs what was
+  built. Its actor chain still stands; its *delivery* (MCP servers forwarding a header,
+  `raised_by_verified` in plant-api, `GET /audit`, `tag_trace()` in the console) was all dropped
+  because routing the actor through the MCP servers does not scale.
+- `07-phasing.md` — the Stage 9 action list replaced with a pointer to 13.
+- `design-note.md` — the plant-api provenance section bannered, including the `jti`-as-join-key
+  error.
+
+Deliberately NOT touched: `10-tool-call-walkthrough.md`'s "Route A / Route B" — that is the
+SVID-to-Keycloak choice, a different subject that happens to share the word. `01-current-state.md`'s
+"the three `client.py` files forward no headers" is still true and is now load-bearing: it is
+*why* this had to happen at the gateway.
+
+**New material in 13-tool-path-components.md:** the full pipeline end to end, which value turns
+each half on, a symptom-to-where-to-look table, why sampling is 100%, and what is durable (the
+access log) versus what is not (the stitcher's in-memory buffer).
+
+**Two diagrams.**
+
+- `diagrams/trace-flow.{excalidraw,png}` — new. The tracing path in three stages, both breaks, and
+  a footer separating `jti` / `x-request-id` / trace id.
+- `diagrams/tool-call-flow.{excalidraw,png}` — extended with steps 17-21. The band says explicitly
+  that 17-18 happen *at the same instant as step 13*, not after step 16, because the numbering
+  would otherwise imply the actor is produced after the answer is returned.
+
+While extending it I also fixed a **pre-existing collision**: the purple sandbox-SVID arrow was
+routed at x=1150, straight through label 6's `subject_token` line, making it unreadable in the
+committed PNG. Rerouted to x=872, in the gap between the supervisor and the OpenShell gateway.
+
+**`diagrams/render.py` is new** and worth knowing about: scene JSON -> SVG -> headless Chrome
+screenshot. No Excalidraw, no MCP server, no network.
+
+**A trap it caught.** The first version silently dropped the
+`application/vnd.excalidraw+json` tEXt chunk that these PNGs carry, which is what lets an image be
+dragged back into Excalidraw — a documented property of the assets. The renderer now re-embeds the
+scene (zlib + latin-1 bstring envelope, the format a genuine export uses) **and reads it back to
+verify the element count**, because a corrupt chunk is otherwise invisible until someone tries to
+open the image a month later.

@@ -111,27 +111,14 @@ Call that what it is: a POC-grade override. The durable form is baking the broke
 ([08](08-open-questions.md)).
 
 Sister repo:
-- the three `client.py` files (byte-identical, keep them so): read `x-waterplant-actor`, forward it
-- `plant-api`: `raised_by_verified` beside `raised_by`, an actor on control actions, `GET /audit`
-- `mcp-maintenance`: send both the model's claim and the gateway's verified actor
-
-**Image gate: user builds and pushes** `plant-api` and the three `*-mcp` images. Note `image.mcpTag`
-is `latest` with `pullPolicy: Always`, so those need only a rollout restart; `plantApi.tag` is
-pinned at `0.2.0` and **must not** be bumped before the push exists. Worth pinning `mcpTag` in the
-same change — `latest` sits two keys below a comment arguing for pinning.
-
-## Phase 6 — console: automatic operator identity and trace tags
-
-No login, ever. A background asyncio task mirroring the broker: password grant for `operator`,
-refresh on a loop, expose `token()` and `actor()`. Same env var names, so the two implementations
-stay recognisably the same mechanism.
-
-- `ui/src/waterplant_ui/identity.py` (new), wired in `app.py`
-- `harness.py`: keep the static key for Hermes' own auth; **fix `identity_is_propagated()`**, which
-  currently returns `PROTOCOL == "waterplant"` and claims propagation on a path where nothing
-  propagates
-- `traces.py`: `tag_trace()` with `waterplant.actor` / `source` / `jti`
-- `probes/`: `waterplant.source=probe`, and the `attack-runner` actor on direct plant-api calls
+> **Superseded — see [13-tool-path-components.md](13-tool-path-components.md).** The bullets this
+> block used to list (MCP-server header forwarding, `raised_by_verified` and `GET /audit` in
+> plant-api, `tag_trace()` in `ui/traces.py`) were all dropped. Routing the actor through the MCP
+> servers does not scale — we may not own every MCP server. What shipped instead is entirely
+> gateway-side: Envoy emits the actor as an OTLP span, a per-tenant collector forwards it, and a
+> stitcher attaches it into the agent's own MLflow trace as a child of the `tool.*` span. **No
+> application code and no image builds.** `attack-runner` remains unbuilt and is tracked in
+> [08-open-questions.md](08-open-questions.md).
 
 **Image gate: user builds and pushes** `waterplant-ui`.
 

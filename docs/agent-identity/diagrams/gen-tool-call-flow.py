@@ -5,7 +5,7 @@ s = Scene()
 INK, G, B, A, R, V, GY = s.INK, s.GREEN, s.BLUE, s.AMBER, s.RED, s.VIOLET, s.GREY
 
 s.text(40, 26, "One tool call — the flow", 30)
-s.text(40, 74, "Every arrow is labelled with what is actually on it. Verified on a live tenant, 2026-11-26.", 16, GY)
+s.text(40, 74, "Every arrow is labelled with what is actually on it. Verified on a live tenant: identity 2026-11-26, tracing 2026-11-28.", 16, GY)
 
 def node(x, y, w, h, title, body, col, fill, tsize=15):
     s.box(x, y, w, h, col, fill)
@@ -58,7 +58,7 @@ lbl(190, 600, '2  Bearer $API_SERVER_KEY\n   (resolves EMPTY)', GY)
 # 3 supervisor -> socket -> SPIRE
 s.arrow([(640, 622), (640, 636)], V)
 lbl(654, 614, "3  FetchJWTSVID", V)
-s.arrow([(852, 668), (1150, 668), (1150, 300), (1600, 300), (1600, 266)], V, sharp=True)
+s.arrow([(852, 668), (872, 668), (872, 300), (1600, 300), (1600, 266)], V, sharp=True)
 lbl(430, 762, '3  -> sandbox SVID    sub = spiffe://…/sa/<user>-openshell-sandbox  ,  aud = realm issuer  ,  exp +5min', V)
 
 # 4 supervisor -> OS gateway
@@ -120,5 +120,43 @@ lbl(2060, 300, 'Keycloak validates every SVID against\nthis JWKS — and knows n
 node(40, 1000, 340, 250, "DENIED  (either predicate false)",
      "403 +\n{\"jsonrpc\":\"2.0\",\n \"error\":{\"code\":-32600,\n  \"message\":\"Forbidden:\n   Insufficient permissions\n   for this tool.\"}}\n\nHermie says \"I don't have\nsufficient permissions\"", R, "#fff5f5")
 s.arrow([(426, 1100), (386, 1100)], R)
+
+# ============================================================================
+# THE TRACING PATH — added 2026-11-28
+# ============================================================================
+s.text(40, 1378, "THE TRACING PATH — how \"who did it\" reaches MLflow", 22, INK)
+s.text(40, 1412, "Steps 17 and 18 happen at the SAME INSTANT as step 13 — the allow\ndecision is what produces the actor. Steps 19 to 21 happen afterwards.", 14, GY)
+
+node(40, 1510, 340, 250, "hermes_otel",
+     "Same pod as the sandbox\nabove.\n\nWhen the turn ends it sends\nthe AGENT's own trace to\nMLflow. That trace already\nhas a tool.* span per call —\nbut no identity on it.", G, "#ebfbee")
+
+node(430, 1510, 560, 250, "17  Authorino — on ALLOW",
+     "The same check as step 13. When it allows the\ncall it ALSO returns a header, which Envoy copies\nonto the request going upstream:\n\n  x-waterplant-actor = {\"chain\":[\n      {subject: operator},\n      {agent: spiffe://…/sandbox}]}", R, "#fff5f5")
+
+node(1040, 1510, 460, 250, "18  Envoy writes a span",
+     "Tagged from the headers it now\nhas — nothing re-derives them:\n\n  waterplant.actor   = …as above\n  waterplant.tool    = get_reservoir_level\n  waterplant.server  = …/telemetry-mcp\n  waterplant.mcp_method = tools/call", B, "#e7f5ff")
+
+node(1550, 1510, 470, 250, "19  collector  (per tenant)",
+     "Keeps ONLY mcp_method = tools/call.\nHop 1 and the session handshake carry\nthe same tool name, so without this one\ncall is recorded three times.\n\nPromotes waterplant.* so MLflow shows\nthem as trace tags.", A, "#fff9db")
+
+node(2070, 1510, 500, 250, "20  stitcher  (sidecar)",
+     "Holds the span in memory, then:\n\n 1. finds the agent turn whose time\n    window contains it\n 2. picks that trace's matching tool.* span\n 3. re-emits it with the AGENT's trace id\n    and that span as its parent", A, "#fff9db")
+
+node(2620, 1470, 560, 330, "21  MLflow — what the participant opens",
+     "A trace id here IS the OTel trace id, so a span sent\nwith the agent's id lands inside the agent's trace:\n\n  agent\n    llm.qwen3-…\n      tool.mcp_gateway_telemetry_get_reservoir_level\n        gateway verified: get_reservoir_level  <- WHO\n\nOne trace per turn. No loose traces are created.", V, "#f3f0ff")
+
+# gateway -> step 17  (routed left of the step-13 label, clear of the denial box)
+s.arrow([(430, 1230), (400, 1230), (400, 1352), (700, 1352), (700, 1506)], R, sharp=True)
+lbl(412, 1326, "the allow decision", R)
+
+s.arrow([(994, 1635), (1036, 1635)], B)
+s.arrow([(1504, 1635), (1546, 1635)], A)
+s.arrow([(2024, 1635), (2066, 1635)], A)
+s.arrow([(2574, 1635), (2616, 1635)], A)
+lbl(2075, 1772, "step 20 is needed only because the broker, between steps 12 and 13, dropped the trace context", GY)
+
+# the agent's own trace reaches MLflow independently
+s.arrow([(210, 1764), (210, 1880), (2900, 1880), (2900, 1804)], G, sharp=True)
+lbl(900, 1852, "the agent's own trace — written independently, and already in MLflow before the gateway's span arrives", G)
 
 print("elements:", s.save(sys.argv[1]))

@@ -177,6 +177,12 @@ flowchart LR
 method, which compares a casefolded 120-character prefix of `request_preview`: clever, but a
 heuristic standing in for an identifier.
 
+> **Superseded — see [13-tool-path-components.md](13-tool-path-components.md).** Everything in
+> this provenance section that places the actor inside plant-api was dropped: reaching that row
+> needs the MCP servers to forward a header, and patching every MCP server does not scale. The
+> verified actor now lives as a span in the agent's MLflow trace instead. `jti` as the join key
+> was also wrong — it identifies the token, not the call; `x-request-id` identifies the call.
+>
 > ### Keep `raised_by`. Add `raised_by_verified` beside it.
 >
 > Today the *model* decides who raised a work order — an ordinary tool argument defaulting to
