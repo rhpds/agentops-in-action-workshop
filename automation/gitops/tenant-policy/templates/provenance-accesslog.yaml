@@ -1,6 +1,11 @@
 {{- if and .Values.mcpGateway.enforced .Values.mcpGateway.provenance.enabled }}
 {{- $ns := printf "%s-%s" .Values.username .Values.namespaceSuffix -}}
 {{- $otlpCluster := "waterplant_provenance_otlp" -}}
+{{- /* Derived, with the value as an override. bootstrap-tenant forwards the
+       same string, but defaulting it here means a sync that does not carry
+       that parameter still gets tracing instead of silently degrading to
+       access-log-only. The name is tenant-platform's Service. */}}
+{{- $otlpAuthority := .Values.mcpGateway.provenance.tracing.collectorAuthority | default (printf "mcp-provenance-collector.%s.svc.cluster.local:4318" $ns) -}}
 {{/*
 Stage 9 -- provenance, the gateway half.
 
@@ -90,6 +95,11 @@ spec:
                   log_format:
                     text_format_source:
                       inline_string: "{{ .Values.mcpGateway.provenance.logPrefix }} ts=%START_TIME(%Y-%m-%dT%H:%M:%S.%3fZ)% reqid=%REQ(X-REQUEST-ID)% tp=%REQ(TRACEPARENT)% authority=%REQ(:AUTHORITY)% path=%REQ(:PATH)% tool=%REQ(X-MCP-TOOLNAME)% server=%REQ(X-MCP-SERVERNAME)% mcpmethod=%REQ(X-MCP-METHOD)% actor=%REQ(X-WATERPLANT-ACTOR)% status=%RESPONSE_CODE% dur=%DURATION%\n"
+{{- /* collectorAuthority as well as the flag: with the flag on and the
+       address empty this renders socket_address.address:"" and an empty
+       port, which is a broken listener pushed to Envoy rather than a
+       disabled feature. bootstrap-tenant derives the address, so a
+       standalone render would otherwise produce exactly that. */}}
 {{- if .Values.mcpGateway.provenance.tracing.enabled }}
             # The same facts as the access log, but as an OTLP span, so they
             # land in MLflow beside the agent's own trace instead of in a pod's
@@ -109,7 +119,7 @@ spec:
                   service_name: {{ printf "mcp-gateway-%s" .Values.username | quote }}
                   http_service:
                     http_uri:
-                      uri: {{ printf "http://%s/v1/traces" .Values.mcpGateway.provenance.tracing.collectorAuthority | quote }}
+                      uri: {{ printf "http://%s/v1/traces" $otlpAuthority | quote }}
                       cluster: {{ $otlpCluster | quote }}
                       timeout: 5s
               # Every tool call, not a sample. This is an audit record, and a
@@ -160,7 +170,7 @@ spec:
                   - endpoint:
                       address:
                         socket_address:
-                          address: {{ (splitList ":" .Values.mcpGateway.provenance.tracing.collectorAuthority) | first | quote }}
-                          port_value: {{ (splitList ":" .Values.mcpGateway.provenance.tracing.collectorAuthority) | last }}
+                          address: {{ (splitList ":" $otlpAuthority) | first | quote }}
+                          port_value: {{ (splitList ":" $otlpAuthority) | last }}
 {{- end }}
 {{- end }}

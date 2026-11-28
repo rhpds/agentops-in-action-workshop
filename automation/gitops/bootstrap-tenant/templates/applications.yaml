@@ -112,8 +112,12 @@ spec:
         # a collector with nothing exporting to it is a wasted pod, and a
         # gateway exporting to a collector that is not there drops spans with
         # no error anywhere.
+        #
+        # AND-ed with agentIdentity.enabled: without the exchange there is
+        # no verified actor to carry, so the collector would be a pod doing
+        # nothing. The policy half below is already inside that gate.
         - name: provenance.enabled
-          value: {{ .Values.policy.provenanceEnabled | quote }}
+          value: {{ and .Values.policy.provenanceEnabled .Values.keycloak.agentIdentity.enabled | quote }}
         # Fold the gateway's provenance traces into the agent's own trace
         # and delete the originals. Without it a participant gets their turn
         # plus one gateway trace per tool call, sorted in among it -- correct

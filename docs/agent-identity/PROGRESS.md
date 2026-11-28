@@ -3219,3 +3219,46 @@ dragged back into Excalidraw — a documented property of the assets. The render
 scene (zlib + latin-1 bstring envelope, the format a genuine export uses) **and reads it back to
 verify the element count**, because a corrupt chunk is otherwise invisible until someone tries to
 open the image a month later.
+
+---
+
+### 2026-11-28 — drift audit: source is complete, but the CLUSTER regressed
+
+Checked properly rather than asserted: rendered both charts at the live settings and diffed nine
+objects field-by-field against the cluster, ignoring server-set bookkeeping.
+
+**Eight of nine match the chart exactly** — EnvoyFilter, ServiceAccount, Role, RoleBinding,
+ConfigMap, Deployment, Service, and `mcp-auth-policy`. Nothing exists on the cluster that is not
+in source.
+
+**The ninth is a real regression, and it is the cluster that moved, not the source.** ArgoCD
+synced `user-gngp7-policy` from git at **2026-11-27T20:16:16Z** — after commit `113565a` — and
+since `mcpGateway.provenance.enabled` defaults to **false** in git, the sync removed the
+AuthPolicy's `response.success.headers`. Measured just now: a real tool call logs `actor=-`.
+This is exactly the hazard flagged when the flag was introduced; it has now actually happened.
+
+The other pieces survived only by accident: the EnvoyFilter because the policy Application has
+`prune: false`, and the collector because `provenance-collector.yaml` is still untracked, so
+tenant-platform had nothing to prune and the objects carry no Argo tracking labels.
+
+**That half-enabled state turned out to be actively misleading**, which was worth finding. The
+gateway kept emitting spans, now with `waterplant.actor = none` (the `default_value`), the
+collector's filter only checked the tool name and method, so the stitcher dutifully attached
+`gateway verified: get_reservoir_level` spans that name nobody. A reader seeing that assumes an
+identity was checked. **Fixed: the collector now also drops spans whose actor is `nil` or
+`"none"`**, so the two halves — which live in different charts and can be enabled independently —
+fail closed on their own rather than producing a confident-looking lie.
+
+**And the restart trap recurred, in a second place.** The `checksum/config` annotation hashed a
+hand-picked list of values, which did not include the collector config body — so the ConfigMap
+updated while the running collector kept its old config, and the fix above appeared to deploy
+without doing anything. Fixed at the root: the config is now a named template
+(`provenance.collectorConfig`) and the annotation hashes **the rendered config verbatim**, so any
+edit to it rolls the pod. Proven by mutating one character and watching the checksum change.
+
+Note for anyone extracting a `define` from a template body: outer `{{- $var := … -}}` assignments
+are **not** visible inside it. `$ns` had to become
+`printf "%s-%s" .Values.username .Values.namespaceSuffix`.
+
+**To restore provenance on a tenant durably**, push and set `policy.provenanceEnabled: true` —
+re-applying rendered manifests by hand works until the next sync and no longer.

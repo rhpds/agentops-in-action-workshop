@@ -1,4 +1,185 @@
-{{- if .Values.provenance.enabled }}
+{{/*
+The collector config as a named template, so the Deployment can hash
+EXACTLY what the ConfigMap contains. Hashing a hand-picked list of
+values instead let two changes ship without restarting the pod: the
+mounted file updated while the running process kept its old config, so
+the edit looked deployed and was not. Cost a cycle twice.
+*/}}
+{{- define "provenance.collectorConfig" -}}
+extensions:
+  # The whole reason this pod exists. filename, never token: the
+  # projection is rotated and the extension re-reads it on change.
+  bearertokenauth:
+    scheme: Bearer
+    filename: /var/run/secrets/kubernetes.io/serviceaccount/token
+receivers:
+  otlp:
+    protocols:
+      http:
+        # Plaintext, and that is fine: the Service is namespace-local and
+        # tenant-policy's NetworkPolicy already confines ingress to this
+        # namespace. The credential is added on the way OUT, not here.
+        endpoint: 0.0.0.0:4318
+processors:
+  batch:
+    # 1s, not the usual 5s. This is the first term in how long a gateway
+    # trace sits visible in the participant's experiment before being
+    # folded away, and the volume is a handful of spans per turn -- there
+    # is nothing to batch for.
+    timeout: 1s
+    send_batch_size: 64
+{{- if .Values.provenance.toolCallsOnly }}
+  # A tool call crosses this gateway TWICE and Envoy traces both hops, but
+  # only the second one carries anything: hop 1 is the public /mcp
+  # listener, where there is no tool name yet and the AuthPolicy injects
+  # no actor, so its span arrives with waterplant.tool=none and
+  # waterplant.actor=none. Shipping it would put two traces in the
+  # participant's experiment per call, one of them empty, and the empty
+  # one sorts indistinguishably beside the real one.
+  #
+  # So drop any span that is not an authorized tool call. This also drops
+  # the ext_proc child spans, which carry no provenance either.
+  #
+  # What this costs, and it is a real cost: unauthenticated rejections at
+  # the public listener (401) disappear too, because they never acquire a
+  # tool name. They are still in the gateway access log. Set
+  # toolCallsOnly=false to keep every hop as a separate trace.
+  filter:
+    error_mode: ignore
+    traces:
+      span:
+        - 'attributes["waterplant.tool"] == nil'
+        - 'attributes["waterplant.tool"] == "none"'
+        # mcp_method matters as much as the tool name. Opening a session
+        # to an MCP server costs three gateway requests -- initialize,
+        # notifications/initialized and the tools/call itself -- and the
+        # broker stamps ALL THREE with the same x-mcp-toolname. Filtering
+        # on the tool alone therefore records one tool call three times,
+        # which is what it did: a single "turn on pump 3" produced six
+        # verification spans across two tools. Only tools/call is an
+        # actual invocation, and it is the same predicate the AuthPolicy
+        # uses to decide authorization, so the two agree by construction.
+        - 'attributes["waterplant.mcp_method"] != "tools/call"'
+        # And drop anything with no actor on it. The two halves of this
+        # feature live in different charts and can be enabled separately
+        # -- observed: an ArgoCD sync reverted tenant-policy to its
+        # default (provenance off) while tenant-platform's collector kept
+        # running, so the gateway emitted spans with actor=none and the
+        # stitcher dutifully attached them. A span reading "gateway
+        # verified: get_reservoir_level" that names nobody is worse than
+        # no span, because a reader assumes an identity was checked.
+        # Failing closed here makes each half safe on its own.
+        - 'attributes["waterplant.actor"] == nil'
+        - 'attributes["waterplant.actor"] == "none"'
+{{- end }}
+  # Promote the provenance values from SPAN attributes to RESOURCE
+  # attributes. This is what makes them visible at all: MLflow turns an
+  # OTLP resource attribute into a trace TAG (that is how service.name
+  # appears), but its API returns trace_info without spans -- so a span
+  # attribute is invisible both in the trace list and to anything reading
+  # over REST. Measured: a gateway trace carrying waterplant.actor on the
+  # span came back with tags holding only service.name.
+  #
+  # groupbyattrs rather than a transform statement, because it also
+  # re-groups spans so that two calls batched together do not end up
+  # sharing one resource and therefore one actor.
+  groupbyattrs:
+    keys:
+      - waterplant.actor
+      - waterplant.tool
+      - waterplant.server
+      - waterplant.mcp_method
+  # Envoy names its spans after the operation; this makes the experiment
+  # readable by saying which gateway produced them.
+  resource:
+    attributes:
+      - key: service.name
+        value: {{ printf "mcp-gateway-%s" .Values.username | quote }}
+        action: upsert
+exporters:
+{{- if .Values.provenance.stitch.enabled }}
+  # To the stitcher beside us in this pod, NOT to MLflow. Writing to
+  # MLflow directly works, but it creates a loose trace per tool call
+  # that is then folded and deleted -- measured at ~6s visible in the
+  # participant's experiment. Handing spans to the stitcher means no
+  # loose trace is ever created, and the arrival of the span is itself
+  # the trigger, so no poll interval sits in the path.
+  #
+  # Plaintext localhost: same pod, same network namespace. The MLflow
+  # credential is applied by the stitcher on the way out, not here.
+  otlphttp/stitcher:
+    endpoint: {{ printf "http://localhost:%v" .Values.provenance.stitch.receiverPort | quote }}
+    # JSON so the stitcher can parse it with the standard library; the
+    # default proto encoding would need generated protobuf bindings.
+    encoding: json
+    tls:
+      insecure: true
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_elapsed_time: 30s
+{{- end }}
+  otlphttp/mlflow:
+    # traces_endpoint, not endpoint: otlphttp APPENDS /v1/traces to
+    # `endpoint`, and MLflow's ingest already lives at the server root
+    # /v1/traces -- so `endpoint` would POST to /v1/v1/traces and 404.
+    # Spelling the full URL removes the guesswork.
+    traces_endpoint: {{ printf "%s/v1/traces" (.Values.ui.mlflowApiUrl | trimSuffix "/") | quote }}
+    auth:
+      authenticator: bearertokenauth
+    tls:
+      # openshift-service-serving-signer, which no public root knows.
+      ca_file: /etc/mlflow-ca/service-ca.crt
+    headers:
+      X-MLflow-Workspace: {{ printf "%s-%s" .Values.username .Values.namespaceSuffix | quote }}
+      # Which experiment the spans land in. MLflow addresses experiments by
+      # id and the chart knows only the name, so the init container
+      # resolves it and substitutes here.
+      #
+      # A placeholder rather than the collector's own ${env:...} expansion,
+      # which looks like the obvious tool and is not: expansion happens
+      # after the YAML parse and re-infers the type, so an all-digits id
+      # arrives as an int and the collector refuses to start with
+      # "expected type 'configopaque.String', got unconvertible type
+      # 'int'". Substituting into quoted text keeps it a string.
+      x-mlflow-experiment-id: "__MLFLOW_EXPERIMENT_ID__"
+    retry_on_failure:
+      enabled: true
+      initial_interval: 2s
+      max_elapsed_time: 60s
+{{- if .Values.provenance.debugExporter }}
+  # Prints every span, attributes included, to this pod's log. The only
+  # straightforward way to see what the gateway actually tagged: MLflow's
+  # API returns trace_info without spans, so a span attribute that never
+  # arrived looks identical to one that did.
+  debug:
+    verbosity: detailed
+{{- end }}
+service:
+  extensions: [bearertokenauth]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [{{ if .Values.provenance.toolCallsOnly }}filter, {{ end }}groupbyattrs, resource, batch]
+      exporters: [{{ if .Values.provenance.stitch.enabled }}otlphttp/stitcher{{ else }}otlphttp/mlflow{{ end }}{{ if .Values.provenance.debugExporter }}, debug{{ end }}]
+  telemetry:
+    logs:
+      # debugExporter forces info, because the debug exporter writes its
+      # span dump at INFO and the default warn silently swallows it --
+      # which reads exactly like "no spans are arriving" and sends you
+      # debugging the gateway instead of the log level.
+      level: {{ if .Values.provenance.debugExporter }}"info"{{ else }}{{ .Values.provenance.logLevel | default "warn" | quote }}{{ end }}
+{{- end }}
+
+{{- /* ui.mlflowApiUrl as well as the flag. The init container resolves the
+       MLflow experiment and the pod mounts the mlflow-service-ca ConfigMap
+       that tenant-openshell creates -- with no MLflow configured the pod
+       CrashLoops on every tenant instead of the feature being absent.
+       Skipped rather than `fail`: this Application auto-syncs with
+       selfHeal, so a hard failure would take the whole tenant down for an
+       observability feature. The gateway's access log still records the
+       actor without any of this. */}}
+{{- if and .Values.provenance.enabled .Values.ui.mlflowApiUrl }}
 {{- $ns := printf "%s-%s" .Values.username .Values.namespaceSuffix -}}
 {{- $sa := "mcp-provenance-collector" -}}
 {{/*
@@ -93,158 +274,7 @@ data:
 {{ .Files.Get "files/provenance-stitcher.py" | indent 4 }}
 {{- end }}
   collector.yaml: |
-    extensions:
-      # The whole reason this pod exists. filename, never token: the
-      # projection is rotated and the extension re-reads it on change.
-      bearertokenauth:
-        scheme: Bearer
-        filename: /var/run/secrets/kubernetes.io/serviceaccount/token
-    receivers:
-      otlp:
-        protocols:
-          http:
-            # Plaintext, and that is fine: the Service is namespace-local and
-            # tenant-policy's NetworkPolicy already confines ingress to this
-            # namespace. The credential is added on the way OUT, not here.
-            endpoint: 0.0.0.0:4318
-    processors:
-      batch:
-        # 1s, not the usual 5s. This is the first term in how long a gateway
-        # trace sits visible in the participant's experiment before being
-        # folded away, and the volume is a handful of spans per turn -- there
-        # is nothing to batch for.
-        timeout: 1s
-        send_batch_size: 64
-{{- if .Values.provenance.toolCallsOnly }}
-      # A tool call crosses this gateway TWICE and Envoy traces both hops, but
-      # only the second one carries anything: hop 1 is the public /mcp
-      # listener, where there is no tool name yet and the AuthPolicy injects
-      # no actor, so its span arrives with waterplant.tool=none and
-      # waterplant.actor=none. Shipping it would put two traces in the
-      # participant's experiment per call, one of them empty, and the empty
-      # one sorts indistinguishably beside the real one.
-      #
-      # So drop any span that is not an authorized tool call. This also drops
-      # the ext_proc child spans, which carry no provenance either.
-      #
-      # What this costs, and it is a real cost: unauthenticated rejections at
-      # the public listener (401) disappear too, because they never acquire a
-      # tool name. They are still in the gateway access log. Set
-      # toolCallsOnly=false to keep every hop as a separate trace.
-      filter:
-        error_mode: ignore
-        traces:
-          span:
-            - 'attributes["waterplant.tool"] == nil'
-            - 'attributes["waterplant.tool"] == "none"'
-            # mcp_method matters as much as the tool name. Opening a session
-            # to an MCP server costs three gateway requests -- initialize,
-            # notifications/initialized and the tools/call itself -- and the
-            # broker stamps ALL THREE with the same x-mcp-toolname. Filtering
-            # on the tool alone therefore records one tool call three times,
-            # which is what it did: a single "turn on pump 3" produced six
-            # verification spans across two tools. Only tools/call is an
-            # actual invocation, and it is the same predicate the AuthPolicy
-            # uses to decide authorization, so the two agree by construction.
-            - 'attributes["waterplant.mcp_method"] != "tools/call"'
-{{- end }}
-      # Promote the provenance values from SPAN attributes to RESOURCE
-      # attributes. This is what makes them visible at all: MLflow turns an
-      # OTLP resource attribute into a trace TAG (that is how service.name
-      # appears), but its API returns trace_info without spans -- so a span
-      # attribute is invisible both in the trace list and to anything reading
-      # over REST. Measured: a gateway trace carrying waterplant.actor on the
-      # span came back with tags holding only service.name.
-      #
-      # groupbyattrs rather than a transform statement, because it also
-      # re-groups spans so that two calls batched together do not end up
-      # sharing one resource and therefore one actor.
-      groupbyattrs:
-        keys:
-          - waterplant.actor
-          - waterplant.tool
-          - waterplant.server
-          - waterplant.mcp_method
-      # Envoy names its spans after the operation; this makes the experiment
-      # readable by saying which gateway produced them.
-      resource:
-        attributes:
-          - key: service.name
-            value: {{ printf "mcp-gateway-%s" .Values.username | quote }}
-            action: upsert
-    exporters:
-{{- if .Values.provenance.stitch.enabled }}
-      # To the stitcher beside us in this pod, NOT to MLflow. Writing to
-      # MLflow directly works, but it creates a loose trace per tool call
-      # that is then folded and deleted -- measured at ~6s visible in the
-      # participant's experiment. Handing spans to the stitcher means no
-      # loose trace is ever created, and the arrival of the span is itself
-      # the trigger, so no poll interval sits in the path.
-      #
-      # Plaintext localhost: same pod, same network namespace. The MLflow
-      # credential is applied by the stitcher on the way out, not here.
-      otlphttp/stitcher:
-        endpoint: {{ printf "http://localhost:%v" .Values.provenance.stitch.receiverPort | quote }}
-        # JSON so the stitcher can parse it with the standard library; the
-        # default proto encoding would need generated protobuf bindings.
-        encoding: json
-        tls:
-          insecure: true
-        retry_on_failure:
-          enabled: true
-          initial_interval: 1s
-          max_elapsed_time: 30s
-{{- end }}
-      otlphttp/mlflow:
-        # traces_endpoint, not endpoint: otlphttp APPENDS /v1/traces to
-        # `endpoint`, and MLflow's ingest already lives at the server root
-        # /v1/traces -- so `endpoint` would POST to /v1/v1/traces and 404.
-        # Spelling the full URL removes the guesswork.
-        traces_endpoint: {{ printf "%s/v1/traces" (.Values.ui.mlflowApiUrl | trimSuffix "/") | quote }}
-        auth:
-          authenticator: bearertokenauth
-        tls:
-          # openshift-service-serving-signer, which no public root knows.
-          ca_file: /etc/mlflow-ca/service-ca.crt
-        headers:
-          X-MLflow-Workspace: {{ $ns | quote }}
-          # Which experiment the spans land in. MLflow addresses experiments by
-          # id and the chart knows only the name, so the init container
-          # resolves it and substitutes here.
-          #
-          # A placeholder rather than the collector's own ${env:...} expansion,
-          # which looks like the obvious tool and is not: expansion happens
-          # after the YAML parse and re-infers the type, so an all-digits id
-          # arrives as an int and the collector refuses to start with
-          # "expected type 'configopaque.String', got unconvertible type
-          # 'int'". Substituting into quoted text keeps it a string.
-          x-mlflow-experiment-id: "__MLFLOW_EXPERIMENT_ID__"
-        retry_on_failure:
-          enabled: true
-          initial_interval: 2s
-          max_elapsed_time: 60s
-{{- if .Values.provenance.debugExporter }}
-      # Prints every span, attributes included, to this pod's log. The only
-      # straightforward way to see what the gateway actually tagged: MLflow's
-      # API returns trace_info without spans, so a span attribute that never
-      # arrived looks identical to one that did.
-      debug:
-        verbosity: detailed
-{{- end }}
-    service:
-      extensions: [bearertokenauth]
-      pipelines:
-        traces:
-          receivers: [otlp]
-          processors: [{{ if .Values.provenance.toolCallsOnly }}filter, {{ end }}groupbyattrs, resource, batch]
-          exporters: [{{ if .Values.provenance.stitch.enabled }}otlphttp/stitcher{{ else }}otlphttp/mlflow{{ end }}{{ if .Values.provenance.debugExporter }}, debug{{ end }}]
-      telemetry:
-        logs:
-          # debugExporter forces info, because the debug exporter writes its
-          # span dump at INFO and the default warn silently swallows it --
-          # which reads exactly like "no spans are arriving" and sends you
-          # debugging the gateway instead of the log level.
-          level: {{ if .Values.provenance.debugExporter }}"info"{{ else }}{{ .Values.provenance.logLevel | default "warn" | quote }}{{ end }}
+{{ include "provenance.collectorConfig" . | indent 4 }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -271,7 +301,7 @@ spec:
         # updates the mounted file but the running python process keeps the
         # code it started with, so the edit appears to deploy and does
         # nothing. Cost an hour the first time.
-        checksum/config: {{ printf "%s|%s|%v|%v|%s" .Values.ui.mlflowApiUrl (.Values.provenance.logLevel | default "warn") .Values.provenance.debugExporter .Values.provenance.toolCallsOnly (.Files.Get "files/provenance-stitcher.py") | sha256sum }}
+        checksum/config: {{ printf "%s|%s" (include "provenance.collectorConfig" .) (.Files.Get "files/provenance-stitcher.py") | sha256sum }}
     spec:
       serviceAccountName: {{ $sa }}
       initContainers:

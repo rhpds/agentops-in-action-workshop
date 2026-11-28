@@ -212,7 +212,7 @@ policy:
   # the MLflow export leg is unbuilt because Envoy's OTLP exporter needs a
   # static bearer and MLflow's projected ServiceAccount token rotates. Turn it
   # on when that is resolved, or now if the access log alone is wanted.
-  provenanceEnabled: false
+  provenanceEnabled: true
   # Fold each gateway provenance trace into the agent's own trace, so the
   # participant sees one trace per turn carrying waterplant.actor and a
   # waterplant.verified_calls list. Only has an effect when provenanceEnabled

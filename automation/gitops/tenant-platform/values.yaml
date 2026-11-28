@@ -155,10 +155,11 @@ docs:
 # is a wasted pod, and a gateway exporting to a collector that is not there
 # drops spans silently.
 provenance:
-  # OFF by default. Costs one pod per tenant, which is a real charge against a
-  # quota that is already tight at 30 tenants, so it is opt-in rather than
-  # assumed.
-  enabled: false
+  # ON by default: the evidence layer is part of the lab's baseline, not an
+  # add-on. Costs one pod per tenant (collector + stitcher in one pod,
+  # ~15m CPU / ~112Mi requested), which is the price of every tool call
+  # being attributable.
+  enabled: true
   # Red Hat's build of the OpenTelemetry Collector. Verified to pull on an RHDP
   # cluster and to ship the three components this needs: the otlp receiver, the
   # otlphttp exporter and the bearertokenauth extension (otelcol 0.140.1).
