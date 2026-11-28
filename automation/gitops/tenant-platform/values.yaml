@@ -194,7 +194,11 @@ provenance:
   # context and the MCP broker forwards no unknown headers, so the two traces
   # cannot be linked at source and the broker is not ours to change.
   stitch:
-    enabled: false
+    # ON with the rest of provenance. Without it the collector exports gateway
+    # spans straight to MLflow, which works but gives the participant their own
+    # trace PLUS a loose gateway trace per tool call sorted in among it. The
+    # whole point of the sidecar is that there is one trace per turn.
+    enabled: true
     # The collector exports to this port on localhost instead of to MLflow,
     # so no loose gateway trace is ever created.
     receiverPort: 4319
